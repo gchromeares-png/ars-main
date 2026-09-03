@@ -1,17 +1,24 @@
 import type { Locator, Page } from "patchright";
 import {
   DEFAULT_INTERACTION_PROFILES,
+  type BaseInteractionOptions,
   type ClickInteractionOptions,
   type FillInteractionOptions,
+  type FocusInteractionOptions,
   type InteractionAttemptResult,
   type InteractionAttemptTrace,
   type InteractionBox,
   type InteractionFailureReason,
   type InteractionPoint,
   type InteractionProfiles,
-  type InteractionTargetState
+  type InteractionTargetState,
+  type SelectInteractionOptions
 } from "./interaction-models";
-import { DEFAULT_READINESS_POLICY, locatorValueEquals } from "./interaction-policies";
+import {
+  DEFAULT_READINESS_POLICY,
+  locatorFocused,
+  locatorValueEquals
+} from "./interaction-policies";
 import type { InteractionOutcomeExpectation, InteractionReadinessPolicy } from "./interaction-policies";
 import { SeededRandom } from "./seeded-random";
 import { InteractionStateObserver } from "./state-observer";
@@ -135,12 +142,47 @@ export class InteractionEngine {
   }
 
   async fill(locator: Locator, value: string, options: FillInteractionOptions = {}): Promise<InteractionAttemptResult> {
+    return this.runFormAction(
+      locator,
+      options,
+      "ares-form-fill",
+      options.expected ?? locatorValueEquals(locator, value),
+      () => locator.fill(value)
+    );
+  }
+
+  async select(locator: Locator, value: string, options: SelectInteractionOptions = {}): Promise<InteractionAttemptResult> {
+    return this.runFormAction(
+      locator,
+      options,
+      "ares-form-select",
+      options.expected ?? locatorValueEquals(locator, value),
+      () => locator.selectOption(value).then(() => undefined)
+    );
+  }
+
+  async focus(locator: Locator, options: FocusInteractionOptions = {}): Promise<InteractionAttemptResult> {
+    return this.runFormAction(
+      locator,
+      options,
+      "ares-form-focus",
+      options.expected ?? locatorFocused(locator),
+      () => locator.focus()
+    );
+  }
+
+  private async runFormAction(
+    locator: Locator,
+    options: BaseInteractionOptions,
+    defaultSeed: string,
+    expectation: InteractionOutcomeExpectation,
+    action: () => Promise<void>
+  ): Promise<InteractionAttemptResult> {
     const attempts = this.attemptCount(options.attempts);
     const readinessTimeoutMs = options.readinessTimeoutMs ?? this.profiles.form.readinessTimeoutMs;
     const verifyTimeoutMs = options.verifyTimeoutMs ?? this.profiles.form.verifyTimeoutMs;
     const readiness = options.readiness ?? DEFAULT_READINESS_POLICY;
-    const expectation = options.expected ?? locatorValueEquals(locator, value);
-    const baseSeed = String(options.seed ?? "ares-form");
+    const baseSeed = String(options.seed ?? defaultSeed);
     const trace: InteractionAttemptTrace[] = [];
     let lastState: InteractionTargetState = { visible: false, enabled: false, stable: false };
     let failureReason: InteractionFailureReason = "not-ready";
@@ -164,7 +206,7 @@ export class InteractionEngine {
       }
 
       try {
-        await locator.fill(value);
+        await action();
       } catch (error) {
         failureReason = "action-error";
         trace.push({
