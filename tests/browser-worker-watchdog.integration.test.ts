@@ -7,13 +7,13 @@ function delay(ms: number): Promise<void> {
 }
 
 async function waitFor(
-  predicate: () => boolean,
+  predicate: () => boolean | Promise<boolean>,
   timeoutMs = 5_000,
   message = "condition"
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await delay(25);
   }
   throw new Error(`Timed out waiting for ${message}.`);
@@ -81,7 +81,7 @@ describeBrowserIntegration("browser worker watchdog integration", () => {
         } catch {
           return false;
         }
-      } as unknown as () => boolean, 5_000, "replacement worker");
+      }, 5_000, "replacement worker");
 
       const recovered = await client.health();
       expect(recovered.running).toBe(true);
