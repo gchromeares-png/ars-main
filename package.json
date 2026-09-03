@@ -41,6 +41,7 @@
     "ghost-cursor": "^1.4.2",
     "patchright": "^1.62.2",
     "rxjs": "~7.5.0",
+    "sql.js": "1.14.2",
     "tslib": "^2.3.0",
     "zone.js": "~0.11.4"
   },
