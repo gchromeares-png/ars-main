@@ -72,9 +72,10 @@ export class ShopifyProductApiAdapter implements CommerceProductApiAdapter {
     const endpoint = `${normalizeBaseUrl(shop.baseUrl)}/products.json?limit=1`;
     try {
       const response = await this.httpClient.get<ShopifyCatalogResponse>(endpoint);
+      const products = response.data?.products;
       const publicReadable = response.status >= 200
         && response.status < 300
-        && Array.isArray(response.data?.products);
+        && Array.isArray(products);
       return {
         platform: this.platform,
         endpoint,
@@ -110,11 +111,12 @@ export class ShopifyProductApiAdapter implements CommerceProductApiAdapter {
 
     const endpoint = `${baseUrl}/products.json?limit=${safeLimit}`;
     const response = await this.httpClient.get<ShopifyCatalogResponse>(endpoint);
-    if (response.status < 200 || response.status >= 300 || !Array.isArray(response.data?.products)) {
+    const products = response.data?.products;
+    if (response.status < 200 || response.status >= 300 || !Array.isArray(products)) {
       throw new Error(`Shopify products endpoint returned HTTP ${response.status}.`);
     }
 
-    return this.normalizeProducts(shop, response.data.products, false)
+    return this.normalizeProducts(shop, products, false)
       .filter(item => this.matchesQuery(item, query));
   }
 
