@@ -4,12 +4,15 @@ import {
   type ClickInteractionOptions,
   type FillInteractionOptions,
   type InteractionAttemptResult,
+  type InteractionAttemptTrace,
   type InteractionBox,
-  type InteractionOutcomeVerifier,
+  type InteractionFailureReason,
   type InteractionPoint,
   type InteractionProfiles,
   type InteractionTargetState
 } from "./interaction-models";
+import { DEFAULT_READINESS_POLICY, locatorValueEquals } from "./interaction-policies";
+import type { InteractionOutcomeExpectation, InteractionReadinessPolicy } from "./interaction-policies";
 import { SeededRandom } from "./seeded-random";
 import { InteractionStateObserver } from "./state-observer";
 
@@ -19,6 +22,10 @@ function sleep(ms: number): Promise<void> {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function toError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function mergeProfiles(overrides?: Partial<InteractionProfiles>): InteractionProfiles {
@@ -49,63 +56,168 @@ export class InteractionEngine {
   }
 
   async click(locator: Locator, options: ClickInteractionOptions = {}): Promise<InteractionAttemptResult> {
-    const attempts = Math.max(1, Math.min(5, Math.floor(options.attempts ?? 2)));
+    const attempts = this.attemptCount(options.attempts);
     const readinessTimeoutMs = options.readinessTimeoutMs ?? this.profiles.form.readinessTimeoutMs;
     const verifyTimeoutMs = options.verifyTimeoutMs ?? this.profiles.form.verifyTimeoutMs;
-    const baseSeed = options.seed ?? "ares-interaction";
+    const readiness = options.readiness ?? DEFAULT_READINESS_POLICY;
+    const baseSeed = String(options.seed ?? "ares-interaction");
+    const trace: InteractionAttemptTrace[] = [];
     let lastState: InteractionTargetState = { visible: false, enabled: false, stable: false };
+    let failureReason: InteractionFailureReason = "not-ready";
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
+      const seed = `${baseSeed}:${attempt}`;
+      const random = new SeededRandom(seed);
       await locator.scrollIntoViewIfNeeded().catch(() => undefined);
       lastState = await this.observer.waitUntilReady(locator, readinessTimeoutMs);
-      if (!lastState.visible || !lastState.enabled || !lastState.stable || !lastState.box) {
-        if (attempt === attempts) break;
+
+      if (!await this.isReady(readiness, locator, lastState)) {
+        failureReason = "not-ready";
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          outcomeExpectation: options.expected?.name,
+          failureReason
+        });
         continue;
       }
 
-      const random = new SeededRandom(`${String(baseSeed)}:${attempt}`);
-      const target = this.chooseTargetPoint(lastState.box, random);
-      await this.movePointer(target, random);
-      await this.page.mouse.click(target.x, target.y, {
-        button: options.button ?? "left",
-        clickCount: options.clickCount ?? 1
-      });
-      this.pointer = target;
+      const target = this.chooseTargetPoint(lastState.box!, random);
+      try {
+        await this.movePointer(target, random);
+        await this.page.mouse.click(target.x, target.y, {
+          button: options.button ?? "left",
+          clickCount: options.clickCount ?? 1
+        });
+        this.pointer = target;
+      } catch (error) {
+        failureReason = "action-error";
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          targetPoint: target,
+          outcomeExpectation: options.expected?.name,
+          failureReason,
+          error: toError(error)
+        });
+        continue;
+      }
 
       if (!options.expected || await this.waitForOutcome(options.expected, verifyTimeoutMs)) {
-        return { success: true, attempts: attempt, targetState: lastState, targetPoint: target };
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          targetPoint: target,
+          outcomeExpectation: options.expected?.name
+        });
+        return { success: true, attempts: attempt, targetState: lastState, targetPoint: target, trace };
       }
+
+      failureReason = "outcome-timeout";
+      trace.push({
+        attempt,
+        seed,
+        readinessPolicy: readiness.name,
+        targetState: lastState,
+        targetPoint: target,
+        outcomeExpectation: options.expected.name,
+        failureReason
+      });
     }
 
-    return { success: false, attempts, targetState: lastState };
+    return { success: false, attempts, targetState: lastState, failureReason, trace };
   }
 
   async fill(locator: Locator, value: string, options: FillInteractionOptions = {}): Promise<InteractionAttemptResult> {
-    const attempts = Math.max(1, Math.min(5, Math.floor(options.attempts ?? 2)));
+    const attempts = this.attemptCount(options.attempts);
     const readinessTimeoutMs = options.readinessTimeoutMs ?? this.profiles.form.readinessTimeoutMs;
     const verifyTimeoutMs = options.verifyTimeoutMs ?? this.profiles.form.verifyTimeoutMs;
+    const readiness = options.readiness ?? DEFAULT_READINESS_POLICY;
+    const expectation = options.expected ?? locatorValueEquals(locator, value);
+    const baseSeed = String(options.seed ?? "ares-form");
+    const trace: InteractionAttemptTrace[] = [];
     let lastState: InteractionTargetState = { visible: false, enabled: false, stable: false };
+    let failureReason: InteractionFailureReason = "not-ready";
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
+      const seed = `${baseSeed}:${attempt}`;
       await locator.scrollIntoViewIfNeeded().catch(() => undefined);
       lastState = await this.observer.waitUntilReady(locator, readinessTimeoutMs);
-      if (!lastState.visible || !lastState.enabled || !lastState.stable) {
-        if (attempt === attempts) break;
+
+      if (!await this.isReady(readiness, locator, lastState)) {
+        failureReason = "not-ready";
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          outcomeExpectation: expectation.name,
+          failureReason
+        });
         continue;
       }
 
-      await locator.fill(value);
-      const expected = options.expected ?? (async () => {
-        const current = await locator.inputValue().catch(() => "");
-        return current === value;
-      });
-
-      if (await this.waitForOutcome(expected, verifyTimeoutMs)) {
-        return { success: true, attempts: attempt, targetState: lastState };
+      try {
+        await locator.fill(value);
+      } catch (error) {
+        failureReason = "action-error";
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          outcomeExpectation: expectation.name,
+          failureReason,
+          error: toError(error)
+        });
+        continue;
       }
+
+      if (await this.waitForOutcome(expectation, verifyTimeoutMs)) {
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          outcomeExpectation: expectation.name
+        });
+        return { success: true, attempts: attempt, targetState: lastState, trace };
+      }
+
+      failureReason = "outcome-timeout";
+      trace.push({
+        attempt,
+        seed,
+        readinessPolicy: readiness.name,
+        targetState: lastState,
+        outcomeExpectation: expectation.name,
+        failureReason
+      });
     }
 
-    return { success: false, attempts, targetState: lastState };
+    return { success: false, attempts, targetState: lastState, failureReason, trace };
+  }
+
+  private attemptCount(raw?: number): number {
+    return Math.max(1, Math.min(5, Math.floor(raw ?? 2)));
+  }
+
+  private async isReady(
+    policy: InteractionReadinessPolicy,
+    locator: Locator,
+    state: InteractionTargetState
+  ): Promise<boolean> {
+    try {
+      return Boolean(await policy.evaluate(locator, state));
+    } catch {
+      return false;
+    }
   }
 
   private chooseTargetPoint(box: InteractionBox, random: SeededRandom): InteractionPoint {
@@ -160,13 +272,13 @@ export class InteractionEngine {
     }
   }
 
-  private async waitForOutcome(verifier: InteractionOutcomeVerifier, timeoutMs: number): Promise<boolean> {
+  private async waitForOutcome(expectation: InteractionOutcomeExpectation, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + Math.max(0, timeoutMs);
     do {
       try {
-        if (await verifier()) return true;
+        if (await expectation.verify(this.page)) return true;
       } catch {
-        // The UI may be re-rendering between action and verification.
+        // UI may be re-rendering between action and verification.
       }
       if (Date.now() >= deadline) break;
       await sleep(50);
