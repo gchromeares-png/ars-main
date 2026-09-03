@@ -27,6 +27,7 @@ export class TaskOrchestrator {
   private readonly pendingTaskIds: string[] = [];
   private readonly pendingTaskIdSet = new Set<string>();
   private readonly pausedRunningTaskIds = new Set<string>();
+  private readonly unsubscribeExecutorUpdates?: () => void;
 
   constructor(
     repository: ITaskRepository,
@@ -47,6 +48,10 @@ export class TaskOrchestrator {
             proxyManager
           )
         : executor;
+
+    this.unsubscribeExecutorUpdates = this.executor.onTaskUpdate?.(task => {
+      this.handleRuntimeTaskUpdate(task);
+    });
 
     this.eventBus.on("taskFailed", task => {
       if (task.retries < task.maxRetries) {
@@ -235,9 +240,25 @@ export class TaskOrchestrator {
     this.pendingTaskIds.length = 0;
     this.pendingTaskIdSet.clear();
     this.pausedRunningTaskIds.clear();
+    this.unsubscribeExecutorUpdates?.();
     this.retryScheduler.cleanup();
     this.cancellationManager.cleanup();
     for (const worker of this.workerPool.getAllWorkers()) worker.stop();
+  }
+
+  private handleRuntimeTaskUpdate(task: Task): void {
+    const current = this.registry.getTask(task.id);
+    if (!current) return;
+
+    const queueStatus = current.config.data?.["queueStatus"] as Record<string, unknown> | undefined;
+    const waiting = Boolean(queueStatus?.["active"]);
+    const before = current.state;
+    this.setTaskQueueWaiting(current.id, waiting);
+
+    if (current.state === before) {
+      current.updatedAt = new Date();
+      this.eventBus.emit("taskUpdated", current);
+    }
   }
 
   private enqueueTask(taskId: string): void {
