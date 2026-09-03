@@ -1,15 +1,21 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { TaskOrchestrator } from "../orchestrator";
-import { TaskRepositoryMock, WorkerMock } from "../mocks";
+import { WorkerMock } from "../mocks";
 import { BrowserWorkerPoolClient } from "../browser-worker/client";
 import { TaskConfig } from "../models";
 import { ProfileRepository } from "../profiles/profile-repository";
 import { AresProfile } from "../profiles/models";
+import { SqliteTaskStore } from "../persistence/sqlite-task-store";
+import { TaskPersistenceCoordinator } from "../persistence/task-persistence-coordinator";
+
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: TaskOrchestrator;
+let browserWorker: BrowserWorkerPoolClient;
+let taskStore: SqliteTaskStore;
+let persistenceCoordinator: TaskPersistenceCoordinator;
 let quitting = false;
 
 interface SystemNodeStatus {
@@ -27,7 +33,6 @@ function broadcastTaskUpdate(task: unknown): void {
     }
   }
 }
-let browserWorker: BrowserWorkerPoolClient;
 
 const shops = new Map<string, {
   id: string;
@@ -104,23 +109,21 @@ function readSystemNodeStatus(): SystemNodeStatus {
   }
 }
 
-function createBackend(): void {
-  try {
-    const userData = app?.getPath ? app.getPath("userData") : undefined;
-    if (userData) {
-      profileRepository.setStoragePath(path.join(userData, "profiles.json"));
-    }
-  } catch {}
+async function createBackend(): Promise<void> {
+  const userData = app.getPath("userData");
+  profileRepository.setStoragePath(path.join(userData, "profiles.json"));
   loadShops();
+
   browserWorker = new BrowserWorkerPoolClient(
     shopId => shops.get(shopId),
     profileId => profileRepository.get(profileId),
-    { profileRoot: path.join(app.getPath("userData"), "browser-profiles") }
+    { profileRoot: path.join(userData, "browser-profiles") }
   );
-  orchestrator = new TaskOrchestrator(
-    new TaskRepositoryMock(),
-    browserWorker
-  );
+
+  taskStore = await SqliteTaskStore.open(path.join(userData, "ares.sqlite"));
+  orchestrator = new TaskOrchestrator(taskStore, browserWorker);
+  persistenceCoordinator = new TaskPersistenceCoordinator(orchestrator, taskStore);
+  await orchestrator.initialize();
 
   const configuredConcurrency = Number(process.env["ARES_MAX_CONCURRENT_TASKS"] ?? "4");
   const maxConcurrentTasks = Number.isFinite(configuredConcurrency)
@@ -162,12 +165,11 @@ function createWindow(): BrowserWindow {
   if (devServerUrl) {
     void win.loadURL(devServerUrl);
   } else {
-    void win.loadFile(path.join(__dirname, "../../ares-ui/index.html"));
+    void win.loadFile(path.join(__dirname, "../../ares/index.html"));
   }
 
   return win;
 }
-
 
 ipcMain.handle("get-profiles", () => ({
   success: true,
@@ -296,6 +298,18 @@ ipcMain.handle("get-task-list", () => ({
   tasks: orchestrator.getAllTasks()
 }));
 
+ipcMain.handle("get-task-logs", async (_event, taskId: string, limit = 100) => {
+  try {
+    const logs = await taskStore.findLogsByTaskId(taskId, limit);
+    return { success: true, logs };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+});
+
 ipcMain.handle("get-system-status", async () => {
   const systemNode = readSystemNodeStatus();
 
@@ -310,22 +324,33 @@ ipcMain.handle("get-system-status", async () => {
     electronNodeVersion: process.versions.node,
     systemNodeRequirement: ">=20",
     systemNode,
+    persistence: {
+      type: "sqlite",
+      ready: true,
+      error: persistenceCoordinator.getLastError()
+    },
     browserWorkerPool: await browserWorker.health()
   };
 });
 
-app.whenReady().then(() => {
-  createBackend();
-  mainWindow = createWindow();
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-  });
+app.whenReady().then(async () => {
+  try {
+    await createBackend();
+    mainWindow = createWindow();
+    mainWindow.on("closed", () => {
+      mainWindow = null;
+    });
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createWindow();
-    }
-  });
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        mainWindow = createWindow();
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    dialog.showErrorBox("ARES Startfehler", `Backend/SQLite konnte nicht initialisiert werden.\n\n${message}`);
+    app.quit();
+  }
 });
 
 app.on("before-quit", event => {
@@ -336,6 +361,8 @@ app.on("before-quit", event => {
   void (async () => {
     await browserWorker?.close().catch(() => undefined);
     orchestrator?.cleanup();
+    await persistenceCoordinator?.close().catch(() => undefined);
+    await taskStore?.close().catch(() => undefined);
     app.quit();
   })();
 });
