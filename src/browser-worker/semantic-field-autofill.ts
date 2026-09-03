@@ -7,6 +7,7 @@ import {
 } from "./field-semantic-resolver";
 import {
   targetKey,
+  type FieldIntent,
   type SemanticTarget,
   type SemanticTargetKey
 } from "./semantic-target";
@@ -111,6 +112,14 @@ export class SemanticFieldAutofill {
   async isComplete(target: SemanticTarget, value: string): Promise<boolean> {
     this.rememberTarget(target);
     return this.isCompleted(target, value);
+  }
+
+  observedTargets(): SemanticTarget[] {
+    return [...this.seenTargets.values()].map(target => ({ ...target }));
+  }
+
+  hasObservedIntent(intent: Exclude<FieldIntent, "unknown">): boolean {
+    return [...this.seenTargets.values()].some(target => target.intent === intent);
   }
 
   async result(
