@@ -5,7 +5,6 @@ export interface ITaskExecutor {
   execute(task: Task): Promise<boolean>;
   cancelTask?(taskId: string): Promise<void>;
   close?(): void | Promise<void>;
-  onTaskUpdate?(callback: (task: Task) => void): () => void;
 }
 
 export interface IBrowserManager {
