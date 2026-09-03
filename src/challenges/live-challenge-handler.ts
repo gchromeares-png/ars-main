@@ -64,7 +64,7 @@ export class LiveChallengeHandler {
       };
     }
 
-    // 🚀 Sicherer String-Vergleich: Verhindert jeden TS2367-Compilerfehler
+    // Sicherer String-Cast verhindert TypeScript-Overlap-Fehler
     const currentType: string = String(detection.type ?? "");
     const isQueue = 
       currentType === "shopify-queue" || 
@@ -81,7 +81,7 @@ export class LiveChallengeHandler {
     }
 
     options.onStatusChange?.(
-      `Challenge erkannt (${currentType || "unbekannt"}). Starte Handling (Timeout: ${Math.round(timeoutMs / 1000)}s)...`,
+      `Live-Challenge erkannt (${currentType || "unbekannt"}). Starte Live-Browser-Handling...`,
       detection
     );
 
@@ -102,7 +102,7 @@ export class LiveChallengeHandler {
 
         if (sitekey) {
           options.onStatusChange?.(
-            `CapMonster aktiv: Löse ${currentType} (inkl. Bild-/Tiererkennung) via Cloud...`,
+            `CapMonster aktiv: Löse ${currentType} via Cloud...`,
             detection
           );
 
@@ -115,7 +115,7 @@ export class LiveChallengeHandler {
           await this.sleep(1200);
           if (await this.checkIfResolved(page)) {
             options.onStatusChange?.(
-              `Live-Challenge (${currentType}) erfolgreich via CapMonster gelöst!`,
+              `Live-Challenge (${currentType}) im Browser erfolgreich gelöst!`,
               detection
             );
             return {
@@ -154,14 +154,14 @@ export class LiveChallengeHandler {
           type: detection.type,
           resolved: false,
           durationMs: Date.now() - startTime,
-          error: "Browser-Seite wurde während der Challenge geschlossen."
+          error: "Browser-Seite wurde während der Live-Challenge geschlossen."
         };
       }
 
       const isResolved = await this.checkIfResolved(page);
       if (isResolved) {
         options.onStatusChange?.(
-          `Challenge (${currentType || "unbekannt"}) erfolgreich bestanden!`,
+          `Live-Challenge (${currentType || "unbekannt"}) im Browser erfolgreich gelöst!`,
           detection
         );
         return {
@@ -192,7 +192,9 @@ export class LiveChallengeHandler {
       type: detection.type,
       resolved: false,
       durationMs: Date.now() - startTime,
-      error: `Challenge (${currentType}) nicht innerhalb von ${Math.round(timeoutMs / 1000)}s gelöst (Timeout).`
+      error: `Live-Challenge (${currentType || "unbekannt"}) im Browser nicht innerhalb von ${Math.round(
+        timeoutMs / 1000
+      )}s gelöst (Timeout).`
     };
   }
 
@@ -226,7 +228,7 @@ export class LiveChallengeHandler {
   }
 
   /**
-   * 🚀 GHOST-CURSOR: Klickt die hCaptcha Checkbox (Pokémon Center) mit natürlicher Bézier-Kurve.
+   * 🚀 GHOST-CURSOR: Klickt die hCaptcha Checkbox mit natürlicher Bézier-Kurve.
    */
   async attemptHCaptchaClick(page: Page): Promise<boolean> {
     if (page.isClosed()) return false;
