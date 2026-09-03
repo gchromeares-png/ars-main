@@ -376,6 +376,11 @@ select:focus {
   background: linear-gradient(180deg, #7b8cff, #5d6ee8);
 }
 
+.btn-warning {
+  color: #6a3f00;
+  background: linear-gradient(180deg, #ffd47c, #f3aa36);
+}
+
 .btn-danger {
   background: linear-gradient(180deg, #ff6f7d, #d44755);
 }
@@ -560,6 +565,7 @@ select:focus {
 
 .task-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
 }
 
