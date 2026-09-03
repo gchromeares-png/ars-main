@@ -13,6 +13,7 @@ import { PatchrightBrowserWorker } from "../browser-worker/patchright-browser-wo
 import type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
 import { LiveChallengeHandler } from "../challenges/live-challenge-handler";
 import type { LiveChallengeResult } from "../challenges/types";
+import { ShopifyQueueWaiter } from "./queue-waiter";
 
 export type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
 
@@ -60,7 +61,8 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
     private readonly getProfile: (profileId: string) => AresProfile | undefined = () => undefined,
     private readonly browserWorker: BrowserWorker = new PatchrightBrowserWorker(),
-    private readonly liveChallengeHandler: LiveChallengeHandler = new LiveChallengeHandler()
+    private readonly liveChallengeHandler: LiveChallengeHandler = new LiveChallengeHandler(),
+    private readonly onTaskUpdate: (task: Task) => void = () => undefined
   ) {}
 
   async execute(task: Task): Promise<boolean> {
@@ -133,27 +135,29 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       }
 
       const cartUrl = new URL(`/cart/${found.product.variantId}:1`, baseUrl).toString();
-      await page.goto(cartUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await this.navigateWithQueueSupport(page, cartUrl, task);
       await this.sleep(900);
 
-      // Handle potential live checkpoint on cart
+      // Existing live challenge flow remains unchanged; only its status is forwarded live.
       await this.liveChallengeHandler.handleLiveChallenge(page, {
         timeoutMs: 30_000,
         bringToFrontOnChallenge: !headless,
         onStatusChange: status => {
           task.config.data = { ...(task.config.data ?? {}), liveChallengeStatus: status };
+          this.emitTaskUpdate(task);
         }
       });
 
       const checkoutUrl = new URL("/checkout", baseUrl).toString();
-      await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await this.navigateWithQueueSupport(page, checkoutUrl, task);
 
-      // Handle live checkpoint or captcha on checkout entry
+      // Handle live checkpoint or captcha on checkout entry.
       const challengeResult = await this.liveChallengeHandler.handleLiveChallenge(page, {
         timeoutMs: 60_000,
         bringToFrontOnChallenge: !headless,
         onStatusChange: status => {
           task.config.data = { ...(task.config.data ?? {}), liveChallengeStatus: status };
+          this.emitTaskUpdate(task);
         }
       });
 
@@ -183,10 +187,12 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
           challenge: challengeResult
         }
       };
+      this.emitTaskUpdate(task);
 
       return true;
     } catch (error) {
       task.lastError = error instanceof Error ? error.message : String(error);
+      this.emitTaskUpdate(task);
       await this.browserWorker.closeContext(task.id).catch(() => undefined);
       return false;
     }
@@ -204,6 +210,47 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
 
     const health = await this.browserWorker.health();
     await Promise.all(health.contextIds.map(taskId => this.browserWorker.closeContext(taskId)));
+  }
+
+  private async navigateWithQueueSupport(page: Page, url: string, task: Task): Promise<void> {
+    const waiter = new ShopifyQueueWaiter(page, task, current => this.emitTaskUpdate(current), {
+      maxWaitMs: this.extractQueueMaxWaitMs(task),
+      pollIntervalMs: 2_000,
+      releaseConfirmations: 2
+    });
+    waiter.start();
+
+    let navigationError: unknown;
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    } catch (error) {
+      navigationError = error;
+    }
+
+    try {
+      const queue = await waiter.waitIfQueued();
+      if (!queue.detected && navigationError) throw navigationError;
+      if (queue.detected && queue.released) {
+        await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
+      }
+    } finally {
+      waiter.stop();
+    }
+  }
+
+  private extractQueueMaxWaitMs(task: Task): number {
+    const data = task.config.data ?? {};
+    const browserConfig = data["browserConfig"] as Record<string, unknown> | undefined;
+    const rawMs = Number(browserConfig?.["queueMaxWaitMs"] ?? data["queueMaxWaitMs"]);
+    if (Number.isFinite(rawMs) && rawMs > 0) return Math.min(60 * 60 * 1_000, rawMs);
+
+    const rawMinutes = Number(browserConfig?.["queueMaxWaitMinutes"] ?? data["queueMaxWaitMinutes"] ?? 60);
+    const minutes = Number.isFinite(rawMinutes) ? Math.min(60, Math.max(1, rawMinutes)) : 60;
+    return minutes * 60_000;
+  }
+
+  private emitTaskUpdate(task: Task): void {
+    this.onTaskUpdate(task);
   }
 
   private extractProfileId(task: Task): string | undefined {

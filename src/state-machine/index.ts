@@ -6,10 +6,17 @@ export class StateMachine {
     [TaskState.QUEUED, new Set([TaskState.STARTING, TaskState.CANCELLED, TaskState.PAUSED])],
     [TaskState.STARTING, new Set([TaskState.RUNNING, TaskState.FAILED, TaskState.CANCELLED, TaskState.PAUSED])],
     [TaskState.RUNNING, new Set([
+      TaskState.WAITING_QUEUE,
       TaskState.PRODUCT_FOUND,
       TaskState.CART,
       TaskState.CHECKOUT,
       TaskState.SUCCESS,
+      TaskState.FAILED,
+      TaskState.CANCELLED,
+      TaskState.PAUSED
+    ])],
+    [TaskState.WAITING_QUEUE, new Set([
+      TaskState.RUNNING,
       TaskState.FAILED,
       TaskState.CANCELLED,
       TaskState.PAUSED

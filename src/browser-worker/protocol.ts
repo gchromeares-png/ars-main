@@ -47,6 +47,15 @@ export interface ExecuteTaskResponse {
   };
 }
 
+export interface TaskUpdateResponse {
+  type: "task-update";
+  taskId: string;
+  taskPatch: {
+    config: Task["config"];
+    lastError?: string;
+  };
+}
+
 export interface HealthResponse {
   type: "health-result";
   requestId: string;
@@ -66,4 +75,4 @@ export interface ErrorResponse {
   error: string;
 }
 
-export type BrowserWorkerResponse = ReadyMessage | ExecuteTaskResponse | HealthResponse | AckResponse | ErrorResponse;
+export type BrowserWorkerResponse = ReadyMessage | ExecuteTaskResponse | TaskUpdateResponse | HealthResponse | AckResponse | ErrorResponse;

@@ -18,18 +18,27 @@ const { PatchrightShopifyTaskExecutor } = require("../shopify/patchright-shopify
   PatchrightShopifyTaskExecutor: typeof ExecutorType;
 };
 
+function send(message: BrowserWorkerResponse): void {
+  process.stdout.write(`${JSON.stringify(message)}\n`);
+}
+
 const shops = new Map<string, ShopifyRuntimeShop>();
 const profiles = new Map<string, AresProfile>();
 const browserCore = new PatchrightBrowserWorker();
 const executor = new PatchrightShopifyTaskExecutor(
   shopId => shops.get(shopId),
   profileId => profiles.get(profileId),
-  browserCore
+  browserCore,
+  undefined,
+  task => send({
+    type: "task-update",
+    taskId: task.id,
+    taskPatch: {
+      config: task.config,
+      lastError: task.lastError
+    }
+  })
 );
-
-function send(message: BrowserWorkerResponse): void {
-  process.stdout.write(`${JSON.stringify(message)}\n`);
-}
 
 async function handle(request: BrowserWorkerRequest): Promise<void> {
   try {

@@ -12,9 +12,13 @@ describe("Profile assignment and checkout autofill", () => {
     expect(component).toContain("profileId: this.selectedProfileId");
   });
 
-  it("calls profile autofill after checkout is opened", () => {
-    expect(executor).toContain('await page.goto(checkoutUrl');
-    expect(executor).toContain("await this.fillCheckoutProfile(page, profile)");
+  it("calls profile autofill after queue-aware checkout navigation", () => {
+    const checkoutNavigation = "await this.navigateWithQueueSupport(page, checkoutUrl, task)";
+    const autofill = "await this.fillCheckoutProfile(page, profile)";
+
+    expect(executor).toContain(checkoutNavigation);
+    expect(executor).toContain(autofill);
+    expect(executor.indexOf(autofill)).toBeGreaterThan(executor.indexOf(checkoutNavigation));
     expect(executor).toContain("finalPaymentSubmitted: false");
   });
 

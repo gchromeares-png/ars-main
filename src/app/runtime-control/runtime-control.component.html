@@ -1,0 +1,108 @@
+<section class="runtime-panel">
+  <div class="runtime-header">
+    <div>
+      <div class="eyebrow">RUNTIME CONTROL</div>
+      <h3>Worker & Warteschlangen</h3>
+      <p>Live-Status für Browser-Worker, Watchdog-Recovery und aktive Queue-Sessions.</p>
+    </div>
+    <div class="runtime-summary" [class.ok]="healthyWorkerCount === workers.length && workers.length > 0">
+      <strong>{{ healthyWorkerCount }}/{{ workers.length || 0 }}</strong>
+      <span>Worker gesund</span>
+    </div>
+  </div>
+
+  <div class="runtime-grid">
+    <article class="runtime-card watchdog-card">
+      <div class="card-title-row">
+        <div>
+          <small>WORKER WATCHDOG</small>
+          <strong>{{ workers.length ? "AKTIV" : "BEREIT" }}</strong>
+        </div>
+        <span class="health-dot" [class.ready]="healthyWorkerCount === workers.length && workers.length > 0"></span>
+      </div>
+
+      <p>{{ watchdogLabel() }}</p>
+      <p>Automatische Worker-Recovery bei Heartbeat- oder RPC-Timeout.</p>
+
+      <div class="watchdog-metrics">
+        <div><span>Restarts</span><strong>{{ restartCount }}</strong></div>
+        <div><span>Worker</span><strong>{{ workers.length }}</strong></div>
+        <div><span>Aktive Tasks</span><strong>{{ activeWorkerTaskCount }}</strong></div>
+      </div>
+
+      <div class="worker-list" *ngIf="workers.length">
+        <div class="worker-row" *ngFor="let worker of workers; let i = index">
+          <span class="worker-index">#{{ i + 1 }}</span>
+          <div>
+            <strong>{{ workerState(worker) }}</strong>
+            <small>PID {{ worker.pid || "–" }} · {{ worker.activeTasks || 0 }} Task(s)</small>
+            <small>Heartbeat {{ workerHeartbeat(worker) }}</small>
+          </div>
+          <span class="restart-chip" *ngIf="worker.restartCount">{{ worker.restartCount }} restart</span>
+        </div>
+      </div>
+
+      <div class="runtime-warning" *ngIf="lastWorkerError">
+        Letzter Recovery-Grund: {{ lastWorkerError }}
+      </div>
+    </article>
+
+    <article class="runtime-card queue-overview" [class.active]="activeQueues.length">
+      <div class="card-title-row">
+        <div>
+          <small>QUEUE WATCH</small>
+          <strong>{{ activeQueues.length ? activeQueues.length + " AKTIV" : "KEINE QUEUE" }}</strong>
+        </div>
+        <span class="queue-pulse" [class.active]="activeQueues.length"></span>
+      </div>
+
+      <p *ngIf="!activeQueues.length">
+        Sobald eine Warteschlange erkannt wird, bleibt die Browser-Session verbunden und ARES wartet kontrolliert bis maximal 1 Stunde.
+      </p>
+
+      <div class="queue-list" *ngIf="activeQueues.length">
+        <article class="queue-item" *ngFor="let task of activeQueues">
+          <div class="queue-topline">
+            <div>
+              <strong>{{ task.config?.name || task.id }}</strong>
+              <small>{{ task.config?.shopId || "Shop unbekannt" }} · {{ getQueue(task)?.source || "auto" }}</small>
+            </div>
+            <span class="queue-state">WAITING QUEUE</span>
+          </div>
+
+          <div class="queue-metrics">
+            <div>
+              <span>Position</span>
+              <strong>{{ queuePosition(task) }}</strong>
+            </div>
+            <div>
+              <span>Restzeit</span>
+              <strong>{{ queueWait(task) }}</strong>
+            </div>
+            <div>
+              <span>Gewartet</span>
+              <strong>{{ queueElapsed(task) }}</strong>
+            </div>
+            <div>
+              <span>Maximum</span>
+              <strong>{{ queueMaximum(task) }}</strong>
+            </div>
+          </div>
+
+          <div class="queue-progress" aria-label="Queue-Wartefortschritt">
+            <span [style.width.%]="queueProgress(task)"></span>
+          </div>
+
+          <p class="queue-status-text">{{ queueStatusText(task) }}</p>
+
+          <div class="queue-actions">
+            <button type="button" class="runtime-btn warning" (click)="pauseTask(task.id)">Pause</button>
+            <button type="button" class="runtime-btn danger" (click)="stopTask(task.id)">Stop</button>
+          </div>
+        </article>
+      </div>
+    </article>
+  </div>
+
+  <div class="action-message" *ngIf="actionMessage">{{ actionMessage }}</div>
+</section>

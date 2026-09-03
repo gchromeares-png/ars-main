@@ -3,19 +3,27 @@ import type { Task } from "../models";
 import { isCommerceMonitorTask } from "../monitor/commerce-monitor-service";
 import type { CommercePlatform, CommerceShop } from "./platforms";
 
+type RuntimeUpdateSource = ITaskExecutor & {
+  onTaskUpdate?: (callback: (task: Task) => void) => () => void;
+};
+
 export class CommerceTaskExecutorRouter implements ITaskExecutor {
   private readonly executors = new Map<CommercePlatform, ITaskExecutor>();
   private readonly taskOwners = new Map<string, ITaskExecutor>();
+  private readonly runtimeListeners = new Set<(task: Task) => void>();
+  private readonly runtimeUnsubscribers = new Map<ITaskExecutor, () => void>();
   private monitorExecutor?: ITaskExecutor;
 
   constructor(private readonly getShop: (shopId: string) => CommerceShop | undefined) {}
 
   register(platform: CommercePlatform, executor: ITaskExecutor): void {
     this.executors.set(platform, executor);
+    this.attachRuntimeUpdates(executor);
   }
 
   registerMonitorExecutor(executor: ITaskExecutor): void {
     this.monitorExecutor = executor;
+    this.attachRuntimeUpdates(executor);
   }
 
   hasExecutor(platform: CommercePlatform): boolean {
@@ -28,6 +36,11 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
 
   listExecutorPlatforms(): CommercePlatform[] {
     return [...this.executors.keys()];
+  }
+
+  onTaskUpdate(callback: (task: Task) => void): () => void {
+    this.runtimeListeners.add(callback);
+    return () => this.runtimeListeners.delete(callback);
   }
 
   async execute(task: Task): Promise<boolean> {
@@ -67,6 +80,10 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
   }
 
   async close(): Promise<void> {
+    for (const unsubscribe of this.runtimeUnsubscribers.values()) unsubscribe();
+    this.runtimeUnsubscribers.clear();
+    this.runtimeListeners.clear();
+
     const uniqueExecutors = [...new Set([
       ...this.executors.values(),
       ...(this.monitorExecutor ? [this.monitorExecutor] : [])
@@ -75,5 +92,14 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
       await executor.close?.();
     }));
     this.taskOwners.clear();
+  }
+
+  private attachRuntimeUpdates(executor: ITaskExecutor): void {
+    const runtimeSource = executor as RuntimeUpdateSource;
+    if (!runtimeSource.onTaskUpdate || this.runtimeUnsubscribers.has(executor)) return;
+    const unsubscribe = runtimeSource.onTaskUpdate(task => {
+      for (const listener of this.runtimeListeners) listener(task);
+    });
+    this.runtimeUnsubscribers.set(executor, unsubscribe);
   }
 }

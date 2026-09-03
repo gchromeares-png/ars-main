@@ -16,6 +16,10 @@ import { Task, TaskConfig, TaskState } from "../models";
 import { TaskExecutor } from "../task-executor";
 import { WorkerPool } from "../worker-pool";
 
+type RuntimeUpdateSource = ITaskExecutor & {
+  onTaskUpdate?: (callback: (task: Task) => void) => () => void;
+};
+
 export class TaskOrchestrator {
   private readonly eventBus = new EventBus();
   private readonly stateMachine = new StateMachine();
@@ -27,6 +31,7 @@ export class TaskOrchestrator {
   private readonly pendingTaskIds: string[] = [];
   private readonly pendingTaskIdSet = new Set<string>();
   private readonly pausedRunningTaskIds = new Set<string>();
+  private readonly unsubscribeExecutorUpdates?: () => void;
 
   constructor(
     repository: ITaskRepository,
@@ -47,6 +52,11 @@ export class TaskOrchestrator {
             proxyManager
           )
         : executor;
+
+    const runtimeSource = this.executor as RuntimeUpdateSource;
+    this.unsubscribeExecutorUpdates = runtimeSource.onTaskUpdate?.(task => {
+      this.handleRuntimeTaskUpdate(task);
+    });
 
     this.eventBus.on("taskFailed", task => {
       if (task.retries < task.maxRetries) {
@@ -193,6 +203,20 @@ export class TaskOrchestrator {
     }
   }
 
+  setTaskQueueWaiting(taskId: string, waiting: boolean): void {
+    const task = this.registry.getTask(taskId);
+    if (!task) return;
+
+    if (waiting && task.state === TaskState.RUNNING) {
+      this.transition(task, TaskState.WAITING_QUEUE);
+      return;
+    }
+
+    if (!waiting && task.state === TaskState.WAITING_QUEUE) {
+      this.transition(task, TaskState.RUNNING);
+    }
+  }
+
   addWorker(worker: IWorker): void {
     this.workerPool.addWorker(worker);
     this.drainQueue();
@@ -221,9 +245,25 @@ export class TaskOrchestrator {
     this.pendingTaskIds.length = 0;
     this.pendingTaskIdSet.clear();
     this.pausedRunningTaskIds.clear();
+    this.unsubscribeExecutorUpdates?.();
     this.retryScheduler.cleanup();
     this.cancellationManager.cleanup();
     for (const worker of this.workerPool.getAllWorkers()) worker.stop();
+  }
+
+  private handleRuntimeTaskUpdate(task: Task): void {
+    const current = this.registry.getTask(task.id);
+    if (!current) return;
+
+    const queueStatus = current.config.data?.["queueStatus"] as Record<string, unknown> | undefined;
+    const waiting = Boolean(queueStatus?.["active"]);
+    const before = current.state;
+    this.setTaskQueueWaiting(current.id, waiting);
+
+    if (current.state === before) {
+      current.updatedAt = new Date();
+      this.eventBus.emit("taskUpdated", current);
+    }
   }
 
   private enqueueTask(taskId: string): void {
@@ -258,6 +298,7 @@ export class TaskOrchestrator {
     return [
       TaskState.STARTING,
       TaskState.RUNNING,
+      TaskState.WAITING_QUEUE,
       TaskState.PRODUCT_FOUND,
       TaskState.CART,
       TaskState.CHECKOUT

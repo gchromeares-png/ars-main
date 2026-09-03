@@ -22,6 +22,18 @@ export interface BrowserWorkerProcessHealth {
   browser?: BrowserWorkerHealth;
   running: boolean;
   lastHeartbeatAt?: Date;
+  restartCount: number;
+  lastFailure?: string;
+}
+
+export interface BrowserWorkerPoolHealth {
+  workers: BrowserWorkerProcessHealth[];
+  lastError?: string;
+  watchdog: {
+    heartbeatIntervalMs: number;
+    heartbeatTimeoutMs: number;
+    executeTimeoutMs: number;
+  };
 }
 
 export class BrowserWorkerProcessClient {
@@ -33,17 +45,21 @@ export class BrowserWorkerProcessClient {
   private stderrBuffer = "";
   private readonly pending = new Map<string, PendingRequest>();
   private readonly taskIds = new Set<string>();
+  private readonly taskRefs = new Map<string, Task>();
   private pid?: number;
   private nodeVersion?: string;
   private closing = false;
   private heartbeatTimer?: NodeJS.Timeout;
   private heartbeatInFlight = false;
   private lastHeartbeatAt?: Date;
+  private restartCount = 0;
+  private lastFailure?: string;
 
   constructor(
     private readonly requestTimeoutMs: number,
     private readonly profileRoot: string | undefined,
     private readonly onExit: (client: BrowserWorkerProcessClient, error: Error) => void,
+    private readonly onTaskUpdate: (task: Task) => void = () => undefined,
     private readonly heartbeatIntervalMs = 30_000,
     private readonly heartbeatTimeoutMs = 10_000,
     private readonly executeTimeoutMs = 65 * 60_000
@@ -63,6 +79,7 @@ export class BrowserWorkerProcessClient {
 
   async execute(task: Task, shop: ShopifyRuntimeShop, profile: AresProfile): Promise<boolean> {
     this.taskIds.add(task.id);
+    this.taskRefs.set(task.id, task);
     try {
       await this.ensureReady();
       const response = await this.request({
@@ -81,12 +98,14 @@ export class BrowserWorkerProcessClient {
       return response.success;
     } finally {
       this.taskIds.delete(task.id);
+      this.taskRefs.delete(task.id);
     }
   }
 
   async cancelTask(taskId: string): Promise<void> {
     if (!this.child) {
       this.taskIds.delete(taskId);
+      this.taskRefs.delete(taskId);
       return;
     }
 
@@ -95,12 +114,13 @@ export class BrowserWorkerProcessClient {
       await this.request({ type: "cancel", requestId: randomUUID(), taskId }, 10_000);
     } finally {
       this.taskIds.delete(taskId);
+      this.taskRefs.delete(taskId);
     }
   }
 
   async health(): Promise<BrowserWorkerProcessHealth> {
     if (!this.child || this.child.killed) {
-      return { activeTasks: this.taskIds.size, running: false, lastHeartbeatAt: this.lastHeartbeatAt };
+      return this.snapshot(false);
     }
 
     await this.ensureReady();
@@ -116,7 +136,21 @@ export class BrowserWorkerProcessClient {
       activeTasks: this.taskIds.size,
       browser: { ...response.health, startedAt: new Date(response.health.startedAt) },
       running: true,
-      lastHeartbeatAt: this.lastHeartbeatAt
+      lastHeartbeatAt: this.lastHeartbeatAt,
+      restartCount: this.restartCount,
+      lastFailure: this.lastFailure
+    };
+  }
+
+  snapshot(running = Boolean(this.child && !this.child.killed)): BrowserWorkerProcessHealth {
+    return {
+      pid: this.pid,
+      nodeVersion: this.nodeVersion,
+      activeTasks: this.taskIds.size,
+      running,
+      lastHeartbeatAt: this.lastHeartbeatAt,
+      restartCount: this.restartCount,
+      lastFailure: this.lastFailure
     };
   }
 
@@ -204,6 +238,16 @@ export class BrowserWorkerProcessClient {
         continue;
       }
 
+      if (message.type === "task-update") {
+        const task = this.taskRefs.get(message.taskId);
+        if (task) {
+          task.config = message.taskPatch.config;
+          task.lastError = message.taskPatch.lastError;
+          this.onTaskUpdate(task);
+        }
+        continue;
+      }
+
       const requestId = "requestId" in message ? message.requestId : undefined;
       if (!requestId) continue;
       const pending = this.pending.get(requestId);
@@ -281,6 +325,8 @@ export class BrowserWorkerProcessClient {
   private recycleWorker(error: Error, child = this.child): void {
     if (!child || this.child !== child) return;
     const shouldReplace = !this.closing;
+    this.restartCount += 1;
+    this.lastFailure = error.message;
     if (!child.killed) child.kill("SIGKILL");
     this.handleWorkerExit(error, child);
 
@@ -293,6 +339,7 @@ export class BrowserWorkerProcessClient {
     if (!child || this.child !== child) return;
     const shouldNotify = !this.closing;
     this.stopHeartbeat();
+    this.lastFailure = error.message;
     this.readyReject?.(error);
     this.readyResolve = undefined;
     this.readyReject = undefined;
@@ -315,7 +362,11 @@ export class BrowserWorkerProcessClient {
 export class BrowserWorkerPoolClient implements ITaskExecutor {
   private readonly clients: BrowserWorkerProcessClient[];
   private readonly taskOwners = new Map<string, BrowserWorkerProcessClient>();
+  private readonly runtimeListeners = new Set<(task: Task) => void>();
   private lastWorkerError?: string;
+  private readonly heartbeatIntervalMs: number;
+  private readonly heartbeatTimeoutMs: number;
+  private readonly executeTimeoutMs: number;
 
   constructor(
     private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
@@ -327,6 +378,7 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
       heartbeatIntervalMs?: number;
       heartbeatTimeoutMs?: number;
       profileRoot?: string;
+      onTaskUpdate?: (task: Task) => void;
     } = {}
   ) {
     // @ts-ignore
@@ -335,18 +387,29 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
       ? Math.min(4, Math.max(1, Math.floor(requestedCount)))
       : 1;
     const requestTimeoutMs = options.requestTimeoutMs ?? 120_000;
-    const executeTimeoutMs = options.executeTimeoutMs ?? 65 * 60_000;
-    const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
-    const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 10_000;
+    this.executeTimeoutMs = options.executeTimeoutMs ?? 65 * 60_000;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 10_000;
+
+    const emitTaskUpdate = (task: Task) => {
+      options.onTaskUpdate?.(task);
+      for (const listener of this.runtimeListeners) listener(task);
+    };
 
     this.clients = Array.from({ length: processCount }, () => new BrowserWorkerProcessClient(
       requestTimeoutMs,
       options.profileRoot,
       (client, error) => this.handleClientExit(client, error),
-      heartbeatIntervalMs,
-      heartbeatTimeoutMs,
-      executeTimeoutMs
+      emitTaskUpdate,
+      this.heartbeatIntervalMs,
+      this.heartbeatTimeoutMs,
+      this.executeTimeoutMs
     ));
+  }
+
+  onTaskUpdate(callback: (task: Task) => void): () => void {
+    this.runtimeListeners.add(callback);
+    return () => this.runtimeListeners.delete(callback);
   }
 
   async execute(task: Task): Promise<boolean> {
@@ -397,16 +460,22 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     }
   }
 
-  async health(): Promise<{ workers: BrowserWorkerProcessHealth[]; lastError?: string }> {
-    const workers = await Promise.all(this.clients.map(client => client.health().catch(() => ({
-      activeTasks: client.load,
-      running: false
-    }))));
-    return { workers, lastError: this.lastWorkerError };
+  async health(): Promise<BrowserWorkerPoolHealth> {
+    const workers = await Promise.all(this.clients.map(client => client.health().catch(() => client.snapshot(false))));
+    return {
+      workers,
+      lastError: this.lastWorkerError,
+      watchdog: {
+        heartbeatIntervalMs: this.heartbeatIntervalMs,
+        heartbeatTimeoutMs: this.heartbeatTimeoutMs,
+        executeTimeoutMs: this.executeTimeoutMs
+      }
+    };
   }
 
   async close(): Promise<void> {
     this.taskOwners.clear();
+    this.runtimeListeners.clear();
     await Promise.allSettled(this.clients.map(client => client.close()));
   }
 

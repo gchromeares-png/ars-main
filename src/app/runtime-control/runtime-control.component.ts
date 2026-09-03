@@ -1,0 +1,164 @@
+import { Component, Input, OnDestroy, OnInit } from "@angular/core";
+import { ElectronService } from "../services/electron.service";
+
+interface QueueView {
+  active?: boolean;
+  phase?: string;
+  position?: number;
+  timeToWaitSeconds?: number;
+  statusText?: string;
+  source?: string;
+  detectedAt?: string;
+  updatedAt?: string;
+  elapsedMs?: number;
+  maxWaitMs?: number;
+}
+
+@Component({
+  selector: "app-runtime-control",
+  templateUrl: "./runtime-control.component.html",
+  styleUrls: ["./runtime-control.component.scss"]
+})
+export class RuntimeControlComponent implements OnInit, OnDestroy {
+  @Input() system: any;
+  @Input() tasks: any[] = [];
+
+  runtimeSystem: any;
+  actionMessage = "";
+  private refreshTimer?: ReturnType<typeof setInterval>;
+
+  constructor(private readonly electron: ElectronService) {}
+
+  ngOnInit(): void {
+    this.runtimeSystem = this.system;
+    void this.refreshRuntime();
+    this.refreshTimer = setInterval(() => void this.refreshRuntime(), 10_000);
+  }
+
+  ngOnDestroy(): void {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+  }
+
+  get activeQueues(): any[] {
+    return this.tasks.filter(task => {
+      const queue = this.getQueue(task);
+      return task.state === "WAITING_QUEUE" || Boolean(queue?.active);
+    });
+  }
+
+  get workers(): any[] {
+    return this.currentSystem?.browserWorkerPool?.workers ?? [];
+  }
+
+  get watchdog(): any {
+    return this.currentSystem?.browserWorkerPool?.watchdog ?? {};
+  }
+
+  get healthyWorkerCount(): number {
+    return this.workers.filter(worker => worker.running && worker.browser?.state !== "degraded").length;
+  }
+
+  get activeWorkerTaskCount(): number {
+    return this.workers.reduce((sum, worker) => sum + Number(worker.activeTasks ?? 0), 0);
+  }
+
+  get restartCount(): number {
+    return this.workers.reduce((sum, worker) => sum + Number(worker.restartCount ?? 0), 0);
+  }
+
+  get lastWorkerError(): string {
+    return String(this.currentSystem?.browserWorkerPool?.lastError ?? "");
+  }
+
+  getQueue(task: any): QueueView | undefined {
+    const data = task?.config?.data;
+    const queue = data?.queueStatus;
+    return queue && typeof queue === "object" ? queue as QueueView : undefined;
+  }
+
+  queuePosition(task: any): string {
+    const position = this.getQueue(task)?.position;
+    return typeof position === "number" && Number.isFinite(position)
+      ? Math.max(0, Math.floor(position)).toLocaleString("de-DE")
+      : "–";
+  }
+
+  queueWait(task: any): string {
+    const seconds = this.getQueue(task)?.timeToWaitSeconds;
+    if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "wird ermittelt";
+    return this.formatDuration(seconds * 1_000);
+  }
+
+  queueElapsed(task: any): string {
+    return this.formatDuration(Number(this.getQueue(task)?.elapsedMs ?? 0));
+  }
+
+  queueMaximum(task: any): string {
+    return this.formatDuration(Number(this.getQueue(task)?.maxWaitMs ?? 60 * 60_000));
+  }
+
+  queueProgress(task: any): number {
+    const queue = this.getQueue(task);
+    const max = Number(queue?.maxWaitMs ?? 0);
+    const elapsed = Number(queue?.elapsedMs ?? 0);
+    if (!Number.isFinite(max) || max <= 0 || !Number.isFinite(elapsed)) return 0;
+    return Math.min(100, Math.max(0, (elapsed / max) * 100));
+  }
+
+  queueStatusText(task: any): string {
+    const queue = this.getQueue(task);
+    return queue?.statusText || "Warteschlange aktiv – Browser bleibt verbunden.";
+  }
+
+  workerState(worker: any): string {
+    if (!worker.running) return "OFFLINE";
+    if (worker.browser?.state === "degraded") return "DEGRADED";
+    return worker.activeTasks > 0 ? "BUSY" : "HEALTHY";
+  }
+
+  workerHeartbeat(worker: any): string {
+    if (!worker.lastHeartbeatAt) return "noch kein Heartbeat";
+    const value = new Date(worker.lastHeartbeatAt);
+    return Number.isNaN(value.getTime()) ? "Heartbeat unbekannt" : value.toLocaleTimeString("de-DE");
+  }
+
+  watchdogLabel(): string {
+    const interval = Number(this.watchdog.heartbeatIntervalMs ?? 30_000);
+    const timeout = Number(this.watchdog.heartbeatTimeoutMs ?? 10_000);
+    return `${Math.round(interval / 1_000)}s Heartbeat · ${Math.round(timeout / 1_000)}s Timeout`;
+  }
+
+  async pauseTask(taskId: string): Promise<void> {
+    const result = await this.electron.pauseTask(taskId);
+    this.actionMessage = result.success
+      ? "Queue-Task pausiert. Browser-Kontext wird kontrolliert beendet."
+      : result.error || "Task konnte nicht pausiert werden.";
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    const result = await this.electron.stopTask(taskId);
+    this.actionMessage = result.success
+      ? "Queue-Task gestoppt."
+      : result.error || "Task konnte nicht gestoppt werden.";
+  }
+
+  private get currentSystem(): any {
+    return this.runtimeSystem ?? this.system ?? {};
+  }
+
+  private async refreshRuntime(): Promise<void> {
+    const result = await this.electron.getSystemStatus();
+    if (result?.success) this.runtimeSystem = result;
+  }
+
+  private formatDuration(ms: number): string {
+    if (!Number.isFinite(ms) || ms < 0) return "–";
+    const totalSeconds = Math.floor(ms / 1_000);
+    const hours = Math.floor(totalSeconds / 3_600);
+    const minutes = Math.floor((totalSeconds % 3_600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    if (minutes > 0) return `${minutes}m ${seconds}s`;
+    return `${seconds}s`;
+  }
+}
