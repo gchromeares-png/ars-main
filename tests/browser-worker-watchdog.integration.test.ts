@@ -28,6 +28,7 @@ describeBrowserIntegration("browser worker watchdog integration", () => {
         requestTimeoutMs: number,
         profileRoot: string | undefined,
         onExit: (client: unknown, error: Error) => void,
+        onTaskUpdate: (task: unknown) => void,
         heartbeatIntervalMs?: number,
         heartbeatTimeoutMs?: number,
         executeTimeoutMs?: number
@@ -43,6 +44,7 @@ describeBrowserIntegration("browser worker watchdog integration", () => {
       2_000,
       undefined,
       (_client, error) => exits.push(error.message),
+      () => undefined,
       100,
       250,
       5_000
@@ -71,6 +73,15 @@ describeBrowserIntegration("browser worker watchdog integration", () => {
         5_000,
         "watchdog recycle"
       );
+
+      await waitFor(async () => {
+        try {
+          const current = await client.health();
+          return Boolean(current.running && current.pid && current.pid !== firstPid);
+        } catch {
+          return false;
+        }
+      } as unknown as () => boolean, 5_000, "replacement worker");
 
       const recovered = await client.health();
       expect(recovered.running).toBe(true);
