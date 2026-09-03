@@ -1,3 +1,5 @@
+import * as http from "http";
+import * as https from "https";
 import type { Locator, Page } from "patchright";
 
 export type FieldIntent =
@@ -96,6 +98,66 @@ function cosine(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+function postJson<T>(endpoint: string, payload: unknown, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let target: URL;
+    try {
+      target = new URL(endpoint);
+    } catch {
+      reject(new Error("Invalid local embedding endpoint."));
+      return;
+    }
+
+    if (target.protocol !== "http:" && target.protocol !== "https:") {
+      reject(new Error(`Unsupported local embedding protocol: ${target.protocol}`));
+      return;
+    }
+
+    const body = JSON.stringify(payload);
+    const client = target.protocol === "https:" ? https : http;
+    let settled = false;
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimeout);
+      callback();
+    };
+
+    const request = client.request(target, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body)
+      }
+    }, response => {
+      let responseBody = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { responseBody += chunk; });
+      response.on("end", () => {
+        const status = response.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          finish(() => reject(new Error(`Ollama embed HTTP ${status}`)));
+          return;
+        }
+        try {
+          const parsed = JSON.parse(responseBody) as T;
+          finish(() => resolve(parsed));
+        } catch {
+          finish(() => reject(new Error("Local embedding response was not valid JSON.")));
+        }
+      });
+    });
+
+    request.on("error", error => finish(() => reject(error)));
+    const hardTimeout = setTimeout(() => {
+      request.destroy(new Error("Local embedding request timed out."));
+    }, Math.max(200, timeoutMs));
+
+    request.write(body);
+    request.end();
+  });
+}
+
 export class OllamaEmbeddingProvider implements SemanticEmbeddingProvider {
   private disabledUntil = 0;
 
@@ -111,19 +173,11 @@ export class OllamaEmbeddingProvider implements SemanticEmbeddingProvider {
       throw new Error("Local semantic embedding runtime is temporarily unavailable.");
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Math.max(200, this.timeoutMs));
     try {
-      const response = await fetch(this.endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: this.model, input: texts }),
-        signal: controller.signal
-      });
-      if (!response.ok) {
-        throw new Error(`Ollama embed HTTP ${response.status}`);
-      }
-      const payload = await response.json() as OllamaEmbedResponse;
+      const payload = await postJson<OllamaEmbedResponse>(this.endpoint, {
+        model: this.model,
+        input: texts
+      }, this.timeoutMs);
       if (!Array.isArray(payload.embeddings) || payload.embeddings.length !== texts.length) {
         throw new Error("Ollama embed response did not contain the expected embedding batch.");
       }
@@ -131,8 +185,6 @@ export class OllamaEmbeddingProvider implements SemanticEmbeddingProvider {
     } catch (error) {
       this.disabledUntil = Date.now() + 30_000;
       throw error;
-    } finally {
-      clearTimeout(timeout);
     }
   }
 }
