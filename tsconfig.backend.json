@@ -21,12 +21,14 @@
     "src/mocks/**/*.ts",
     "src/models/**/*.ts",
     "src/orchestrator/**/*.ts",
+    "src/persistence/**/*.ts",
     "src/profiles/**/*.ts",
     "src/retry-scheduler/**/*.ts",
     "src/shopify/**/*.ts",
     "src/state-machine/**/*.ts",
     "src/task-executor/**/*.ts",
     "src/task-registry/**/*.ts",
+    "src/types/**/*.d.ts",
     "src/worker-pool/**/*.ts"
   ]
 }
