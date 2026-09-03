@@ -13,8 +13,8 @@ import {
 import type { SemanticFieldValueSource } from "./semantic-target-values";
 
 export interface SemanticAutofillResult {
-  filled: SemanticTargetKey[];
-  missing: SemanticTargetKey[];
+  filled: SemanticTarget[];
+  missing: SemanticTarget[];
   writeCounts: Record<string, number>;
 }
 
@@ -117,20 +117,20 @@ export class SemanticFieldAutofill {
     values: SemanticFieldValueSource,
     targets: SemanticTarget[] = [...this.seenTargets.values()]
   ): Promise<SemanticAutofillResult> {
-    const filled: SemanticTargetKey[] = [];
-    const missing: SemanticTargetKey[] = [];
+    const filled: SemanticTarget[] = [];
+    const missing: SemanticTarget[] = [];
     const uniqueTargets = new Map<SemanticTargetKey, SemanticTarget>();
 
     for (const target of targets) uniqueTargets.set(targetKey(target), target);
 
-    for (const [key, target] of uniqueTargets) {
+    for (const target of uniqueTargets.values()) {
       const value = values.valueFor(target);
       if (!value?.trim()) {
-        missing.push(key);
+        missing.push({ ...target });
         continue;
       }
-      if (await this.isCompleted(target, value)) filled.push(key);
-      else missing.push(key);
+      if (await this.isCompleted(target, value)) filled.push({ ...target });
+      else missing.push({ ...target });
     }
 
     const writeCounts: Record<string, number> = {};
