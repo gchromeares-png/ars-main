@@ -145,15 +145,15 @@ async function renderResultScreenshot(rows: ResultRow[]): Promise<void> {
     const cards = rows.map(row => `
       <article class="card">
         <div class="status">✓ CHECKOUT PREPARED</div>
-        <h2>${row.parent}</h2>
+        <h2>${row["parent"]}</h2>
         <dl>
-          <dt>Child Task</dt><dd>${row.child}</dd>
-          <dt>Profile</dt><dd>${row.profile}</dd>
-          <dt>Proxy</dt><dd>${row.proxy}</dd>
-          <dt>Session</dt><dd>${row.session}</dd>
-          <dt>Browser profile</dt><dd>${row.userDataDir}</dd>
-          <dt>Trigger</dt><dd>${row.trigger}</dd>
-          <dt>Price</dt><dd>${row.price}</dd>
+          <dt>Child Task</dt><dd>${row["child"]}</dd>
+          <dt>Profile</dt><dd>${row["profile"]}</dd>
+          <dt>Proxy</dt><dd>${row["proxy"]}</dd>
+          <dt>Session</dt><dd>${row["session"]}</dd>
+          <dt>Browser profile</dt><dd>${row["userDataDir"]}</dd>
+          <dt>Trigger</dt><dd>${row["trigger"]}</dd>
+          <dt>Price</dt><dd>${row["price"]}</dd>
           <dt>Final submit</dt><dd>MANUAL / NOT CLICKED</dd>
         </dl>
       </article>`).join("");
