@@ -26,17 +26,22 @@ class ConceptEmbeddingProvider implements SemanticEmbeddingProvider {
   }
 
   private vector(text: string): number[] {
-    const vector = new Array<number>(9).fill(0.02);
+    const vector = new Array<number>(14).fill(0.01);
     const concepts: Array<[RegExp, number]> = [
-      [/mail|e-mail/, 0],
+      [/mail|e-mail|kontaktkanal-x/, 0],
       [/given|first name|vorname|rufname/, 1],
       [/family|surname|nachname|familienname/, 2],
-      [/street|straße|hausnummer|straßenanschrift/, 3],
-      [/secondary|apartment|adresszusatz|zusatz/, 4],
-      [/city|town|locality|stadt|ort|gemeinde|lieferort/, 5],
-      [/postal|zip|postleitzahl|zustellcode|postgebiet/, 6],
-      [/phone|mobile|telefon|mobil|rufnummer/, 7],
-      [/country|land/, 8]
+      [/complete person's name|full name|vollständiger name|empfängername/, 3],
+      [/street name without|straße ohne|street-only-x/, 4],
+      [/primary address|street and house|straße und hausnummer|anschrift/, 5],
+      [/house number|hausnummer/, 6],
+      [/secondary|apartment|adresszusatz|zusatz/, 7],
+      [/city|town|locality|stadt|ort|gemeinde|zielort-x/, 8],
+      [/postal|zip|postleitzahl|zustellcode|postgebiet/, 9],
+      [/phone|mobile|telefon|mobil|rufnummer/, 10],
+      [/country|land/, 11],
+      [/shipping|delivery|lieferanschrift|versandadresse|shipbucket/, 12],
+      [/billing|invoice|rechnungsanschrift|rechnungsadresse|billbucket/, 13]
     ];
     for (const [pattern, index] of concepts) {
       if (pattern.test(text)) vector[index] = 1;
@@ -46,44 +51,70 @@ class ConceptEmbeddingProvider implements SemanticEmbeddingProvider {
 }
 
 describe("FieldSemanticResolver", () => {
-  it("uses standard browser metadata without waiting for an embedding model", async () => {
+  it("uses standards to resolve intent and context without embeddings", async () => {
     const provider = new ConceptEmbeddingProvider();
     const resolver = new FieldSemanticResolver(provider);
 
     const result = await resolver.resolve([
       field({ autocomplete: "shipping postal-code" }),
-      field({ inputType: "email" }),
-      field({ autocomplete: "given-name" })
+      field({ inputType: "email", autocomplete: "billing email" }),
+      field({ autocomplete: "shipping given-name" })
     ]);
 
-    expect(result.map(item => item.intent)).toEqual(["postalCode", "email", "firstName"]);
-    expect(result.every(item => item.source === "standard-metadata")).toBe(true);
+    expect(result.map(item => item.target)).toEqual([
+      { intent: "postalCode", context: "shipping" },
+      { intent: "email", context: "billing" },
+      { intent: "firstName", context: "shipping" }
+    ]);
+    expect(result.every(item => item.source.intent === "standard-metadata")).toBe(true);
+    expect(result.every(item => item.source.context === "standard-metadata")).toBe(true);
     expect(provider.calls).toHaveLength(0);
   });
 
-  it("classifies ambiguous German field text semantically in one embedding batch", async () => {
+  it("resolves German intent and address context as separate dimensions", async () => {
+    const resolver = new FieldSemanticResolver(new ConceptEmbeddingProvider());
+
+    const result = await resolver.resolve([
+      field({ index: 0, label: "Vorname der Rechnungsanschrift" }),
+      field({ index: 1, label: "Ort der Lieferanschrift" }),
+      field({ index: 2, label: "Name des Empfängers" })
+    ]);
+
+    expect(result[0].target).toEqual({ intent: "firstName", context: "billing" });
+    expect(result[1].target).toEqual({ intent: "city", context: "shipping" });
+    expect(result[2].target).toEqual({ intent: "fullName", context: "shipping" });
+  });
+
+  it("does not guess firstName from a bare Name field", async () => {
+    const resolver = new FieldSemanticResolver(new ConceptEmbeddingProvider());
+    const result = await resolver.resolve([field({ label: "Name" })]);
+
+    expect(result[0].target.intent).toBe("unknown");
+  });
+
+  it("can infer unresolved intent and context together in one embedding batch", async () => {
     const provider = new ConceptEmbeddingProvider();
     const resolver = new FieldSemanticResolver(provider);
 
     const result = await resolver.resolve([
-      field({ index: 0, label: "Zustellcode für dein Paket" }),
-      field({ index: 1, label: "Gemeinde der Lieferanschrift" }),
-      field({ index: 2, ariaLabel: "Rufnummer für Rückfragen" })
+      field({ index: 0, label: "shipbucket zielort-x" }),
+      field({ index: 1, ariaLabel: "billbucket kontaktkanal-x" })
     ]);
 
-    expect(result.map(item => item.intent)).toEqual(["postalCode", "city", "phone"]);
-    expect(result.every(item => item.source === "embedding")).toBe(true);
+    expect(result[0].target).toEqual({ intent: "city", context: "shipping" });
+    expect(result[1].target).toEqual({ intent: "email", context: "billing" });
+    expect(result.every(item => item.source.intent === "embedding")).toBe(true);
+    expect(result.every(item => item.source.context === "embedding")).toBe(true);
     expect(provider.calls).toHaveLength(1);
-    expect(provider.calls[0].length).toBeGreaterThan(3); // prototypes + all unresolved fields
   });
 
-  it("reuses semantic decisions instead of embedding the same descriptor repeatedly", async () => {
+  it("reuses the full semantic decision for the same descriptor", async () => {
     const provider = new ConceptEmbeddingProvider();
     const resolver = new FieldSemanticResolver(provider);
-    const descriptor = field({ label: "Lieferort der Bestellung" });
+    const descriptor = field({ label: "shipbucket zielort-x" });
 
-    expect((await resolver.resolve([descriptor]))[0].intent).toBe("city");
-    expect((await resolver.resolve([descriptor]))[0].intent).toBe("city");
+    expect((await resolver.resolve([descriptor]))[0].target).toEqual({ intent: "city", context: "shipping" });
+    expect((await resolver.resolve([descriptor]))[0].target).toEqual({ intent: "city", context: "shipping" });
     expect(provider.calls).toHaveLength(1);
   });
 });
