@@ -165,4 +165,48 @@ describeBrowserIntegration("real browser runtime integration", () => {
       await rm(userDataDir, { recursive: true, force: true });
     }
   });
+
+  it("respawns a compiled browser worker after the process dies", async () => {
+    const compiledClientPath = path.resolve(__dirname, "../dist/backend/browser-worker/client.js");
+    const compiled = require(compiledClientPath) as {
+      BrowserWorkerPoolClient: new (
+        getShop: (shopId: string) => unknown,
+        getProfile: (profileId: string) => unknown,
+        options?: Record<string, unknown>
+      ) => {
+        health(): Promise<any>;
+        close(): Promise<void>;
+      };
+    };
+
+    const pool = new compiled.BrowserWorkerPoolClient(
+      () => undefined,
+      () => undefined,
+      {
+        processCount: 1,
+        heartbeatIntervalMs: 100,
+        heartbeatTimeoutMs: 500,
+        executeTimeoutMs: 5_000
+      }
+    );
+
+    try {
+      const first = await pool.health();
+      const firstPid = Number(first.workers?.[0]?.pid);
+      expect(firstPid).toBeGreaterThan(0);
+      expect(first.workers?.[0]?.running).toBe(true);
+
+      process.kill(firstPid, "SIGKILL");
+      await delay(350);
+
+      const recovered = await pool.health();
+      const recoveredPid = Number(recovered.workers?.[0]?.pid);
+      expect(recoveredPid).toBeGreaterThan(0);
+      expect(recoveredPid).not.toBe(firstPid);
+      expect(recovered.workers?.[0]?.running).toBe(true);
+      expect(recovered.workers?.[0]?.lastFailure || recovered.lastError).toBeTruthy();
+    } finally {
+      await pool.close().catch(() => undefined);
+    }
+  });
 });
