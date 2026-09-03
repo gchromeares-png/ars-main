@@ -1,0 +1,320 @@
+<div class="app-shell">
+  <div class="fog fog-a"></div>
+  <div class="fog fog-b"></div>
+
+  <header class="topbar">
+    <div class="brand-block">
+      <div class="crest">侍</div>
+      <div>
+        <div class="eyebrow">ARES // SAMURAI CONTROL</div>
+        <h1>ARES</h1>
+      </div>
+    </div>
+
+    <div class="backend-state">
+      <span class="pulse"></span>
+      BACKEND ONLINE
+    </div>
+  </header>
+
+  <main class="content">
+    <div *ngIf="error" class="notice error">{{ error }}</div>
+    <div *ngIf="info" class="notice info">{{ info }}</div>
+
+    <section class="hero sakura-hero">
+      <div class="moon"></div>
+      <div class="sakura-tree sakura-tree-left" aria-hidden="true">
+        <span class="tree-trunk"></span>
+        <span class="tree-branch branch-one"></span>
+        <span class="tree-branch branch-two"></span>
+        <span class="tree-branch branch-three"></span>
+        <span class="blossom-cloud blossom-a"></span>
+        <span class="blossom-cloud blossom-b"></span>
+        <span class="blossom-cloud blossom-c"></span>
+      </div>
+      <div class="sakura-tree sakura-tree-right" aria-hidden="true">
+        <span class="tree-trunk"></span>
+        <span class="tree-branch branch-one"></span>
+        <span class="tree-branch branch-two"></span>
+        <span class="tree-branch branch-three"></span>
+        <span class="blossom-cloud blossom-a"></span>
+        <span class="blossom-cloud blossom-b"></span>
+        <span class="blossom-cloud blossom-c"></span>
+      </div>
+      <div class="petal-field" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+      </div>
+      <div class="sword sword-left"></div>
+      <div class="sword sword-right"></div>
+      <div class="hero-copy">
+        <div class="eyebrow">花見 // ARES AUTOMATION DOJO</div>
+        <h2>静かな力 <span>·</span> Silent precision.</h2>
+        <p>Shop, Profil und Task klar getrennt — jede Mission mit eigener Session.</p>
+      </div>
+    </section>
+
+    <section class="stats-grid">
+      <article class="stat-card">
+        <span>SHOPS</span>
+        <strong>{{ system.shopCount }}</strong>
+      </article>
+      <article class="stat-card">
+        <span>TASKS</span>
+        <strong>{{ system.taskCount }}</strong>
+      </article>
+      <article class="stat-card">
+        <span>WORKERS</span>
+        <strong>{{ system.availableWorkers }}</strong>
+      </article>
+    </section>
+
+    <div class="workspace">
+      <section class="panel main-panel">
+        <div class="panel-header">
+          <div>
+            <div class="eyebrow">MISSION SETUP</div>
+            <h3>Task erstellen</h3>
+          </div>
+          <span class="katana-mark">刀</span>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            <span>Task-Name</span>
+            <input [(ngModel)]="taskName" placeholder="z. B. Pokemon Monitor">
+          </label>
+
+          <label>
+            <span>Shop</span>
+            <select [(ngModel)]="selectedShopId">
+              <option value="">Shop auswählen</option>
+              <option *ngFor="let shop of shops; trackBy: trackShop" [value]="shop.id">
+                {{ shop.name }}
+              </option>
+            </select>
+          </label>
+
+          <label class="profile-select">
+            <span>Profil <b>Pflicht</b></span>
+            <select [(ngModel)]="selectedProfileId">
+              <option value="">Profil auswählen</option>
+              <option *ngFor="let profile of profiles" [value]="profile.id">
+                {{ profile.name }} — {{ profile.contact.firstName }} {{ profile.contact.lastName }}
+              </option>
+            </select>
+            <small *ngIf="!profiles.length">Erst unten im Profile Vault ein Profil speichern.</small>
+          </label>
+
+          <label class="wide">
+            <span>Produkt / Keyword</span>
+            <input [(ngModel)]="searchTerm" placeholder="z. B. Pokemon 4 Dangers">
+          </label>
+
+          <label class="switch-row">
+            <input type="checkbox" [(ngModel)]="headless">
+            <span>Headless Browser</span>
+          </label>
+
+          <button class="btn btn-primary" (click)="createTask()">
+            Task erstellen
+          </button>
+        </div>
+      </section>
+
+      <aside class="panel side-panel">
+        <div class="panel-header">
+          <div>
+            <div class="eyebrow">SHOP REGISTRY</div>
+            <h3>Shop verbinden</h3>
+          </div>
+          <span class="katana-mark">剣</span>
+        </div>
+
+        <label>
+          <span>Shop-ID</span>
+          <input [(ngModel)]="newShop.id" placeholder="feenturm">
+        </label>
+
+        <label>
+          <span>Name</span>
+          <input [(ngModel)]="newShop.name" placeholder="Feenturm">
+        </label>
+
+        <label>
+          <span>Shopify-URL</span>
+          <input [(ngModel)]="newShop.baseUrl" placeholder="https://dein-shop.de">
+        </label>
+
+        <button class="btn btn-secondary full" (click)="registerShop()">
+          Shop registrieren
+        </button>
+
+        <div class="shop-list" *ngIf="shops.length">
+          <div class="shop-entry" *ngFor="let shop of shops; trackBy: trackShop">
+            <div>
+              <strong>{{ shop.name }}</strong>
+              <small>{{ shop.baseUrl }}</small>
+            </div>
+            <span class="platform-pill">{{ shop.platform }}</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+
+    <section class="panel profile-panel">
+      <div class="panel-header">
+        <div>
+          <div class="eyebrow">PROFILE VAULT</div>
+          <h3>Browser-/Checkout-Profil</h3>
+        </div>
+        <span class="katana-mark">魂</span>
+      </div>
+
+      <div class="form-grid profile-grid">
+        <label>
+          <span>Profil-ID</span>
+          <input [(ngModel)]="newProfile.id" placeholder="privat-de-1">
+        </label>
+
+        <label>
+          <span>Profilname</span>
+          <input [(ngModel)]="newProfile.name" placeholder="Privat DE">
+        </label>
+
+        <label>
+          <span>Vorname</span>
+          <input [(ngModel)]="newProfile.contact.firstName">
+        </label>
+
+        <label>
+          <span>Nachname</span>
+          <input [(ngModel)]="newProfile.contact.lastName">
+        </label>
+
+        <label>
+          <span>E-Mail</span>
+          <input [(ngModel)]="newProfile.contact.email" type="email">
+        </label>
+
+        <label>
+          <span>Telefon</span>
+          <input [(ngModel)]="newProfile.contact.phone">
+        </label>
+
+        <label class="wide">
+          <span>Straße / Hausnummer</span>
+          <input [(ngModel)]="newProfile.address.address1">
+        </label>
+
+        <label>
+          <span>Adresszusatz</span>
+          <input [(ngModel)]="newProfile.address.address2">
+        </label>
+
+        <label>
+          <span>PLZ</span>
+          <input [(ngModel)]="newProfile.address.postalCode">
+        </label>
+
+        <label>
+          <span>Stadt</span>
+          <input [(ngModel)]="newProfile.address.city">
+        </label>
+
+        <label>
+          <span>Land</span>
+          <input [(ngModel)]="newProfile.address.countryCode" placeholder="DE">
+        </label>
+
+        <label>
+          <span>Proxy Host</span>
+          <input [(ngModel)]="newProfile.proxy!.host" placeholder="optional">
+        </label>
+
+        <label>
+          <span>Proxy Port</span>
+          <input [(ngModel)]="newProfile.proxy!.port" type="number" placeholder="optional">
+        </label>
+
+        <label>
+          <span>Proxy User</span>
+          <input [(ngModel)]="newProfile.proxy!.username" placeholder="optional">
+        </label>
+
+        <label>
+          <span>Proxy Passwort</span>
+          <input [(ngModel)]="newProfile.proxy!.password" type="password" placeholder="optional">
+        </label>
+
+        <label class="wide">
+          <span>User-Agent</span>
+          <input [(ngModel)]="newProfile.browser!.userAgent" placeholder="optional">
+        </label>
+
+        <button class="btn btn-primary" (click)="saveProfile()">Profil speichern</button>
+      </div>
+
+      <div class="shop-list" *ngIf="profiles.length">
+        <div class="shop-entry" *ngFor="let profile of profiles">
+          <div>
+            <strong>{{ profile.name }}</strong>
+            <small>{{ profile.contact.firstName }} {{ profile.contact.lastName }} · {{ profile.address.city }}</small>
+          </div>
+          <span class="platform-pill">PROFILE</span>
+        </div>
+      </div>
+
+      <p class="profile-note">
+        Jedes Task-Fenster erhält eine eigene persistente Session mit eigenen Cookies und eigenem Storage.
+        Das ausgewählte Profil füllt Kontakt- und Lieferadresse im Checkout automatisch aus. Zahlung und Bestellung werden nicht automatisch abgesendet.
+      </p>
+    </section>
+
+    <section class="panel task-panel">
+      <div class="panel-header">
+        <div>
+          <div class="eyebrow">ACTIVE MISSIONS</div>
+          <h3>Tasks</h3>
+        </div>
+      </div>
+
+      <div class="empty-state" *ngIf="!tasks.length">
+        Keine Tasks vorhanden.
+      </div>
+
+      <article class="task-row" *ngFor="let task of tasks; trackBy: trackTask">
+        <div class="task-name-block">
+          <strong>{{ task.config.name }}</strong>
+          <small>{{ task.config.shopId || "kein Shop" }}</small>
+          <small class="assigned-profile">Profil: {{ getTaskProfileName(task) }}</small>
+          <small class="task-error" *ngIf="task.lastError">{{ task.lastError }}</small>
+        </div>
+
+        <div class="retry-info">
+          {{ task.retries ?? 0 }}/{{ task.maxRetries ?? 0 }} retries
+        </div>
+
+        <span class="status" [ngClass]="task.state.toLowerCase()">
+          {{ task.state }}
+        </span>
+
+        <div class="task-actions">
+          <button
+            *ngIf="isStartable(task)"
+            class="btn btn-small btn-primary"
+            (click)="startTask(task.id)">
+            Start
+          </button>
+
+          <button
+            *ngIf="isStoppable(task)"
+            class="btn btn-small btn-danger"
+            (click)="stopTask(task.id)">
+            Stop
+          </button>
+        </div>
+      </article>
+    </section>
+  </main>
+</div>
