@@ -33,6 +33,7 @@ export class BrowserWorkerProcessClient {
   private stderrBuffer = "";
   private readonly pending = new Map<string, PendingRequest>();
   private readonly taskIds = new Set<string>();
+  private readonly taskRefs = new Map<string, Task>();
   private pid?: number;
   private nodeVersion?: string;
   private closing = false;
@@ -46,7 +47,8 @@ export class BrowserWorkerProcessClient {
     private readonly onExit: (client: BrowserWorkerProcessClient, error: Error) => void,
     private readonly heartbeatIntervalMs = 30_000,
     private readonly heartbeatTimeoutMs = 10_000,
-    private readonly executeTimeoutMs = 65 * 60_000
+    private readonly executeTimeoutMs = 65 * 60_000,
+    private readonly onTaskProgress?: (task: Task) => void
   ) {}
 
   get load(): number {
@@ -63,6 +65,7 @@ export class BrowserWorkerProcessClient {
 
   async execute(task: Task, shop: ShopifyRuntimeShop, profile: AresProfile): Promise<boolean> {
     this.taskIds.add(task.id);
+    this.taskRefs.set(task.id, task);
     try {
       await this.ensureReady();
       const response = await this.request({
@@ -81,12 +84,14 @@ export class BrowserWorkerProcessClient {
       return response.success;
     } finally {
       this.taskIds.delete(task.id);
+      this.taskRefs.delete(task.id);
     }
   }
 
   async cancelTask(taskId: string): Promise<void> {
     if (!this.child) {
       this.taskIds.delete(taskId);
+      this.taskRefs.delete(taskId);
       return;
     }
 
@@ -95,6 +100,7 @@ export class BrowserWorkerProcessClient {
       await this.request({ type: "cancel", requestId: randomUUID(), taskId }, 10_000);
     } finally {
       this.taskIds.delete(taskId);
+      this.taskRefs.delete(taskId);
     }
   }
 
@@ -204,6 +210,18 @@ export class BrowserWorkerProcessClient {
         continue;
       }
 
+      if (message.type === "task-progress") {
+        const task = this.taskRefs.get(message.taskId);
+        if (task) {
+          task.config.data = {
+            ...(task.config.data ?? {}),
+            ...message.dataPatch
+          };
+          this.onTaskProgress?.(task);
+        }
+        continue;
+      }
+
       const requestId = "requestId" in message ? message.requestId : undefined;
       if (!requestId) continue;
       const pending = this.pending.get(requestId);
@@ -301,6 +319,7 @@ export class BrowserWorkerProcessClient {
     this.pid = undefined;
     this.nodeVersion = undefined;
     this.taskIds.clear();
+    this.taskRefs.clear();
 
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
@@ -327,6 +346,7 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
       heartbeatIntervalMs?: number;
       heartbeatTimeoutMs?: number;
       profileRoot?: string;
+      onTaskProgress?: (task: Task) => void;
     } = {}
   ) {
     // @ts-ignore
@@ -345,7 +365,8 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
       (client, error) => this.handleClientExit(client, error),
       heartbeatIntervalMs,
       heartbeatTimeoutMs,
-      executeTimeoutMs
+      executeTimeoutMs,
+      options.onTaskProgress
     ));
   }
 
