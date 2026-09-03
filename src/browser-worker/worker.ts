@@ -1,9 +1,11 @@
 import * as readline from "readline";
 import type { BrowserWorkerRequest, BrowserWorkerResponse } from "./protocol";
 import type { AresProfile } from "../profiles/models";
+import type { CheckoutPaymentSession, PaymentPreparationResult } from "../payments/models";
 import type { ShopifyRuntimeShop } from "./runtime-types";
 import type { PatchrightShopifyTaskExecutor as ExecutorType } from "../shopify/patchright-shopify-executor";
 import type { PatchrightBrowserWorker as BrowserCoreType } from "./patchright-browser-worker";
+import { ShopifyPaymentPreparer } from "../shopify/payment-preparer";
 
 const nodeMajor = Number(process.versions.node.split(".")[0] ?? "0");
 if (nodeMajor < 20) {
@@ -25,6 +27,7 @@ function send(message: BrowserWorkerResponse): void {
 const shops = new Map<string, ShopifyRuntimeShop>();
 const profiles = new Map<string, AresProfile>();
 const browserCore = new PatchrightBrowserWorker();
+const paymentPreparer = new ShopifyPaymentPreparer();
 const executor = new PatchrightShopifyTaskExecutor(
   shopId => shops.get(shopId),
   profileId => profiles.get(profileId),
@@ -40,12 +43,57 @@ const executor = new PatchrightShopifyTaskExecutor(
   })
 );
 
+function takePaymentSession(request: Extract<BrowserWorkerRequest, { type: "execute" }>): CheckoutPaymentSession | undefined {
+  const data = { ...(request.task.config.data ?? {}) };
+  const session = data["__paymentSession"] as CheckoutPaymentSession | undefined;
+  delete data["__paymentSession"];
+  request.task.config = { ...request.task.config, data };
+  return session;
+}
+
+async function preparePayment(
+  request: Extract<BrowserWorkerRequest, { type: "execute" }>,
+  session: CheckoutPaymentSession | undefined
+): Promise<void> {
+  const page = browserCore.getContext(request.task.id)?.page;
+  if (!page) return;
+
+  let paymentPreparation: PaymentPreparationResult;
+  try {
+    paymentPreparation = await paymentPreparer.prepare(page, session);
+  } catch (error) {
+    paymentPreparation = {
+      detectedMethods: [],
+      selectedMethod: session?.method,
+      filledFields: [],
+      missingFields: [],
+      requiresUserAction: true,
+      note: `Zahlungsprüfung fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+
+  request.task.config.data = {
+    ...(request.task.config.data ?? {}),
+    paymentPreparation
+  };
+  send({
+    type: "task-update",
+    taskId: request.task.id,
+    taskPatch: {
+      config: request.task.config,
+      lastError: request.task.lastError
+    }
+  });
+}
+
 async function handle(request: BrowserWorkerRequest): Promise<void> {
   try {
     if (request.type === "execute") {
+      const paymentSession = takePaymentSession(request);
       shops.set(request.shop.id, request.shop);
       profiles.set(request.profile.id, request.profile);
       const success = await executor.execute(request.task);
+      if (success) await preparePayment(request, paymentSession);
       request.task.config.data = {
         ...(request.task.config.data ?? {}),
         browserWorker: {
