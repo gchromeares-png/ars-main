@@ -22,6 +22,7 @@ function build() {
 
 class DeferredExecutor implements ITaskExecutor {
   readonly started: string[] = [];
+  readonly cancelled: string[] = [];
   active = 0;
   maxActive = 0;
 
@@ -39,6 +40,10 @@ class DeferredExecutor implements ITaskExecutor {
         resolve(success);
       });
     });
+  }
+
+  async cancelTask(taskId: string): Promise<void> {
+    this.cancelled.push(taskId);
   }
 
   complete(taskId: string, success = true): void {
@@ -71,6 +76,59 @@ describe("TaskOrchestrator", () => {
     o.cancelTask(task.id);
 
     expect(task.state).toBe(TaskState.CANCELLED);
+  });
+
+  it("pauses and resumes a queued task", async () => {
+    const o = build();
+    const task = o.createTask({ id: "pause-queued", name: "pause queued" });
+
+    await o.pauseTask(task.id);
+    expect(task.state).toBe(TaskState.PAUSED);
+
+    await o.resumeTask(task.id);
+    expect(task.state).toBe(TaskState.QUEUED);
+  });
+
+  it("pauses a running task without converting it to failed when execution returns", async () => {
+    const executor = new DeferredExecutor();
+    const o = new TaskOrchestrator(new TaskRepositoryMock(), executor);
+    o.addWorker(new WorkerMock("w1"));
+    const task = o.createTask({ id: "pause-running", name: "pause running" });
+
+    const started = o.startTask(task.id);
+    await Promise.resolve();
+    expect(task.state).toBe(TaskState.RUNNING);
+
+    await o.pauseTask(task.id);
+    expect(task.state).toBe(TaskState.PAUSED);
+    expect(executor.cancelled).toEqual([task.id]);
+
+    executor.complete(task.id, false);
+    await started;
+
+    expect(task.state).toBe(TaskState.PAUSED);
+    expect(executor.active).toBe(0);
+  });
+
+  it("resumes a paused task back into the worker queue", async () => {
+    const executor = new DeferredExecutor();
+    const o = new TaskOrchestrator(new TaskRepositoryMock(), executor);
+    o.addWorker(new WorkerMock("w1"));
+    const task = o.createTask({ id: "resume-running", name: "resume running" });
+
+    const firstRun = o.startTask(task.id);
+    await Promise.resolve();
+    await o.pauseTask(task.id);
+    executor.complete(task.id, false);
+    await firstRun;
+
+    await o.resumeTask(task.id);
+    await Promise.resolve();
+
+    expect(task.state).toBe(TaskState.RUNNING);
+    expect(executor.started).toEqual([task.id, task.id]);
+
+    executor.complete(task.id, true);
   });
 
   it("keeps excess tasks queued and starts the next task when a worker is released", async () => {
