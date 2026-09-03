@@ -5,9 +5,9 @@ export type LiveChallengeType =
   | "shopify-checkpoint"
   | "shopify-queue"
   | "generic-interstitial"
-    "queue-it"
-    "datadome"
-    "waiting-room"
+  | "queue-it"
+  | "datadome"
+  | "waiting-room"
   | "unknown";
 
 export interface LiveChallengeDetection {
