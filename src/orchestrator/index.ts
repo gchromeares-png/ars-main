@@ -64,8 +64,27 @@ export class TaskOrchestrator {
     });
   }
 
+  async initialize(): Promise<void> {
+    const restored = await this.registry.loadAllTasks();
+
+    for (const task of restored) {
+      if (task.state === TaskState.CREATED) {
+        this.transition(task, TaskState.QUEUED);
+        await this.registry.saveTask(task.id);
+        continue;
+      }
+
+      if (this.isRecoverableActiveState(task.state)) {
+        task.lastError = task.lastError || "Nach App-Neustart sicher pausiert. Fortsetzen erforderlich.";
+        this.transition(task, TaskState.PAUSED);
+        await this.registry.saveTask(task.id);
+      }
+    }
+  }
+
   createTask(config: TaskConfig): Task {
     const task = this.registry.createTask(config);
+    this.eventBus.emit("taskCreated", task);
     this.transition(task, TaskState.QUEUED);
     return task;
   }
@@ -245,13 +264,24 @@ export class TaskOrchestrator {
     ].includes(state);
   }
 
+  private isRecoverableActiveState(state: TaskState): boolean {
+    return this.isRunningLike(state) || state === TaskState.RETRYING;
+  }
+
   private transition(task: Task, newState: TaskState): void {
     if (!this.stateMachine.canTransition(task.state, newState)) {
       throw new Error(`Invalid transition: ${task.state} -> ${newState}`);
     }
 
+    const previousState = task.state;
     task.state = newState;
     task.updatedAt = new Date();
+
+    this.eventBus.emit("taskStateChanged", {
+      task,
+      previousState,
+      newState
+    });
 
     const event =
       newState === TaskState.QUEUED ? "taskQueued" :
