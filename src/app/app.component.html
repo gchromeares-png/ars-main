@@ -31,7 +31,7 @@
       <div class="hero-copy">
         <div class="eyebrow">LIVE DEBUG // CHALLENGE VISIBILITY</div>
         <h2>Klare Übersicht für Tasks, Sessions und Captcha-Status.</h2>
-        <p>Backend-Funktionen bleiben getrennt — die UI zeigt nur Debug-Status, Key-Status und Task-Fortschritt an.</p>
+        <p>Backend-Funktionen bleiben getrennt — die UI zeigt Debug-Status, Persistenz und Task-Fortschritt an.</p>
       </div>
     </section>
 
@@ -57,6 +57,11 @@
         <span>SYSTEM NODE</span>
         <strong>{{ getSystemNodeStatusLabel() }}</strong>
         <small>{{ getSystemNodeDetails() }}</small>
+      </article>
+      <article class="stat-card persistence-card" [class.ready]="isPersistenceOk()" [class.missing]="!isPersistenceOk()">
+        <span>PERSISTENZ</span>
+        <strong>{{ getPersistenceStatusLabel() }}</strong>
+        <small>{{ getPersistenceDetails() }}</small>
       </article>
     </section>
 
@@ -327,6 +332,37 @@
             (click)="stopTask(task.id)">
             Stop
           </button>
+
+          <button
+            class="btn btn-small btn-secondary"
+            (click)="toggleTaskLogs(task.id)">
+            {{ expandedTaskLogId === task.id ? "Logs schließen" : "Logs" }}
+          </button>
+        </div>
+
+        <div class="task-log-panel" *ngIf="expandedTaskLogId === task.id">
+          <div class="task-log-header">
+            <div>
+              <strong>Task-Verlauf</strong>
+              <small>Letzte {{ taskLogs[task.id]?.length || 0 }} Einträge · SQLite</small>
+            </div>
+            <button class="btn btn-small btn-secondary" (click)="loadTaskLogs(task.id)">Aktualisieren</button>
+          </div>
+
+          <div class="task-log-empty" *ngIf="!taskLogs[task.id]?.length">
+            Noch keine Log-Einträge vorhanden.
+          </div>
+
+          <div
+            class="task-log-entry"
+            *ngFor="let log of taskLogs[task.id]"
+            [class.warn]="log.level === 'warn'"
+            [class.error]="log.level === 'error'">
+            <time>{{ log.createdAt | date:'HH:mm:ss' }}</time>
+            <strong>{{ log.event }}</strong>
+            <span>{{ log.state || "-" }}</span>
+            <p>{{ log.message }}</p>
+          </div>
         </div>
       </article>
     </section>
