@@ -5,8 +5,9 @@ import { COMMERCE_PLATFORMS, CommercePlatform } from "../commerce/platforms";
 import type { CheckoutPaymentSession, PaymentMethod } from "../payments/models";
 import type { AresProxy, ProxyProtocol, ProxySelection } from "../proxies/models";
 
-type AppTab = "dashboard" | "monitor" | "tasks" | "profiles" | "proxies" | "shops";
+type AppTab = "dashboard" | "tasks" | "profiles" | "proxies" | "shops";
 type ProfileTab = "identity" | "address" | "browser" | "payment";
+type TaskCreationMode = "monitor-only" | "auto-checkout";
 
 interface ProfileView {
   id: string;
@@ -120,7 +121,6 @@ export class AppComponent implements OnInit, OnDestroy {
   proxies: AresProxy[] = [];
   selectedProfileId = "";
   selectedShopId = "";
-  selectedMonitorShopId = "";
   commercePlatforms: CommercePlatform[] = [...COMMERCE_PLATFORMS];
   executorPlatforms: CommercePlatform[] = ["shopify"];
 
@@ -151,15 +151,13 @@ export class AppComponent implements OnInit, OnDestroy {
     systemNode: { executable: "node", ok: false }
   };
 
+  taskMode: TaskCreationMode = "monitor-only";
   taskName = "";
   searchTerm = "";
+  taskIntervalSeconds = 30;
   headless = false;
   taskProxyMode: ProxySelection["mode"] = "profile-default";
   selectedTaskProxyId = "";
-
-  monitorName = "";
-  monitorSearchTerm = "";
-  monitorIntervalSeconds = 30;
 
   taskPaymentEnabled = false;
   taskPaymentMethod: PaymentMethod = "card";
@@ -210,16 +208,25 @@ export class AppComponent implements OnInit, OnDestroy {
     this.profileTab = tab;
   }
 
-  get monitorTasks(): TaskView[] {
-    return this.tasks.filter(task => this.isMonitorTask(task));
+  get monitorOnlyTasks(): TaskView[] {
+    return this.tasks.filter(task => this.isMonitorOnlyTask(task));
   }
 
-  get browserTasks(): TaskView[] {
-    return this.tasks.filter(task => !this.isMonitorTask(task));
+  get autoCheckoutTasks(): TaskView[] {
+    return this.tasks.filter(task => this.isAutoCheckoutTask(task));
+  }
+
+  get checkoutRuns(): TaskView[] {
+    return this.tasks.filter(task => this.isCheckoutChildTask(task));
   }
 
   get activeTaskCount(): number {
     return this.tasks.filter(task => ![TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED].includes(task.state)).length;
+  }
+
+  get selectedShopSupportsCheckout(): boolean {
+    const shop = this.shops.find(item => item.id === this.selectedShopId);
+    return Boolean(shop && this.hasExecutorForShop(shop));
   }
 
   async loadProfiles(): Promise<void> {
@@ -373,7 +380,6 @@ export class AppComponent implements OnInit, OnDestroy {
     if (Array.isArray(result.platforms) && result.platforms.length) this.commercePlatforms = result.platforms;
     if (Array.isArray(result.executorPlatforms)) this.executorPlatforms = result.executorPlatforms;
     if (!this.selectedShopId && this.shops.length > 0) this.selectedShopId = this.shops[0].id;
-    if (!this.selectedMonitorShopId && this.shops.length > 0) this.selectedMonitorShopId = this.shops[0].id;
   }
 
   async loadTasks(): Promise<void> {
@@ -428,85 +434,80 @@ export class AppComponent implements OnInit, OnDestroy {
     }
 
     this.info = result.executorReady
-      ? `${this.getPlatformLabel(platform)} Shop registriert · Browser-Executor bereit.`
-      : `${this.getPlatformLabel(platform)} Shop registriert · Monitor-Adapter kann unabhängig verfügbar sein.`;
+      ? `${this.getPlatformLabel(platform)} Shop registriert · Monitoring + Checkout-Executor bereit.`
+      : `${this.getPlatformLabel(platform)} Shop registriert · Monitoring verfügbar, Auto-Checkout benötigt einen Browser-Executor.`;
     this.newShop = { id: "", name: "", baseUrl: "", platform };
     await Promise.all([this.loadShops(), this.loadSystemStatus()]);
-  }
-
-  async createMonitorTask(): Promise<void> {
-    this.error = "";
-    this.info = "";
-    if (!this.monitorName.trim() || !this.selectedMonitorShopId || !this.monitorSearchTerm.trim()) {
-      this.error = "Monitor-Name, Shop und Produkt/Keyword sind erforderlich.";
-      return;
-    }
-
-    const intervalSeconds = Math.max(1, Math.floor(Number(this.monitorIntervalSeconds) || 30));
-    const result = await this.electron.createTask({
-      id: `monitor_${Date.now()}`,
-      name: this.monitorName.trim(),
-      shopId: this.selectedMonitorShopId,
-      data: {
-        productCriteria: { searchTerm: this.monitorSearchTerm.trim() },
-        monitorIntervalMs: intervalSeconds * 1_000
-      }
-    });
-    if (!result.success) {
-      this.error = result.error;
-      return;
-    }
-
-    this.info = `Monitor ${result.taskId} erstellt. Er kann direkt unten gestartet werden.`;
-    this.monitorName = "";
-    this.monitorSearchTerm = "";
-    await Promise.all([this.loadTasks(), this.loadSystemStatus()]);
   }
 
   async createTask(): Promise<void> {
     this.error = "";
     this.info = "";
-    if (!this.taskName.trim() || !this.selectedShopId || !this.selectedProfileId) {
-      this.error = "Task-Name, Shop und Profil sind erforderlich.";
-      return;
-    }
-    if (this.taskProxyMode === "proxy" && !this.selectedTaskProxyId) {
-      this.error = "Bitte einen Proxy für diese Session auswählen.";
+
+    if (!this.taskName.trim() || !this.selectedShopId || !this.searchTerm.trim()) {
+      this.error = "Task-Name, Shop und Produkt/Keyword sind erforderlich.";
       return;
     }
 
-    const taskId = `task_${Date.now()}`;
+    if (this.taskMode === "auto-checkout") {
+      if (!this.selectedProfileId) {
+        this.error = "Für Auto-Checkout ist ein Profil erforderlich.";
+        return;
+      }
+      if (!this.selectedShopSupportsCheckout) {
+        this.error = "Für diesen Shop ist kein Browser-Checkout-Executor verfügbar.";
+        return;
+      }
+      if (this.taskProxyMode === "proxy" && !this.selectedTaskProxyId) {
+        this.error = "Bitte einen Proxy für die Checkout-Session auswählen.";
+        return;
+      }
+    }
+
+    const taskId = `${this.taskMode === "auto-checkout" ? "auto" : "monitor"}_${Date.now()}`;
+    const intervalSeconds = Math.max(1, Math.floor(Number(this.taskIntervalSeconds) || 30));
     const proxySelection: ProxySelection = {
       mode: this.taskProxyMode,
       ...(this.taskProxyMode === "proxy" ? { proxyId: this.selectedTaskProxyId } : {})
     };
+
+    const monitorAction = this.taskMode === "auto-checkout"
+      ? {
+          mode: "auto-checkout",
+          profileId: this.selectedProfileId,
+          proxySelection,
+          headless: this.headless,
+          paymentEnabled: this.taskPaymentEnabled
+        }
+      : { mode: "monitor-only" };
 
     const result = await this.electron.createTask({
       id: taskId,
       name: this.taskName.trim(),
       shopId: this.selectedShopId,
       data: {
-        searchTerm: this.searchTerm.trim(),
-        browserConfig: { headless: this.headless },
-        profileId: this.selectedProfileId,
-        proxySelection
+        productCriteria: { searchTerm: this.searchTerm.trim() },
+        monitorIntervalMs: intervalSeconds * 1_000,
+        monitorAction
       }
     });
+
     if (!result.success) {
       this.error = result.error;
       return;
     }
 
-    if (this.taskPaymentEnabled) {
+    if (this.taskMode === "auto-checkout" && this.taskPaymentEnabled) {
       const paymentResult = await this.electron.setPaymentSession(taskId, this.buildPaymentSession());
       if (!paymentResult.success) {
         this.error = `Task erstellt, aber Zahlungs-Session konnte nicht gesetzt werden: ${paymentResult.error}`;
+        return;
       }
     }
 
-    this.info = this.taskPaymentEnabled
-      ? `Browser-Task ${result.taskId} erstellt · Payment session-only.`
-      : `Browser-Task ${result.taskId} erstellt.`;
+    this.info = this.taskMode === "auto-checkout"
+      ? `Auto-Checkout-Task ${result.taskId} erstellt. Bei Verfügbarkeit startet ARES genau eine isolierte Checkout-Session.`
+      : `Monitoring-Task ${result.taskId} erstellt.`;
     this.taskName = "";
     this.searchTerm = "";
     this.clearSensitivePaymentInputs();
@@ -558,38 +559,78 @@ export class AppComponent implements OnInit, OnDestroy {
     return Boolean(criteria && typeof criteria === "object");
   }
 
+  isAutoCheckoutTask(task: TaskView): boolean {
+    const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
+    return this.isMonitorTask(task) && action?.["mode"] === "auto-checkout";
+  }
+
+  isMonitorOnlyTask(task: TaskView): boolean {
+    return this.isMonitorTask(task) && !this.isAutoCheckoutTask(task);
+  }
+
+  isCheckoutChildTask(task: TaskView): boolean {
+    const trigger = task.config.data?.["triggerSource"] as Record<string, unknown> | undefined;
+    return Boolean(trigger?.["parentTaskId"]);
+  }
+
   getTaskKind(task: TaskView): string {
-    return this.isMonitorTask(task) ? "MONITOR" : "BROWSER";
+    if (this.isAutoCheckoutTask(task)) return "AUTO CHECKOUT";
+    if (this.isMonitorOnlyTask(task)) return "MONITOR";
+    if (this.isCheckoutChildTask(task)) return "CHECKOUT RUN";
+    return "BROWSER";
   }
 
   getTaskProfileName(task: TaskView): string {
-    if (this.isMonitorTask(task)) return "nicht benötigt";
-    const profileId = String(task.config.data?.["profileId"] ?? "");
-    if (!profileId) return "kein Profil";
+    let profileId = "";
+    if (this.isAutoCheckoutTask(task)) {
+      const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
+      profileId = String(action?.["profileId"] ?? "");
+    } else if (!this.isMonitorTask(task)) {
+      profileId = String(task.config.data?.["profileId"] ?? "");
+    }
+    if (!profileId) return this.isMonitorOnlyTask(task) ? "nicht benötigt" : "kein Profil";
     return this.profiles.find(profile => profile.id === profileId)?.name ?? profileId;
   }
 
   getTaskProxyStatus(task: TaskView): string {
-    if (this.isMonitorTask(task)) return "kein Browser-Proxy";
+    if (this.isMonitorOnlyTask(task)) return "nicht benötigt";
+
+    if (this.isAutoCheckoutTask(task)) {
+      const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
+      const selection = action?.["proxySelection"] as ProxySelection | undefined;
+      const profileId = String(action?.["profileId"] ?? "");
+      return this.proxySelectionLabel(selection, profileId);
+    }
+
     const runtime = task.config.data?.["proxyRuntime"] as Record<string, unknown> | undefined;
     if (runtime?.["mode"] === "direct") return "Direktverbindung";
     if (runtime?.["proxyName"]) return String(runtime["proxyName"]);
     if (runtime?.["mode"] === "legacy-profile") return "Legacy Profil-Proxy";
 
     const selection = task.config.data?.["proxySelection"] as ProxySelection | undefined;
-    if (selection?.mode === "direct") return "Direktverbindung";
-    if (selection?.mode === "proxy" && selection.proxyId) return this.getProxyName(selection.proxyId);
-
     const profileId = String(task.config.data?.["profileId"] ?? "");
-    const profile = this.profiles.find(item => item.id === profileId);
-    return profile?.preferredProxyId ? `Profilstandard · ${this.getProxyName(profile.preferredProxyId)}` : "Profilstandard · direkt";
+    return this.proxySelectionLabel(selection, profileId);
+  }
+
+  getTaskAutomationStatus(task: TaskView): string {
+    if (!this.isAutoCheckoutTask(task)) return "";
+    const runtime = task.config.data?.["autoCheckoutRuntime"] as Record<string, unknown> | undefined;
+    if (!runtime) return "Wartet auf verfügbares Produkt";
+    if (runtime["status"] === "failed") return `Trigger fehlgeschlagen: ${String(runtime["error"] ?? "unbekannt")}`;
+    if (runtime["childTaskId"]) return `Checkout gestartet · ${String(runtime["childTaskId"])}`;
+    return "Checkout wird gestartet";
+  }
+
+  getTaskParentId(task: TaskView): string {
+    const trigger = task.config.data?.["triggerSource"] as Record<string, unknown> | undefined;
+    return trigger?.["parentTaskId"] ? String(trigger["parentTaskId"]) : "";
   }
 
   getTaskCaptchaStatus(task: TaskView): string {
-    if (this.isMonitorTask(task)) return "Monitor nutzt keinen Browser-Challenge-Flow";
+    if (this.isMonitorTask(task)) return "Browser startet erst beim Checkout-Trigger";
     const data = task.config.data ?? {};
     const value = data["liveChallengeStatus"] ?? data["captchaStatus"] ?? data["challengeStatus"];
-    return value ? String(value) : "Kein aktueller Captcha-Status";
+    return value ? String(value) : "Kein aktueller Challenge-Status";
   }
 
   getTaskChallengeType(task: TaskView): string {
@@ -599,7 +640,11 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   getTaskPaymentStatus(task: TaskView): string {
-    if (this.isMonitorTask(task)) return "";
+    if (this.isMonitorOnlyTask(task)) return "";
+    if (this.isAutoCheckoutTask(task)) {
+      const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
+      return action?.["paymentEnabled"] ? "Session-Payment wird beim Treffer an den Checkout-Run übergeben." : "Payment bleibt manuell.";
+    }
     const preparation = task.config.data?.["paymentPreparation"] as Record<string, unknown> | undefined;
     if (!preparation) return "Wird im Checkout erkannt, sobald sichtbar.";
     return String(preparation["note"] ?? "Zahlungsstatus aktualisiert.");
@@ -714,6 +759,13 @@ export class AppComponent implements OnInit, OnDestroy {
   trackTask(_index: number, task: TaskView): string { return task.id; }
   trackShop(_index: number, shop: ShopView): string { return shop.id; }
   trackProxy(_index: number, proxy: AresProxy): string { return proxy.id; }
+
+  private proxySelectionLabel(selection: ProxySelection | undefined, profileId: string): string {
+    if (selection?.mode === "direct") return "Direktverbindung";
+    if (selection?.mode === "proxy" && selection.proxyId) return this.getProxyName(selection.proxyId);
+    const profile = this.profiles.find(item => item.id === profileId);
+    return profile?.preferredProxyId ? `Profilstandard · ${this.getProxyName(profile.preferredProxyId)}` : "Profilstandard · direkt";
+  }
 
   private buildPaymentSession(): CheckoutPaymentSession {
     const session: CheckoutPaymentSession = {
