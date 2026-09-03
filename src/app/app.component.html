@@ -163,8 +163,8 @@
             </div>
 
             <div class="task-log-panel" *ngIf="expandedTaskLogId === task.id">
-              <div class="task-log-header"><div><strong>Task-Verlauf</strong><small>Letzte {{ taskLogs[task.id]?.length || 0 }} Einträge · SQLite</small></div><button class="btn btn-small btn-secondary" (click)="loadTaskLogs(task.id)">Aktualisieren</button></div>
-              <div class="task-log-empty" *ngIf="!taskLogs[task.id]?.length">Noch keine Log-Einträge vorhanden.</div>
+              <div class="task-log-header"><div><strong>Task-Verlauf</strong><small>Letzte {{ taskLogs[task.id] ? taskLogs[task.id].length : 0 }} Einträge · SQLite</small></div><button class="btn btn-small btn-secondary" (click)="loadTaskLogs(task.id)">Aktualisieren</button></div>
+              <div class="task-log-empty" *ngIf="!taskLogs[task.id] || !taskLogs[task.id].length">Noch keine Log-Einträge vorhanden.</div>
               <div class="task-log-entry" *ngFor="let log of taskLogs[task.id]" [class.warn]="log.level === 'warn'" [class.error]="log.level === 'error'"><time>{{ log.createdAt | date:'HH:mm:ss' }}</time><strong>{{ log.event }}</strong><span>{{ log.state || '-' }}</span><p>{{ log.message }}</p></div>
             </div>
           </article>
