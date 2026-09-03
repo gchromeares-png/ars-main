@@ -4,3 +4,13 @@ dist/
 coverage/
 *.log
 .DS_Store
+
+# Local secrets and runtime data
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.db
+logs/
+browser-profiles/
