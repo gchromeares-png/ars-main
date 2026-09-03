@@ -55,25 +55,23 @@ export interface InteractionAttemptTrace {
   error?: string;
 }
 
-export interface ClickInteractionOptions {
+export interface BaseInteractionOptions {
   seed?: number | string;
   attempts?: number;
   readinessTimeoutMs?: number;
   verifyTimeoutMs?: number;
   readiness?: InteractionReadinessPolicy;
   expected?: InteractionOutcomeExpectation;
+}
+
+export interface ClickInteractionOptions extends BaseInteractionOptions {
   button?: "left" | "right" | "middle";
   clickCount?: number;
 }
 
-export interface FillInteractionOptions {
-  seed?: number | string;
-  attempts?: number;
-  readinessTimeoutMs?: number;
-  verifyTimeoutMs?: number;
-  readiness?: InteractionReadinessPolicy;
-  expected?: InteractionOutcomeExpectation;
-}
+export interface FillInteractionOptions extends BaseInteractionOptions {}
+export interface SelectInteractionOptions extends BaseInteractionOptions {}
+export interface FocusInteractionOptions extends BaseInteractionOptions {}
 
 export interface InteractionAttemptResult {
   success: boolean;

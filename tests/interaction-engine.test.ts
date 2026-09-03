@@ -17,6 +17,9 @@ function fakeLocator(overrides: Partial<Record<string, jest.Mock>> = {}): Locato
   return {
     scrollIntoViewIfNeeded: overrides["scrollIntoViewIfNeeded"] ?? jest.fn(async () => undefined),
     fill: overrides["fill"] ?? jest.fn(async () => undefined),
+    selectOption: overrides["selectOption"] ?? jest.fn(async () => []),
+    focus: overrides["focus"] ?? jest.fn(async () => undefined),
+    evaluate: overrides["evaluate"] ?? jest.fn(async () => true),
     inputValue: overrides["inputValue"] ?? jest.fn(async () => "")
   } as unknown as Locator;
 }
@@ -130,6 +133,51 @@ describe("InteractionEngine", () => {
     expect(result.trace[0]).toEqual(expect.objectContaining({
       seed: "form-name:1",
       outcomeExpectation: "locator-value-equals"
+    }));
+  });
+
+  it("runs select through readiness and verifies the selected value", async () => {
+    let current = "";
+    const selectOption = jest.fn(async (value: string) => { current = value; return []; });
+    const inputValue = jest.fn(async () => current);
+    const locator = fakeLocator({ selectOption, inputValue });
+    const { page } = fakePage();
+    const engine = new InteractionEngine(page, undefined, observer([readyState()]));
+
+    const result = await engine.select(locator, "DE", {
+      attempts: 1,
+      seed: "country",
+      verifyTimeoutMs: 0
+    });
+
+    expect(result.success).toBe(true);
+    expect(selectOption).toHaveBeenCalledWith("DE");
+    expect(result.trace[0]).toEqual(expect.objectContaining({
+      seed: "country:1",
+      readinessPolicy: "visible-enabled-stable",
+      outcomeExpectation: "locator-value-equals"
+    }));
+  });
+
+  it("runs focus through readiness and verifies focus outcome", async () => {
+    const focus = jest.fn(async () => undefined);
+    const evaluate = jest.fn(async () => true);
+    const locator = fakeLocator({ focus, evaluate });
+    const { page } = fakePage();
+    const engine = new InteractionEngine(page, undefined, observer([readyState()]));
+
+    const result = await engine.focus(locator, {
+      attempts: 1,
+      seed: "focus-email",
+      verifyTimeoutMs: 0
+    });
+
+    expect(result.success).toBe(true);
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalled();
+    expect(result.trace[0]).toEqual(expect.objectContaining({
+      seed: "focus-email:1",
+      outcomeExpectation: "locator-focused"
     }));
   });
 

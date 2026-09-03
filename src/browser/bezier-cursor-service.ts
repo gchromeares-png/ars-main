@@ -1,5 +1,12 @@
 import type { Locator, Page } from "patchright";
-import { GhostCursorUiInteractionHelper, UiPoint } from "../browser-worker/ui-interaction-helper";
+import {
+  GhostCursorUiInteractionHelper,
+  UiPoint,
+  type UiClickOptions,
+  type UiFillOptions,
+  type UiFocusOptions,
+  type UiSelectOptions
+} from "../browser-worker/ui-interaction-helper";
 
 /** @deprecated Use GhostCursorUiInteractionHelper directly in new worker code. */
 export class BezierCursorService {
@@ -9,8 +16,20 @@ export class BezierCursorService {
     await this.forPage(page).moveToPoint(target);
   }
 
-  async clickLocator(page: Page, locator: Locator): Promise<void> {
-    await this.forPage(page).click(locator);
+  async clickLocator(page: Page, locator: Locator, options?: UiClickOptions): Promise<void> {
+    await this.forPage(page).click(locator, options);
+  }
+
+  async fillLocator(page: Page, locator: Locator, value: string, options?: UiFillOptions): Promise<void> {
+    await this.forPage(page).fill(locator, value, options);
+  }
+
+  async selectLocator(page: Page, locator: Locator, value: string, options?: UiSelectOptions): Promise<void> {
+    await this.forPage(page).select(locator, value, options);
+  }
+
+  async focusLocator(page: Page, locator: Locator, options?: UiFocusOptions): Promise<void> {
+    await this.forPage(page).focus(locator, options);
   }
 
   private forPage(page: Page): GhostCursorUiInteractionHelper {

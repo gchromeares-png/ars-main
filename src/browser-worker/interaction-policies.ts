@@ -23,6 +23,13 @@ export function locatorValueEquals(locator: Locator, expected: string): Interact
   };
 }
 
+export function locatorFocused(locator: Locator): InteractionOutcomeExpectation {
+  return {
+    name: "locator-focused",
+    verify: async () => locator.evaluate(element => element === document.activeElement).catch(() => false)
+  };
+}
+
 export function locatorVisible(locator: Locator): InteractionOutcomeExpectation {
   return {
     name: "locator-visible",
