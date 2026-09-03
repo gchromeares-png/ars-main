@@ -16,6 +16,10 @@ import { Task, TaskConfig, TaskState } from "../models";
 import { TaskExecutor } from "../task-executor";
 import { WorkerPool } from "../worker-pool";
 
+type RuntimeUpdateSource = ITaskExecutor & {
+  onTaskUpdate?: (callback: (task: Task) => void) => () => void;
+};
+
 export class TaskOrchestrator {
   private readonly eventBus = new EventBus();
   private readonly stateMachine = new StateMachine();
@@ -49,7 +53,8 @@ export class TaskOrchestrator {
           )
         : executor;
 
-    this.unsubscribeExecutorUpdates = this.executor.onTaskUpdate?.(task => {
+    const runtimeSource = this.executor as RuntimeUpdateSource;
+    this.unsubscribeExecutorUpdates = runtimeSource.onTaskUpdate?.(task => {
       this.handleRuntimeTaskUpdate(task);
     });
 
