@@ -227,6 +227,9 @@ ipcMain.handle("get-system-status", async () => ({
   availableWorkers: orchestrator.getAvailableWorkers(),
   shopCount: shops.size,
   taskCount: orchestrator.getAllTasks().length,
+  captchaProvider: "CapMonster",
+  captchaApiKeyConfigured: Boolean(process.env.CAPMONSTER_API_KEY?.trim()),
+  liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],
   browserWorkerPool: await browserWorker.health()
 }));
 
