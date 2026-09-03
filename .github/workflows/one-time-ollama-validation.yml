@@ -1,6 +1,6 @@
 name: One-time Ollama semantic validation
 
-# one-time trigger after isolated resolver syntax fix
+# one-time trigger after isolated hybrid resolver update
 on:
   push:
     branches:
