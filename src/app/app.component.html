@@ -112,6 +112,14 @@
             <span>Headless Browser</span>
           </label>
 
+          <div class="waiting-room-hint">
+            <span class="waiting-room-hint-icon">⏳</span>
+            <div>
+              <strong>Warteraum-Automatik aktiv</strong>
+              <small>Erkennt Waiting Rooms automatisch und wartet kontrolliert bis zu 60 Minuten weiter.</small>
+            </div>
+          </div>
+
           <button class="btn btn-primary" (click)="createTask()">
             Task erstellen
           </button>
@@ -296,6 +304,47 @@
           <small>{{ task.config.shopId || "kein Shop" }}</small>
           <small class="assigned-profile">Profil: {{ getTaskProfileName(task) }}</small>
           <small class="task-error" *ngIf="task.lastError">{{ task.lastError }}</small>
+
+          <div class="waiting-room-card" *ngIf="$any(task.config.data)?.waitingRoom as waitingRoom" [class.active]="waitingRoom.state === 'waiting'" [class.released]="waitingRoom.state === 'released'" [class.timeout]="waitingRoom.state === 'timed-out'">
+            <div class="waiting-room-card-header">
+              <div class="waiting-room-title">
+                <span class="waiting-room-icon">⏳</span>
+                <div>
+                  <strong>Waiting Room</strong>
+                  <small *ngIf="waitingRoom.state === 'waiting'">Warteschlange erkannt · ARES wartet automatisch weiter</small>
+                  <small *ngIf="waitingRoom.state === 'released'">Warteraum verlassen · Task läuft normal weiter</small>
+                  <small *ngIf="waitingRoom.state === 'timed-out'">Maximale Wartezeit erreicht</small>
+                  <small *ngIf="waitingRoom.state === 'cancelled'">Warten wurde beendet</small>
+                </div>
+              </div>
+              <span class="waiting-room-badge" [class.waiting]="waitingRoom.state === 'waiting'" [class.ok]="waitingRoom.state === 'released'" [class.error]="waitingRoom.state === 'timed-out'">
+                {{ waitingRoom.state === 'waiting' ? 'WARTET' : waitingRoom.state === 'released' ? 'FREIGEGEBEN' : waitingRoom.state === 'timed-out' ? 'TIMEOUT' : 'BEENDET' }}
+              </span>
+            </div>
+
+            <div class="waiting-room-metrics">
+              <div>
+                <span>Anbieter</span>
+                <strong>{{ (waitingRoom.provider || 'generic') | uppercase }}</strong>
+              </div>
+              <div>
+                <span>Geschätzte Restzeit</span>
+                <strong>{{ waitingRoom.estimatedWaitSeconds !== undefined ? (waitingRoom.estimatedWaitSeconds * 1000 | date:'HH:mm:ss':'UTC') : 'wird ermittelt' }}</strong>
+              </div>
+              <div>
+                <span>Bereits gewartet</span>
+                <strong>{{ waitingRoom.elapsedMs | date:'HH:mm:ss':'UTC' }}</strong>
+              </div>
+              <div>
+                <span>Maximale Wartezeit</span>
+                <strong>{{ waitingRoom.maxWaitMs / 60000 | number:'1.0-0' }} Min.</strong>
+              </div>
+            </div>
+
+            <progress *ngIf="waitingRoom.state === 'waiting'" class="waiting-room-progress" [value]="waitingRoom.elapsedMs" [max]="waitingRoom.maxWaitMs"></progress>
+            <small class="waiting-room-note" *ngIf="waitingRoom.state === 'waiting'">Browser und Worker bleiben aktiv. ARES prüft den Zustand automatisch und setzt den Task nach Freigabe fort.</small>
+          </div>
+
           <div class="captcha-debug">
             <span class="captcha-dot" [class.ready]="system.captchaApiKeyConfigured" [class.missing]="!system.captchaApiKeyConfigured"></span>
             <div>
@@ -304,31 +353,14 @@
               <small *ngIf="getTaskChallengeType(task)">Typ: {{ getTaskChallengeType(task) }}</small>
             </div>
           </div>
-          <div class="captcha-debug waiting-room-debug" *ngIf="$any(task.config.data)?.waitingRoom as waitingRoom">
-            <span
-              class="captcha-dot"
-              [class.ready]="waitingRoom.state === 'waiting' || waitingRoom.state === 'released'"
-              [class.missing]="waitingRoom.state === 'timed-out'">
-            </span>
-            <div>
-              <strong>Waiting Room</strong>
-              <small>{{ (waitingRoom.provider || 'generic') | uppercase }} · {{ waitingRoom.state }}</small>
-              <small *ngIf="waitingRoom.state === 'waiting' && waitingRoom.estimatedWaitSeconds !== undefined">
-                Restzeit: {{ waitingRoom.estimatedWaitSeconds * 1000 | date:'HH:mm:ss':'UTC' }}
-              </small>
-              <small *ngIf="waitingRoom.state === 'waiting'">
-                Maximal {{ waitingRoom.maxWaitMs / 60000 | number:'1.0-0' }} Minuten
-              </small>
-            </div>
-          </div>
         </div>
 
         <div class="retry-info">
           {{ task.retries ?? 0 }}/{{ task.maxRetries ?? 0 }} retries
         </div>
 
-        <span class="status" [ngClass]="task.state.toLowerCase()">
-          {{ task.state }}
+        <span class="status" [class.waiting-room]="$any(task.config.data)?.waitingRoom?.state === 'waiting'" [ngClass]="task.state.toLowerCase()">
+          {{ $any(task.config.data)?.waitingRoom?.state === 'waiting' ? 'WAITING ROOM' : task.state }}
         </span>
 
         <div class="task-actions">
