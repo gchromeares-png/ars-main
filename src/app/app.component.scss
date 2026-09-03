@@ -214,7 +214,7 @@ h1 {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 14px;
   margin-bottom: 18px;
 }
@@ -232,6 +232,7 @@ h1 {
   overflow: hidden;
   border-radius: 18px;
   padding: 18px;
+  min-height: 128px;
 }
 
 .stat-card::before {
@@ -267,10 +268,13 @@ h1 {
   margin-top: 7px;
   font-size: 11px;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
-.captcha-card.ready::before { background: linear-gradient(180deg, #31c884, #b7f6d7); }
-.captcha-card.missing::before { background: linear-gradient(180deg, #ff995f, #ffd0aa); }
+.captcha-card.ready::before,
+.node-card.ready::before { background: linear-gradient(180deg, #31c884, #b7f6d7); }
+.captcha-card.missing::before,
+.node-card.missing::before { background: linear-gradient(180deg, #ff995f, #ffd0aa); }
 
 .workspace {
   display: grid;
@@ -548,7 +552,8 @@ select:focus {
 }
 
 .status.queued,
-.status.retrying {
+.status.retrying,
+.status.paused {
   color: #9c5c19;
   background: rgba(255, 184, 100, 0.22);
 }
@@ -585,7 +590,6 @@ select:focus {
 
 @media (max-width: 1100px) {
   .workspace,
-  .stats-grid,
   .form-grid,
   .profile-grid {
     grid-template-columns: 1fr;
