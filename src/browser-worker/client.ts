@@ -125,7 +125,7 @@ export class BrowserWorkerProcessClient {
     try {
       await this.request({ type: "shutdown", requestId: randomUUID() }, 4_000);
     } catch {
-      if (!child.killed) child.kill();
+      if (!child.killed) child.kill("SIGKILL");
     }
   }
 
@@ -275,7 +275,7 @@ export class BrowserWorkerProcessClient {
   private recycleWorker(error: Error): void {
     const child = this.child;
     if (!child) return;
-    if (!child.killed) child.kill();
+    if (!child.killed) child.kill("SIGKILL");
     this.handleWorkerExit(error);
   }
 
