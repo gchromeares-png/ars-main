@@ -57,6 +57,10 @@ export class BrowserWorkerProcessClient {
     return this.taskIds.has(taskId);
   }
 
+  async start(): Promise<void> {
+    await this.ensureReady();
+  }
+
   async execute(task: Task, shop: ShopifyRuntimeShop, profile: AresProfile): Promise<boolean> {
     this.taskIds.add(task.id);
     try {
@@ -166,12 +170,12 @@ export class BrowserWorkerProcessClient {
     });
     child.on("error", error => this.handleWorkerExit(new Error(
       `Browser Worker konnte nicht mit Node-Executable "${nodeExecutable}" gestartet werden: ${error.message}`
-    )));
+    ), child));
     child.on("exit", (code, signal) => {
       const details = this.stderrBuffer.trim();
       this.handleWorkerExit(new Error(
         `Browser Worker beendet (code=${String(code)}, signal=${String(signal)}).${details ? ` ${details}` : ""}`
-      ));
+      ), child);
     });
   }
 
@@ -221,7 +225,7 @@ export class BrowserWorkerProcessClient {
         const error = new Error(`Browser Worker Timeout für ${request.type}.`);
         this.pending.delete(request.requestId);
         reject(error);
-        this.recycleWorker(error);
+        this.recycleWorker(error, child);
       }, timeoutMs);
       timeout.unref();
 
@@ -231,7 +235,7 @@ export class BrowserWorkerProcessClient {
         clearTimeout(timeout);
         this.pending.delete(request.requestId);
         reject(error);
-        this.recycleWorker(error);
+        this.recycleWorker(error, child);
       });
     });
   }
@@ -254,33 +258,40 @@ export class BrowserWorkerProcessClient {
 
   private async runHeartbeat(): Promise<void> {
     if (this.closing || this.heartbeatInFlight || !this.child || this.child.killed) return;
+    const child = this.child;
     this.heartbeatInFlight = true;
 
     try {
       const response = await this.request({ type: "health", requestId: randomUUID() }, this.heartbeatTimeoutMs);
       if (response.type !== "health-result") {
-        throw new Error(`Unerwartete Heartbeat-Antwort: ${response.type}`);
+        this.recycleWorker(new Error(`Unerwartete Heartbeat-Antwort: ${response.type}`), child);
+        return;
       }
       this.lastHeartbeatAt = new Date();
     } catch (error) {
-      if (this.child) {
+      if (this.child === child) {
         const reason = error instanceof Error ? error : new Error(String(error));
-        this.recycleWorker(new Error(`Browser Worker Heartbeat fehlgeschlagen: ${reason.message}`));
+        this.recycleWorker(new Error(`Browser Worker Heartbeat fehlgeschlagen: ${reason.message}`), child);
       }
     } finally {
       this.heartbeatInFlight = false;
     }
   }
 
-  private recycleWorker(error: Error): void {
-    const child = this.child;
-    if (!child) return;
+  private recycleWorker(error: Error, child = this.child): void {
+    if (!child || this.child !== child) return;
+    const shouldReplace = !this.closing;
     if (!child.killed) child.kill("SIGKILL");
-    this.handleWorkerExit(error);
+    this.handleWorkerExit(error, child);
+
+    if (shouldReplace && !this.child) {
+      this.spawnWorker();
+    }
   }
 
-  private handleWorkerExit(error: Error): void {
-    const wasCurrent = Boolean(this.child);
+  private handleWorkerExit(error: Error, child = this.child): void {
+    if (!child || this.child !== child) return;
+    const shouldNotify = !this.closing;
     this.stopHeartbeat();
     this.readyReject?.(error);
     this.readyResolve = undefined;
@@ -296,7 +307,7 @@ export class BrowserWorkerProcessClient {
       pending.reject(error);
     }
     this.pending.clear();
-    if (wasCurrent && !this.closing) this.onExit(this, error);
+    if (shouldNotify) this.onExit(this, error);
     this.closing = false;
   }
 }
