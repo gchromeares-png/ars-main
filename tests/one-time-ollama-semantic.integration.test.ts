@@ -96,14 +96,24 @@ describe("one-time real Ollama semantic autofill validation", () => {
     await page.close();
   });
 
-  it("uses real Ollama embeddings when deterministic German metadata is insufficient", async () => {
+  it("recognizes German checkout fields across metadata sources and address contexts", async () => {
     const page = await browser.newPage();
     await page.setContent(`
       <!doctype html>
       <html lang="de">
         <body>
           <form>
-            <label>Wie sollen wir Sie persönlich ansprechen? <input type="text" name="fallback1" id="fallback-a1"></label>
+            <input type="text" id="v1" name="customer-given" autocomplete="given-name">
+            <input type="text" id="v2" name="customer-family" aria-label="Familienname">
+            <input type="text" id="v3" name="billing-line" placeholder="Straße und Hausnummer der Rechnungsanschrift">
+            <label for="v4">Ort der Rechnungsanschrift</label>
+            <input type="text" id="v4" name="billing-locality">
+            <input type="text" id="v5" name="billing-postal" placeholder="PLZ">
+            <input type="tel" id="v6" name="contact-number" aria-label="Telefon für Rückfragen">
+            <select id="v7" name="billing-country" autocomplete="country-name">
+              <option value="DE">Deutschland</option>
+              <option value="AT">Österreich</option>
+            </select>
           </form>
         </body>
       </html>
@@ -114,23 +124,84 @@ describe("one-time real Ollama semantic autofill validation", () => {
     const descriptors = await collectFieldDescriptors(page);
     const resolved = await resolver.resolve(descriptors);
 
-    expect(resolved).toHaveLength(1);
-    expect(resolved[0]?.intent).toBe("firstName");
-    expect(resolved[0]?.source).toBe("embedding");
-    expect(resolved[0]?.confidence ?? 0).toBeGreaterThanOrEqual(0.5);
+    expect(resolved.map(item => item.intent)).toEqual([
+      "firstName",
+      "lastName",
+      "address1",
+      "city",
+      "postalCode",
+      "phone",
+      "countryCode"
+    ]);
+    expect(resolved.every(item => item.source === "standard-metadata")).toBe(true);
+    expect(resolved.every(item => item.confidence >= 0.8)).toBe(true);
 
     console.log(JSON.stringify({
-      phase: "embedding-fallback",
+      phase: "german-metadata-variants",
       platform: process.platform,
-      model: MODEL,
-      field: resolved[0] ? {
-        label: resolved[0].descriptor.label,
-        intent: resolved[0].intent,
-        source: resolved[0].source,
-        confidence: resolved[0].confidence
-      } : null
+      fields: resolved.map(item => ({
+        id: item.descriptor.id,
+        label: item.descriptor.label,
+        ariaLabel: item.descriptor.ariaLabel,
+        placeholder: item.descriptor.placeholder,
+        autocomplete: item.descriptor.autocomplete,
+        intent: item.intent,
+        source: item.source,
+        confidence: item.confidence
+      }))
     }, null, 2));
 
+    await page.close();
+  });
+
+  it("routes indirect German metadata through real Ollama without forcing an unsafe guess", async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <!doctype html>
+      <html lang="de">
+        <body>
+          <form>
+            <label>Wie sollen wir Sie persönlich ansprechen? <input type="text" name="fallback1" id="fallback-a1"></label>
+            <label>Wohin soll die Sendung gehen? <input type="text" name="fallback2" id="fallback-a2"></label>
+            <label>Zusätzliche Angabe zur Zustellung <input type="text" name="fallback3" id="fallback-a3"></label>
+          </form>
+        </body>
+      </html>
+    `);
+
+    const provider = new OllamaEmbeddingProvider(ENDPOINT, MODEL, 10_000);
+    const embedSpy = jest.spyOn(provider, "embed");
+    const resolver = new FieldSemanticResolver(provider);
+    const descriptors = await collectFieldDescriptors(page);
+    const resolved = await resolver.resolve(descriptors);
+
+    expect(resolved).toHaveLength(3);
+    expect(embedSpy).toHaveBeenCalled();
+    expect(resolved.every(item => item.source === "embedding" || item.source === "unknown")).toBe(true);
+
+    for (const item of resolved) {
+      if (item.source === "embedding") {
+        expect(item.intent).not.toBe("unknown");
+        expect(item.confidence).toBeGreaterThanOrEqual(0.5);
+      } else {
+        expect(item.intent).toBe("unknown");
+      }
+    }
+
+    console.log(JSON.stringify({
+      phase: "embedding-fallback-safety",
+      platform: process.platform,
+      model: MODEL,
+      embeddingCalls: embedSpy.mock.calls.length,
+      fields: resolved.map(item => ({
+        label: item.descriptor.label,
+        intent: item.intent,
+        source: item.source,
+        confidence: item.confidence
+      }))
+    }, null, 2));
+
+    embedSpy.mockRestore();
     await page.close();
   });
 });
