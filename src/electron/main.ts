@@ -6,9 +6,11 @@ import { TaskOrchestrator } from "../orchestrator";
 import { WorkerMock } from "../mocks";
 import { BrowserWorkerPoolClient } from "../browser-worker/client";
 import type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
-import { TaskConfig } from "../models";
+import { TaskConfig, TaskState } from "../models";
 import { ProfileRepository } from "../profiles/profile-repository";
 import { AresProfile } from "../profiles/models";
+import type { CheckoutPaymentSession, PaymentMethod } from "../payments/models";
+import { EphemeralPaymentExecutor } from "../payments/ephemeral-payment-executor";
 import { SqliteTaskStore } from "../persistence/sqlite-task-store";
 import { TaskPersistenceCoordinator } from "../persistence/task-persistence-coordinator";
 import {
@@ -55,6 +57,7 @@ function broadcastMonitorUpdate(payload: unknown): void {
 
 const shops = new Map<string, CommerceShop>();
 const profileRepository = new ProfileRepository();
+const paymentSessions = new Map<string, CheckoutPaymentSession>();
 
 function normalizeStoredShop(input: any): CommerceShop | undefined {
   if (!input?.id || !input?.baseUrl) return undefined;
@@ -69,6 +72,28 @@ function normalizeStoredShop(input: any): CommerceShop | undefined {
     platform,
     config: input.config && typeof input.config === "object" ? input.config : {}
   };
+}
+
+function normalizePaymentSession(input: any): CheckoutPaymentSession | undefined {
+  const allowedMethods = new Set<PaymentMethod>(["card", "paypal", "shop-pay", "klarna", "other"]);
+  const method = String(input?.method ?? "").trim() as PaymentMethod;
+  if (!allowedMethods.has(method)) return undefined;
+
+  const session: CheckoutPaymentSession = {
+    method,
+    label: typeof input?.label === "string" ? input.label.trim().slice(0, 120) || undefined : undefined
+  };
+
+  if (method === "card" && input?.card && typeof input.card === "object") {
+    session.card = {
+      holderName: typeof input.card.holderName === "string" ? input.card.holderName.trim().slice(0, 120) || undefined : undefined,
+      cardNumber: typeof input.card.cardNumber === "string" ? input.card.cardNumber.replace(/\s+/g, "").slice(0, 24) || undefined : undefined,
+      expiry: typeof input.card.expiry === "string" ? input.card.expiry.trim().slice(0, 12) || undefined : undefined,
+      securityCode: typeof input.card.securityCode === "string" ? input.card.securityCode.trim().slice(0, 8) || undefined : undefined
+    };
+  }
+
+  return session;
 }
 
 function getShopsFilePath(): string | undefined {
@@ -164,8 +189,13 @@ async function createBackend(): Promise<void> {
     }
   );
 
+  const paymentAwareBrowserWorker = new EphemeralPaymentExecutor(
+    browserWorker,
+    taskId => paymentSessions.get(taskId)
+  );
+
   commerceExecutor = new CommerceTaskExecutorRouter(shopId => shops.get(shopId));
-  commerceExecutor.register("shopify", browserWorker);
+  commerceExecutor.register("shopify", paymentAwareBrowserWorker);
   commerceExecutor.registerMonitorExecutor(commerceMonitor);
 
   orchestrator = new TaskOrchestrator(taskStore, commerceExecutor);
@@ -180,7 +210,10 @@ async function createBackend(): Promise<void> {
     orchestrator.addWorker(new WorkerMock(`browser-slot-${index}`));
   }
 
-  const forwardTask = (task: unknown) => {
+  const forwardTask = (task: any) => {
+    if (task?.id && [TaskState.SUCCESS, TaskState.CANCELLED].includes(task.state)) {
+      paymentSessions.delete(String(task.id));
+    }
     mainWindow?.webContents.send("task-status-update", task);
   };
 
@@ -228,6 +261,27 @@ ipcMain.handle("save-profile", (_event, profile: AresProfile) => {
 ipcMain.handle("delete-profile", (_event, profileId: string) => ({
   success: profileRepository.delete(profileId)
 }));
+
+ipcMain.handle("set-payment-session", (_event, taskId: string, input: unknown) => {
+  const id = String(taskId ?? "").trim();
+  if (!id || !orchestrator.getTask(id)) {
+    return { success: false, error: "Task für Zahlungsdaten wurde nicht gefunden." };
+  }
+
+  const session = normalizePaymentSession(input);
+  if (!session) {
+    paymentSessions.delete(id);
+    return { success: false, error: "Ungültige Zahlungsart." };
+  }
+
+  paymentSessions.set(id, session);
+  return { success: true, method: session.method };
+});
+
+ipcMain.handle("clear-payment-session", (_event, taskId: string) => {
+  paymentSessions.delete(String(taskId ?? ""));
+  return { success: true };
+});
 
 ipcMain.handle("get-shops", () => ({
   success: true,
@@ -332,6 +386,7 @@ ipcMain.handle("resume-task", async (_event, taskId: string) => {
 
 ipcMain.handle("stop-task", async (_event, taskId: string) => {
   try {
+    paymentSessions.delete(taskId);
     orchestrator.cancelTask(taskId);
     const task = orchestrator.getTask(taskId);
     commerceMonitor.resetTask(taskId);
@@ -417,6 +472,7 @@ app.on("before-quit", event => {
   quitting = true;
 
   void (async () => {
+    paymentSessions.clear();
     await commerceExecutor?.close().catch(() => undefined);
     orchestrator?.cleanup();
     await persistenceCoordinator?.close().catch(() => undefined);
