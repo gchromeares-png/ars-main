@@ -10,6 +10,7 @@ import { TaskConfig, TaskState } from "../models";
 import { ProfileRepository } from "../profiles/profile-repository";
 import { AresProfile } from "../profiles/models";
 import { ProxyRepository } from "../proxies/proxy-repository";
+import { ProxyHealthService } from "../proxies/proxy-health-service";
 import type { AresProxy } from "../proxies/models";
 import type { CheckoutPaymentSession, PaymentMethod } from "../payments/models";
 import { EphemeralPaymentExecutor } from "../payments/ephemeral-payment-executor";
@@ -62,6 +63,7 @@ function broadcastMonitorUpdate(payload: unknown): void {
 const shops = new Map<string, CommerceShop>();
 const profileRepository = new ProfileRepository();
 const proxyRepository = new ProxyRepository();
+const proxyHealthService = new ProxyHealthService();
 const paymentSessions = new Map<string, CheckoutPaymentSession>();
 
 function normalizeStoredShop(input: any): CommerceShop | undefined {
@@ -307,6 +309,26 @@ ipcMain.handle("save-proxy", (_event, input: AresProxy) => {
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
+});
+
+ipcMain.handle("test-proxy", async (_event, proxyId: string) => {
+  const id = String(proxyId ?? "").trim();
+  const proxy = proxyRepository.get(id);
+  if (!proxy) return { success: false, error: `Proxy ${id || "(ohne ID)"} wurde nicht gefunden.` };
+
+  const health = await proxyHealthService.test(proxy);
+  const saved = proxyRepository.save({ ...proxy, health });
+  return { success: health.status === "online", proxy: saved, health, error: health.error };
+});
+
+ipcMain.handle("test-all-proxies", async () => {
+  const results = [];
+  for (const proxy of proxyRepository.getAll()) {
+    const health = await proxyHealthService.test(proxy);
+    const saved = proxyRepository.save({ ...proxy, health });
+    results.push({ proxyId: proxy.id, success: health.status === "online", health, proxy: saved });
+  }
+  return { success: true, results, proxies: proxyRepository.getAll() };
 });
 
 ipcMain.handle("delete-proxy", (_event, proxyId: string) => {
