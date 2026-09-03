@@ -29,9 +29,9 @@
         <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
       </div>
       <div class="hero-copy">
-        <div class="eyebrow">LIVE DEBUG // CHALLENGE VISIBILITY</div>
-        <h2>Klare Übersicht für Tasks, Sessions und Captcha-Status.</h2>
-        <p>Backend-Funktionen bleiben getrennt — die UI zeigt Debug-Status, Persistenz und Task-Fortschritt an.</p>
+        <div class="eyebrow">MULTI COMMERCE // TASK CONTROL</div>
+        <h2>Klare Übersicht für Shops, Tasks, Sessions und Status.</h2>
+        <p>Commerce-Plattformen sind getrennt von ihren jeweiligen Executoren und Monitor-Adaptern — dadurch bleibt ARES erweiterbar.</p>
       </div>
     </section>
 
@@ -86,7 +86,7 @@
             <select [(ngModel)]="selectedShopId">
               <option value="">Shop auswählen</option>
               <option *ngFor="let shop of shops; trackBy: trackShop" [value]="shop.id">
-                {{ shop.name }}
+                {{ shop.name }} · {{ getPlatformLabel(shop.platform) }}
               </option>
             </select>
           </label>
@@ -129,16 +129,25 @@
 
         <label>
           <span>Shop-ID</span>
-          <input [(ngModel)]="newShop.id" placeholder="feenturm">
+          <input [(ngModel)]="newShop.id" placeholder="mein-shop">
         </label>
 
         <label>
           <span>Name</span>
-          <input [(ngModel)]="newShop.name" placeholder="Feenturm">
+          <input [(ngModel)]="newShop.name" placeholder="Mein Shop">
         </label>
 
         <label>
-          <span>Shopify-URL</span>
+          <span>Plattform</span>
+          <select [(ngModel)]="newShop.platform">
+            <option *ngFor="let platform of commercePlatforms" [ngValue]="platform">
+              {{ getPlatformLabel(platform) }}
+            </option>
+          </select>
+        </label>
+
+        <label>
+          <span>Shop-URL</span>
           <input [(ngModel)]="newShop.baseUrl" placeholder="https://dein-shop.de">
         </label>
 
@@ -151,8 +160,9 @@
             <div>
               <strong>{{ shop.name }}</strong>
               <small>{{ shop.baseUrl }}</small>
+              <small>{{ hasExecutorForShop(shop) ? "Task-Executor bereit" : "Registry/Monitor vorbereitet" }}</small>
             </div>
-            <span class="platform-pill">{{ shop.platform }}</span>
+            <span class="platform-pill">{{ getPlatformLabel(shop.platform) }}</span>
           </div>
         </div>
       </aside>
