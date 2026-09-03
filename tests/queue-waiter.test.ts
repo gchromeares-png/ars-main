@@ -93,7 +93,7 @@ describe("ShopifyQueueWaiter", () => {
       expect(result.detected).toBe(true);
       expect(result.released).toBe(true);
       expect(updates.some(update => update?.active === true && update?.position === 14205)).toBe(true);
-      expect(updates.at(-1)).toMatchObject({
+      expect(updates[updates.length - 1]).toMatchObject({
         active: false,
         phase: "released",
         position: 14205,
