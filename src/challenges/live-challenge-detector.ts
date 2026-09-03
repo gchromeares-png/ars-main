@@ -106,16 +106,26 @@ export class LiveChallengeDetector {
   }
 
   /**
-   * Prüft eine aktive Patchright-Page im Browser.
+   * Prüft eine aktive Patchright-Page im Browser (abgesichert gegen unvollständige Mocks).
    */
   async detect(page: Page): Promise<LiveChallengeDetection> {
-    if (page.isClosed()) {
+    if (!page || (typeof page.isClosed === "function" && page.isClosed())) {
       return { detected: false, url: "" };
     }
 
-    const url = page.url();
-    const title = await page.title().catch(() => "");
-    const html = await page.content().catch(() => "");
+    const url = typeof page.url === "function" ? page.url() : "";
+    
+    let title = "";
+    if (typeof page.title === "function") {
+      title = await page.title().catch(() => "");
+    }
+
+    let html = "";
+    if (typeof page.content === "function") {
+      html = await page.content().catch(() => "");
+    } else if (typeof (page as any).evaluate === "function") {
+      html = await page.evaluate(() => document.documentElement?.outerHTML || "").catch(() => "");
+    }
 
     return this.detectFromSnapshot(url, html, title);
   }
