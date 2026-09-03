@@ -3,12 +3,16 @@ import type { LiveChallengeDetection, LiveChallengeType } from "./types";
 
 export class LiveChallengeDetector {
   /**
-   * Prüft einen HTML/URL-Snapshot auf Challenges (wird von der Test-Suite verwendet).
+   * Prüft einen HTML/URL-Snapshot auf Challenges (vollständig abgesichert gegen null/undefined).
    */
-  detectFromSnapshot(url: string, html: string = "", title: string = ""): LiveChallengeDetection {
-    const lowerUrl = url.toLowerCase();
-    const lowerHtml = html.toLowerCase();
-    const lowerTitle = title.toLowerCase();
+  detectFromSnapshot(url: any = "", html: any = "", title: any = ""): LiveChallengeDetection {
+    const safeUrl = typeof url === "string" ? url : String(url ?? "");
+    const safeHtml = typeof html === "string" ? html : String(html ?? "");
+    const safeTitle = typeof title === "string" ? title : String(title ?? "");
+
+    const lowerUrl = safeUrl.toLowerCase();
+    const lowerHtml = safeHtml.toLowerCase();
+    const lowerTitle = safeTitle.toLowerCase();
 
     // 1. Generic Interstitial (Cloudflare "Just a moment...", etc.)
     if (
@@ -20,8 +24,8 @@ export class LiveChallengeDetector {
       return {
         detected: true,
         type: "generic-interstitial",
-        url,
-        title
+        url: safeUrl,
+        title: safeTitle
       };
     }
 
@@ -35,8 +39,8 @@ export class LiveChallengeDetector {
       return {
         detected: true,
         type: "shopify-queue",
-        url,
-        title
+        url: safeUrl,
+        title: safeTitle
       };
     }
 
@@ -50,8 +54,8 @@ export class LiveChallengeDetector {
       return {
         detected: true,
         type: "turnstile",
-        url,
-        title
+        url: safeUrl,
+        title: safeTitle
       };
     }
 
@@ -64,8 +68,8 @@ export class LiveChallengeDetector {
       return {
         detected: true,
         type: "recaptcha",
-        url,
-        title
+        url: safeUrl,
+        title: safeTitle
       };
     }
 
@@ -78,8 +82,8 @@ export class LiveChallengeDetector {
       return {
         detected: true,
         type: "hcaptcha",
-        url,
-        title
+        url: safeUrl,
+        title: safeTitle
       };
     }
 
@@ -92,39 +96,54 @@ export class LiveChallengeDetector {
       return {
         detected: true,
         type: "shopify-checkpoint",
-        url,
-        title
+        url: safeUrl,
+        title: safeTitle
       };
     }
 
     // Keine Challenge erkannt (reguläre Seite)
     return {
       detected: false,
-      url,
-      title
+      url: safeUrl,
+      title: safeTitle
     };
   }
 
   /**
-   * Prüft eine aktive Patchright-Page im Browser (abgesichert gegen unvollständige Mocks).
+   * Prüft eine aktive Patchright-Page im Browser.
    */
   async detect(page: Page): Promise<LiveChallengeDetection> {
     if (!page || (typeof page.isClosed === "function" && page.isClosed())) {
       return { detected: false, url: "" };
     }
 
-    const url = typeof page.url === "function" ? page.url() : "";
-    
+    let url = "";
+    try {
+      if (typeof page.url === "function") {
+        url = page.url() || "";
+      }
+    } catch {}
+
     let title = "";
-    if (typeof page.title === "function") {
-      title = await page.title().catch(() => "");
-    }
+    try {
+      if (typeof page.title === "function") {
+        title = (await page.title()) || "";
+      }
+    } catch {}
 
     let html = "";
-    if (typeof page.content === "function") {
-      html = await page.content().catch(() => "");
-    } else if (typeof (page as any).evaluate === "function") {
-      html = await page.evaluate(() => document.documentElement?.outerHTML || "").catch(() => "");
+    try {
+      if (typeof page.content === "function") {
+        html = (await page.content()) || "";
+      }
+    } catch {}
+
+    if (!html) {
+      try {
+        if (typeof (page as any).evaluate === "function") {
+          html = (await page.evaluate(() => document.documentElement?.outerHTML || "")) || "";
+        }
+      } catch {}
     }
 
     return this.detectFromSnapshot(url, html, title);
