@@ -33,7 +33,9 @@ export interface AresProfile {
   name: string;
   contact: ContactProfile;
   address: AddressProfile;
+  /** Legacy inline proxy config. New UI uses preferredProxyId + Proxy Vault. */
   proxy?: ProxyConfig;
+  preferredProxyId?: string;
   browser?: BrowserProfileConfig;
   /** Non-sensitive preference only. Card number/CVV are session-only and never stored here. */
   paymentPreference?: StoredPaymentPreference;
