@@ -362,6 +362,7 @@ export class BrowserWorkerProcessClient {
 export class BrowserWorkerPoolClient implements ITaskExecutor {
   private readonly clients: BrowserWorkerProcessClient[];
   private readonly taskOwners = new Map<string, BrowserWorkerProcessClient>();
+  private readonly runtimeListeners = new Set<(task: Task) => void>();
   private lastWorkerError?: string;
   private readonly heartbeatIntervalMs: number;
   private readonly heartbeatTimeoutMs: number;
@@ -390,15 +391,25 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 10_000;
 
+    const emitTaskUpdate = (task: Task) => {
+      options.onTaskUpdate?.(task);
+      for (const listener of this.runtimeListeners) listener(task);
+    };
+
     this.clients = Array.from({ length: processCount }, () => new BrowserWorkerProcessClient(
       requestTimeoutMs,
       options.profileRoot,
       (client, error) => this.handleClientExit(client, error),
-      options.onTaskUpdate,
+      emitTaskUpdate,
       this.heartbeatIntervalMs,
       this.heartbeatTimeoutMs,
       this.executeTimeoutMs
     ));
+  }
+
+  onTaskUpdate(callback: (task: Task) => void): () => void {
+    this.runtimeListeners.add(callback);
+    return () => this.runtimeListeners.delete(callback);
   }
 
   async execute(task: Task): Promise<boolean> {
@@ -464,6 +475,7 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
 
   async close(): Promise<void> {
     this.taskOwners.clear();
+    this.runtimeListeners.clear();
     await Promise.allSettled(this.clients.map(client => client.close()));
   }
 
