@@ -1,7 +1,11 @@
 name: One-time Ollama semantic validation
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - one-time-ollama-validation
+    paths:
+      - .github/workflows/one-time-ollama-validation.yml
 
 jobs:
   validate:
