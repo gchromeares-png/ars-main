@@ -1,6 +1,7 @@
 import type { Locator, Page } from "patchright";
 import { InteractionEngine } from "./interaction-engine";
 import type { InteractionOutcomeExpectation } from "./interaction-policies";
+import { GhostCursorPointerDriver } from "./pointer-driver";
 
 export interface UiPoint {
   x: number;
@@ -43,14 +44,19 @@ export interface UiInteractionHelper {
 
 /**
  * Backwards-compatible facade for normal UI automation.
- * Stateful actions delegate to InteractionEngine; challenge handling stays separate.
+ * InteractionEngine owns readiness/outcome/retries; GhostCursorPointerDriver
+ * owns only normal pointer movement. Challenge handling stays separate.
  */
 export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   private readonly engine: InteractionEngine;
-  private position: UiPoint = { x: 0, y: 0 };
 
   constructor(private readonly page: Page) {
-    this.engine = new InteractionEngine(page);
+    this.engine = new InteractionEngine(
+      page,
+      undefined,
+      undefined,
+      new GhostCursorPointerDriver(page)
+    );
   }
 
   async moveTo(target: Locator, options: UiMoveOptions = {}): Promise<void> {
@@ -62,21 +68,7 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   }
 
   async moveToPoint(target: UiPoint, options: UiMoveOptions = {}): Promise<void> {
-    if (!Number.isFinite(target.x) || !Number.isFinite(target.y)) {
-      throw new TypeError("Cursor coordinates must be finite numbers.");
-    }
-    const steps = 10;
-    const delay = Math.max(0, Math.floor(options.stepDelayMs ?? 0));
-    const start = { ...this.position };
-    for (let index = 1; index <= steps; index++) {
-      const t = index / steps;
-      await this.page.mouse.move(
-        start.x + (target.x - start.x) * t,
-        start.y + (target.y - start.y) * t
-      );
-      if (delay > 0) await new Promise<void>(resolve => setTimeout(resolve, delay));
-    }
-    this.position = { ...target };
+    await this.engine.moveToPoint(target, options.seed ?? "ui-move");
   }
 
   async click(target: Locator, options: UiClickOptions = {}): Promise<void> {
