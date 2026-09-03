@@ -26,6 +26,7 @@ export class TaskOrchestrator {
   private readonly executor: ITaskExecutor;
   private readonly pendingTaskIds: string[] = [];
   private readonly pendingTaskIdSet = new Set<string>();
+  private readonly pausedRunningTaskIds = new Set<string>();
 
   constructor(
     repository: ITaskRepository,
@@ -91,8 +92,12 @@ export class TaskOrchestrator {
 
       const success = await this.executor.execute(task);
 
+      const wasPausedWhileRunning = this.pausedRunningTaskIds.delete(task.id);
       const currentState = task.state as TaskState;
-      if (currentState === TaskState.CANCELLED || currentState === TaskState.PAUSED) {
+      if (currentState === TaskState.CANCELLED || currentState === TaskState.PAUSED || wasPausedWhileRunning) {
+        if (wasPausedWhileRunning && currentState === TaskState.QUEUED) {
+          this.enqueueTask(task.id);
+        }
         await this.registry.saveTask(task.id);
         return;
       }
@@ -123,6 +128,10 @@ export class TaskOrchestrator {
       throw new Error(`Task ${taskId} cannot pause from ${task.state}`);
     }
 
+    if (this.isRunningLike(task.state)) {
+      this.pausedRunningTaskIds.add(taskId);
+    }
+
     this.transition(task, TaskState.PAUSED);
     this.cancellationManager.cancelTask(taskId);
     void this.executor.cancelTask?.(taskId).catch(error => {
@@ -151,6 +160,7 @@ export class TaskOrchestrator {
     if (!task) throw new Error(`Task ${taskId} not found`);
 
     this.removePendingTask(taskId);
+    this.pausedRunningTaskIds.delete(taskId);
     this.retryScheduler.cancelRetry(taskId);
     this.cancellationManager.cancelTask(taskId);
     void this.executor.cancelTask?.(taskId).catch(error => {
@@ -190,6 +200,7 @@ export class TaskOrchestrator {
   cleanup(): void {
     this.pendingTaskIds.length = 0;
     this.pendingTaskIdSet.clear();
+    this.pausedRunningTaskIds.clear();
     this.retryScheduler.cleanup();
     this.cancellationManager.cleanup();
     for (const worker of this.workerPool.getAllWorkers()) worker.stop();
@@ -221,6 +232,16 @@ export class TaskOrchestrator {
         task.lastError = error instanceof Error ? error.message : String(error);
       });
     }
+  }
+
+  private isRunningLike(state: TaskState): boolean {
+    return [
+      TaskState.STARTING,
+      TaskState.RUNNING,
+      TaskState.PRODUCT_FOUND,
+      TaskState.CART,
+      TaskState.CHECKOUT
+    ].includes(state);
   }
 
   private transition(task: Task, newState: TaskState): void {
