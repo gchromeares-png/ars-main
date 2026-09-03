@@ -26,10 +26,7 @@ export function semanticTarget(intent: FieldIntent, context: AddressContext = "u
   return { intent, context };
 }
 
+/** The single canonical identity function for semantic field targets. */
 export function targetKey(target: SemanticTarget): SemanticTargetKey {
   return `${target.context}:${target.intent}` as SemanticTargetKey;
-}
-
-export function targetEquals(left: SemanticTarget, right: SemanticTarget): boolean {
-  return left.intent === right.intent && left.context === right.context;
 }
