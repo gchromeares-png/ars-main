@@ -1,4 +1,5 @@
 import { Task, TaskConfig, TaskLogEntry, TaskState } from "../models";
+import type { ProductMonitorEvent } from "../monitor/models";
 
 export interface ITaskExecutor {
   execute(task: Task): Promise<boolean>;
@@ -38,7 +39,19 @@ export interface ITaskLogRepository {
   deleteLogsByTaskId(taskId: string): Promise<void>;
 }
 
-export interface ITaskPersistenceRepository extends ITaskRepository, ITaskLogRepository {
+export interface StoredProductMonitorEvent extends ProductMonitorEvent {
+  id?: number;
+  taskId: string;
+}
+
+export interface IProductMonitorEventRepository {
+  recordProductMonitorEvent(taskId: string, event: ProductMonitorEvent): Promise<void>;
+  findProductMonitorEventsByTaskId(taskId: string, limit?: number): Promise<StoredProductMonitorEvent[]>;
+  deleteProductMonitorEventsByTaskId(taskId: string): Promise<void>;
+}
+
+export interface ITaskPersistenceRepository
+  extends ITaskRepository, ITaskLogRepository, IProductMonitorEventRepository {
   recordTaskEvent(task: Task, entry: TaskLogEntry): Promise<void>;
   close?(): Promise<void>;
 }

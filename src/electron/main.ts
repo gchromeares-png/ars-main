@@ -17,11 +17,14 @@ import {
   normalizeCommercePlatform
 } from "../commerce/platforms";
 import { CommerceTaskExecutorRouter } from "../commerce/task-executor-router";
+import { CommerceProductApiRouter } from "../commerce/product-api/router";
+import { CommerceMonitorService, isCommerceMonitorTask } from "../monitor/commerce-monitor-service";
 
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: TaskOrchestrator;
 let browserWorker: BrowserWorkerPoolClient;
 let commerceExecutor: CommerceTaskExecutorRouter;
+let commerceMonitor: CommerceMonitorService;
 let taskStore: SqliteTaskStore;
 let persistenceCoordinator: TaskPersistenceCoordinator;
 let quitting = false;
@@ -42,13 +45,20 @@ function broadcastTaskUpdate(task: unknown): void {
   }
 }
 
+function broadcastMonitorUpdate(payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send("product-monitor-update", payload);
+    }
+  }
+}
+
 const shops = new Map<string, CommerceShop>();
 const profileRepository = new ProfileRepository();
 
 function normalizeStoredShop(input: any): CommerceShop | undefined {
   if (!input?.id || !input?.baseUrl) return undefined;
 
-  // Backward compatibility: old ARES shop entries were always Shopify and had no selectable platform.
   const platform = normalizeCommercePlatform(input.platform ?? "shopify");
   if (!platform) return undefined;
 
@@ -142,10 +152,22 @@ async function createBackend(): Promise<void> {
     { profileRoot: path.join(userData, "browser-profiles") }
   );
 
+  taskStore = await SqliteTaskStore.open(path.join(userData, "ares.sqlite"));
+
+  const productApiRouter = new CommerceProductApiRouter();
+  commerceMonitor = new CommerceMonitorService(
+    shopId => shops.get(shopId),
+    productApiRouter,
+    taskStore,
+    {
+      onEvent: (taskId, event) => broadcastMonitorUpdate({ taskId, event })
+    }
+  );
+
   commerceExecutor = new CommerceTaskExecutorRouter(shopId => shops.get(shopId));
   commerceExecutor.register("shopify", browserWorker);
+  commerceExecutor.registerMonitorExecutor(commerceMonitor);
 
-  taskStore = await SqliteTaskStore.open(path.join(userData, "ares.sqlite"));
   orchestrator = new TaskOrchestrator(taskStore, commerceExecutor);
   persistenceCoordinator = new TaskPersistenceCoordinator(orchestrator, taskStore);
   await orchestrator.initialize();
@@ -187,25 +209,18 @@ function createWindow(): BrowserWindow {
   });
 
   const devServerUrl = process.env["ARES_UI_URL"];
-  if (devServerUrl) {
-    void win.loadURL(devServerUrl);
-  } else {
-    void win.loadFile(path.join(__dirname, "../../ares/index.html"));
-  }
+  if (devServerUrl) void win.loadURL(devServerUrl);
+  else void win.loadFile(path.join(__dirname, "../../ares/index.html"));
 
   return win;
 }
 
-ipcMain.handle("get-profiles", () => ({
-  success: true,
-  profiles: profileRepository.getAll()
-}));
+ipcMain.handle("get-profiles", () => ({ success: true, profiles: profileRepository.getAll() }));
 
 ipcMain.handle("save-profile", (_event, profile: AresProfile) => {
   if (!profile?.id || !profile?.name) {
     return { success: false, error: "Profil-ID und Profilname sind erforderlich." };
   }
-
   profileRepository.save(profile);
   return { success: true, profile };
 });
@@ -218,7 +233,8 @@ ipcMain.handle("get-shops", () => ({
   success: true,
   shops: [...shops.values()],
   platforms: COMMERCE_PLATFORMS,
-  executorPlatforms: commerceExecutor?.listExecutorPlatforms() ?? []
+  executorPlatforms: commerceExecutor?.listExecutorPlatforms() ?? [],
+  monitorReady: commerceExecutor?.hasMonitorExecutor() ?? false
 }));
 
 ipcMain.handle("register-shop", (_event, input) => {
@@ -248,7 +264,8 @@ ipcMain.handle("register-shop", (_event, input) => {
   return {
     success: true,
     shop,
-    executorReady: commerceExecutor.hasExecutor(platform)
+    executorReady: commerceExecutor.hasExecutor(platform),
+    monitorReady: commerceExecutor.hasMonitorExecutor()
   };
 });
 
@@ -258,17 +275,25 @@ ipcMain.handle("create-task", (_event, input: TaskConfig) => {
     broadcastTaskUpdate(task);
     return { success: true, taskId: task.id, task };
   } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 });
 
 ipcMain.handle("start-task", async (_event, taskId: string) => {
   try {
-    await orchestrator.startTask(taskId);
+    const existing = orchestrator.getTask(taskId);
+    if (!existing) return { success: false, error: `Task ${taskId} not found.` };
 
+    if (isCommerceMonitorTask(existing)) {
+      void orchestrator.startTask(taskId).catch(error => {
+        existing.lastError = error instanceof Error ? error.message : String(error);
+        broadcastTaskUpdate(existing);
+      });
+      broadcastTaskUpdate(existing);
+      return { success: true, task: existing };
+    }
+
+    await orchestrator.startTask(taskId);
     const task = orchestrator.getTask(taskId);
     broadcastTaskUpdate(task);
     return task?.lastError
@@ -290,11 +315,7 @@ ipcMain.handle("pause-task", async (_event, taskId: string) => {
     broadcastTaskUpdate(task);
     return { success: true, task };
   } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      task: orchestrator.getTask(taskId)
-    };
+    return { success: false, error: error instanceof Error ? error.message : String(error), task: orchestrator.getTask(taskId) };
   }
 });
 
@@ -305,11 +326,7 @@ ipcMain.handle("resume-task", async (_event, taskId: string) => {
     broadcastTaskUpdate(task);
     return { success: true, task };
   } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      task: orchestrator.getTask(taskId)
-    };
+    return { success: false, error: error instanceof Error ? error.message : String(error), task: orchestrator.getTask(taskId) };
   }
 });
 
@@ -317,13 +334,11 @@ ipcMain.handle("stop-task", async (_event, taskId: string) => {
   try {
     orchestrator.cancelTask(taskId);
     const task = orchestrator.getTask(taskId);
+    commerceMonitor.resetTask(taskId);
     broadcastTaskUpdate(task);
     return { success: true, task };
   } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 });
 
@@ -334,20 +349,23 @@ ipcMain.handle("get-task-status", (_event, taskId: string) => {
     : { success: false, error: `Task ${taskId} not found.` };
 });
 
-ipcMain.handle("get-task-list", () => ({
-  success: true,
-  tasks: orchestrator.getAllTasks()
-}));
+ipcMain.handle("get-task-list", () => ({ success: true, tasks: orchestrator.getAllTasks() }));
 
 ipcMain.handle("get-task-logs", async (_event, taskId: string, limit = 100) => {
   try {
     const logs = await taskStore.findLogsByTaskId(taskId, limit);
     return { success: true, logs };
   } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle("get-product-monitor-events", async (_event, taskId: string, limit = 100) => {
+  try {
+    const events = await taskStore.findProductMonitorEventsByTaskId(taskId, limit);
+    return { success: true, events };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 });
 
@@ -361,6 +379,7 @@ ipcMain.handle("get-system-status", async () => {
     taskCount: orchestrator.getAllTasks().length,
     commercePlatforms: COMMERCE_PLATFORMS,
     commerceExecutorPlatforms: commerceExecutor.listExecutorPlatforms(),
+    commerceMonitorReady: commerceExecutor.hasMonitorExecutor(),
     captchaProvider: "CapMonster",
     captchaApiKeyConfigured: Boolean(process.env["CAPMONSTER_API_KEY"]?.trim()),
     liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],
@@ -380,14 +399,10 @@ app.whenReady().then(async () => {
   try {
     await createBackend();
     mainWindow = createWindow();
-    mainWindow.on("closed", () => {
-      mainWindow = null;
-    });
+    mainWindow.on("closed", () => { mainWindow = null; });
 
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        mainWindow = createWindow();
-      }
+      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -411,7 +426,5 @@ app.on("before-quit", event => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  if (process.platform !== "darwin") app.quit();
 });

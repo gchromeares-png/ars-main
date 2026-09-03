@@ -30,6 +30,7 @@ export class ElectronService {
   private readonly previewShops: any[] = [];
   private readonly previewTasks: BrowserPreviewTask[] = [];
   private readonly previewTaskLogs = new Map<string, BrowserPreviewLog[]>();
+  private readonly previewMonitorEvents = new Map<string, any[]>();
   private previewLogId = 0;
 
   private get api(): any | undefined {
@@ -48,13 +49,11 @@ export class ElectronService {
     const index = this.previewProfiles.findIndex(item => item.id === savedProfile.id);
     if (index >= 0) this.previewProfiles[index] = profile;
     else this.previewProfiles.push(profile);
-
     return Promise.resolve({ success: true, profile });
   }
 
   deleteProfile(profileId: string): Promise<any> {
     if (this.api) return this.api.deleteProfile(profileId);
-
     const index = this.previewProfiles.findIndex(item => item.id === profileId);
     if (index >= 0) this.previewProfiles.splice(index, 1);
     return Promise.resolve({ success: true });
@@ -66,7 +65,8 @@ export class ElectronService {
       success: true,
       shops: this.previewShops,
       platforms: COMMERCE_PLATFORMS,
-      executorPlatforms: ["shopify"]
+      executorPlatforms: ["shopify"],
+      monitorReady: true
     });
   }
 
@@ -86,7 +86,8 @@ export class ElectronService {
     return Promise.resolve({
       success: true,
       shop: normalizedShop,
-      executorReady: normalizedShop.platform === "shopify"
+      executorReady: normalizedShop.platform === "shopify",
+      monitorReady: true
     });
   }
 
@@ -118,15 +119,9 @@ export class ElectronService {
 
   startTask(taskId: string): Promise<any> {
     if (this.api) return this.api.startTask(taskId);
-
     const task = this.previewTasks.find(item => item.id === taskId);
     if (task) {
       task.state = "RUNNING";
-      task.config.data = {
-        ...(task.config.data ?? {}),
-        liveChallengeStatus: "Browser-Vorschau aktiv. Für echte Sessions Electron starten.",
-        liveChallengeType: "preview"
-      };
       this.recordPreviewLog(task, "taskStateChanged", "info", "QUEUED -> RUNNING");
     }
     return Promise.resolve({ success: true, task });
@@ -134,16 +129,10 @@ export class ElectronService {
 
   pauseTask(taskId: string): Promise<any> {
     if (this.api) return this.api.pauseTask(taskId);
-
     const task = this.previewTasks.find(item => item.id === taskId);
     if (task) {
       const previous = task.state;
       task.state = "PAUSED";
-      task.config.data = {
-        ...(task.config.data ?? {}),
-        liveChallengeStatus: "Browser-Vorschau pausiert. Fortsetzen setzt den Task zurück in die Queue.",
-        liveChallengeType: "preview"
-      };
       this.recordPreviewLog(task, "taskStateChanged", "warn", `${previous} -> PAUSED`);
     }
     return Promise.resolve({ success: true, task });
@@ -151,15 +140,9 @@ export class ElectronService {
 
   resumeTask(taskId: string): Promise<any> {
     if (this.api) return this.api.resumeTask(taskId);
-
     const task = this.previewTasks.find(item => item.id === taskId);
     if (task) {
       task.state = "QUEUED";
-      task.config.data = {
-        ...(task.config.data ?? {}),
-        liveChallengeStatus: "Browser-Vorschau fortgesetzt. Echter Task-Resume läuft nur in Electron.",
-        liveChallengeType: "preview"
-      };
       this.recordPreviewLog(task, "taskStateChanged", "info", "PAUSED -> QUEUED");
     }
     return Promise.resolve({ success: true, task });
@@ -167,7 +150,6 @@ export class ElectronService {
 
   stopTask(taskId: string): Promise<any> {
     if (this.api) return this.api.stopTask(taskId);
-
     const task = this.previewTasks.find(item => item.id === taskId);
     if (task) {
       const previous = task.state;
@@ -179,13 +161,10 @@ export class ElectronService {
 
   getTaskStatus(taskId: string): Promise<any> {
     if (this.api) return this.api.getTaskStatus(taskId);
-
     const task = this.previewTasks.find(item => item.id === taskId);
-    return Promise.resolve(
-      task
-        ? { success: true, status: task.state, task }
-        : { success: false, error: `Task ${taskId} not found.` }
-    );
+    return Promise.resolve(task
+      ? { success: true, status: task.state, task }
+      : { success: false, error: `Task ${taskId} not found.` });
   }
 
   getTaskList(): Promise<any> {
@@ -195,15 +174,20 @@ export class ElectronService {
 
   getTaskLogs(taskId: string, limit = 100): Promise<any> {
     if (this.api) return this.api.getTaskLogs(taskId, limit);
-
     const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)));
     const logs = this.previewTaskLogs.get(taskId) ?? [];
     return Promise.resolve({ success: true, logs: logs.slice(-safeLimit) });
   }
 
+  getProductMonitorEvents(taskId: string, limit = 100): Promise<any> {
+    if (this.api) return this.api.getProductMonitorEvents(taskId, limit);
+    const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)));
+    const events = this.previewMonitorEvents.get(taskId) ?? [];
+    return Promise.resolve({ success: true, events: events.slice(-safeLimit) });
+  }
+
   getSystemStatus(): Promise<any> {
     if (this.api) return this.api.getSystemStatus();
-
     return Promise.resolve({
       success: true,
       availableWorkers: 0,
@@ -211,20 +195,14 @@ export class ElectronService {
       taskCount: this.previewTasks.length,
       commercePlatforms: COMMERCE_PLATFORMS,
       commerceExecutorPlatforms: ["shopify"],
+      commerceMonitorReady: true,
       captchaProvider: "CapMonster",
       captchaApiKeyConfigured: false,
       liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],
       electronNodeVersion: undefined,
       systemNodeRequirement: ">=20",
-      systemNode: {
-        executable: "browser-preview",
-        version: "n/a",
-        ok: true
-      },
-      persistence: {
-        type: "preview",
-        ready: true
-      },
+      systemNode: { executable: "browser-preview", version: "n/a", ok: true },
+      persistence: { type: "preview", ready: true },
       browserPreview: true
     });
   }
@@ -233,14 +211,21 @@ export class ElectronService {
     if (this.api?.onTaskStatusUpdate) {
       const unsub = this.api.onTaskStatusUpdate(callback);
       return () => {
-        if (typeof unsub === "function") {
-          unsub();
-        } else if (this.api?.removeTaskStatusListener) {
-          this.api.removeTaskStatusListener(callback);
-        }
+        if (typeof unsub === "function") unsub();
+        else this.api?.removeTaskStatusListener?.(callback);
       };
     }
+    return () => undefined;
+  }
 
+  onProductMonitorUpdate(callback: (payload: unknown) => void): () => void {
+    if (this.api?.onProductMonitorUpdate) {
+      const unsub = this.api.onProductMonitorUpdate(callback);
+      return () => {
+        if (typeof unsub === "function") unsub();
+        else this.api?.removeProductMonitorListener?.(callback);
+      };
+    }
     return () => undefined;
   }
 
