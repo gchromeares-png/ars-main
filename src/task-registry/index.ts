@@ -55,4 +55,11 @@ export class TaskRegistry {
     if (task) this.tasks.set(id, task);
     return task;
   }
+
+  async loadAllTasks(): Promise<Task[]> {
+    const tasks = await this.repository.findAll();
+    this.tasks.clear();
+    for (const task of tasks) this.tasks.set(task.id, task);
+    return tasks;
+  }
 }
