@@ -4,6 +4,7 @@ import { SemanticFieldAutofill } from "../src/browser-worker/semantic-field-auto
 import { GhostCursorUiInteractionHelper } from "../src/browser-worker/ui-interaction-helper";
 
 const MODEL = process.env["ARES_FIELD_EMBED_MODEL"] || "embeddinggemma:300m-qat-q4_0";
+const ENDPOINT = process.env["ARES_FIELD_EMBED_ENDPOINT"] || "http://127.0.0.1:11434/api/embed";
 
 jest.setTimeout(120_000);
 
@@ -18,7 +19,7 @@ describe("one-time real Ollama semantic autofill validation", () => {
     await browser?.close();
   });
 
-  it("forces ambiguous metadata through Ollama embeddings and fills each value once", async () => {
+  it("uses the hybrid resolver and fills each German checkout value once", async () => {
     const page = await browser.newPage();
     await page.setContent(`
       <!doctype html>
@@ -36,11 +37,7 @@ describe("one-time real Ollama semantic autofill validation", () => {
       </html>
     `);
 
-    const provider = new OllamaEmbeddingProvider(
-      process.env["ARES_FIELD_EMBED_ENDPOINT"] || "http://127.0.0.1:11434/api/embed",
-      MODEL,
-      10_000
-    );
+    const provider = new OllamaEmbeddingProvider(ENDPOINT, MODEL, 10_000);
     const resolver = new FieldSemanticResolver(provider);
 
     const started = Date.now();
@@ -50,7 +47,8 @@ describe("one-time real Ollama semantic autofill validation", () => {
 
     const expected = ["firstName", "lastName", "address1", "city", "postalCode", "phone"];
     expect(resolved.map(item => item.intent)).toEqual(expected);
-    expect(resolved.every(item => item.source === "embedding")).toBe(true);
+    expect(resolved.every(item => item.source !== "unknown")).toBe(true);
+    expect(resolved.some(item => item.source === "standard-metadata")).toBe(true);
     expect(resolved.every(item => item.confidence >= 0.5)).toBe(true);
 
     const interactions = new GhostCursorUiInteractionHelper(page);
@@ -82,6 +80,7 @@ describe("one-time real Ollama semantic autofill validation", () => {
     expect(await page.locator("#a6").inputValue()).toBe(values.phone);
 
     console.log(JSON.stringify({
+      phase: "hybrid-autofill",
       platform: process.platform,
       model: MODEL,
       elapsedMs,
@@ -92,6 +91,44 @@ describe("one-time real Ollama semantic autofill validation", () => {
         confidence: item.confidence
       })),
       writeCounts: result.writeCounts
+    }, null, 2));
+
+    await page.close();
+  });
+
+  it("uses real Ollama embeddings when deterministic German metadata is insufficient", async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <!doctype html>
+      <html lang="de">
+        <body>
+          <form>
+            <label>Wie sollen wir Sie persönlich ansprechen? <input type="text" name="fallback1" id="fallback-a1"></label>
+          </form>
+        </body>
+      </html>
+    `);
+
+    const provider = new OllamaEmbeddingProvider(ENDPOINT, MODEL, 10_000);
+    const resolver = new FieldSemanticResolver(provider);
+    const descriptors = await collectFieldDescriptors(page);
+    const resolved = await resolver.resolve(descriptors);
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.intent).toBe("firstName");
+    expect(resolved[0]?.source).toBe("embedding");
+    expect(resolved[0]?.confidence ?? 0).toBeGreaterThanOrEqual(0.5);
+
+    console.log(JSON.stringify({
+      phase: "embedding-fallback",
+      platform: process.platform,
+      model: MODEL,
+      field: resolved[0] ? {
+        label: resolved[0].descriptor.label,
+        intent: resolved[0].intent,
+        source: resolved[0].source,
+        confidence: resolved[0].confidence
+      } : null
     }, null, 2));
 
     await page.close();
