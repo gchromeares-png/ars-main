@@ -28,46 +28,25 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      # chromium.launch() without an explicit channel expects Patchright's
-      # managed Chromium/headless-shell. The normal project browser:install
-      # script installs system Chrome instead, which caused the previous run
-      # to fail before Ollama was exercised.
       - name: Install Patchright managed Chromium
         timeout-minutes: 5
         run: npx patchright install chromium
 
+      # setup-ollama v2 installs Ollama and starts `ollama serve` itself.
+      # Starting a second server races the existing process/port on Windows.
       - name: Setup Ollama
         uses: ai-action/setup-ollama@v2
         with:
           version: 0.33.2
 
-      - name: Start Ollama on Linux
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          nohup ollama serve > ollama.log 2>&1 &
-          for i in {1..45}; do
-            if curl -fsS http://127.0.0.1:11434/api/version >/dev/null; then
-              ollama --version
-              exit 0
-            fi
-            sleep 1
-          done
-          cat ollama.log || true
-          exit 1
-
-      - name: Start Ollama on Windows
-        if: runner.os == 'Windows'
+      - name: Wait for Ollama server
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath 'ollama' -ArgumentList 'serve' -WindowStyle Hidden -PassThru
           $ready = $false
           for ($i = 0; $i -lt 45; $i++) {
-            if ($process.HasExited) {
-              throw "Ollama server exited early with code $($process.ExitCode)"
-            }
             try {
-              Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/version' -TimeoutSec 2 | Out-Null
+              $version = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/version' -TimeoutSec 2
+              Write-Host "Ollama ready: $($version.version)"
               $ready = $true
               break
             } catch {
