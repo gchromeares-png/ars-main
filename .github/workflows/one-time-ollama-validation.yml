@@ -1,6 +1,6 @@
 name: One-time Ollama semantic validation
 
-# one-time trigger after hybrid-test architecture alignment
+# one-time trigger after robust German form-variant test alignment
 on:
   push:
     branches:
