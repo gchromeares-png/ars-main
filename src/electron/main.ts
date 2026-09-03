@@ -5,15 +5,23 @@ import * as path from "path";
 import { TaskOrchestrator } from "../orchestrator";
 import { WorkerMock } from "../mocks";
 import { BrowserWorkerPoolClient } from "../browser-worker/client";
+import type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
 import { TaskConfig } from "../models";
 import { ProfileRepository } from "../profiles/profile-repository";
 import { AresProfile } from "../profiles/models";
 import { SqliteTaskStore } from "../persistence/sqlite-task-store";
 import { TaskPersistenceCoordinator } from "../persistence/task-persistence-coordinator";
+import {
+  COMMERCE_PLATFORMS,
+  CommerceShop,
+  normalizeCommercePlatform
+} from "../commerce/platforms";
+import { CommerceTaskExecutorRouter } from "../commerce/task-executor-router";
 
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: TaskOrchestrator;
 let browserWorker: BrowserWorkerPoolClient;
+let commerceExecutor: CommerceTaskExecutorRouter;
 let taskStore: SqliteTaskStore;
 let persistenceCoordinator: TaskPersistenceCoordinator;
 let quitting = false;
@@ -34,14 +42,24 @@ function broadcastTaskUpdate(task: unknown): void {
   }
 }
 
-const shops = new Map<string, {
-  id: string;
-  name: string;
-  baseUrl: string;
-  platform: "shopify";
-  config: Record<string, unknown>;
-}>();
+const shops = new Map<string, CommerceShop>();
 const profileRepository = new ProfileRepository();
+
+function normalizeStoredShop(input: any): CommerceShop | undefined {
+  if (!input?.id || !input?.baseUrl) return undefined;
+
+  // Backward compatibility: old ARES shop entries were always Shopify and had no selectable platform.
+  const platform = normalizeCommercePlatform(input.platform ?? "shopify");
+  if (!platform) return undefined;
+
+  return {
+    id: String(input.id).trim(),
+    name: String(input.name || input.id).trim(),
+    baseUrl: String(input.baseUrl).trim(),
+    platform,
+    config: input.config && typeof input.config === "object" ? input.config : {}
+  };
+}
 
 function getShopsFilePath(): string | undefined {
   try {
@@ -68,7 +86,8 @@ function loadShops(): void {
       const items = JSON.parse(fs.readFileSync(filePath, "utf8"));
       if (Array.isArray(items)) {
         for (const item of items) {
-          if (item?.id) shops.set(item.id, item);
+          const shop = normalizeStoredShop(item);
+          if (shop) shops.set(shop.id, shop);
         }
       }
     }
@@ -115,13 +134,19 @@ async function createBackend(): Promise<void> {
   loadShops();
 
   browserWorker = new BrowserWorkerPoolClient(
-    shopId => shops.get(shopId),
+    shopId => {
+      const shop = shops.get(shopId);
+      return shop?.platform === "shopify" ? shop as ShopifyRuntimeShop : undefined;
+    },
     profileId => profileRepository.get(profileId),
     { profileRoot: path.join(userData, "browser-profiles") }
   );
 
+  commerceExecutor = new CommerceTaskExecutorRouter(shopId => shops.get(shopId));
+  commerceExecutor.register("shopify", browserWorker);
+
   taskStore = await SqliteTaskStore.open(path.join(userData, "ares.sqlite"));
-  orchestrator = new TaskOrchestrator(taskStore, browserWorker);
+  orchestrator = new TaskOrchestrator(taskStore, commerceExecutor);
   persistenceCoordinator = new TaskPersistenceCoordinator(orchestrator, taskStore);
   await orchestrator.initialize();
 
@@ -191,24 +216,40 @@ ipcMain.handle("delete-profile", (_event, profileId: string) => ({
 
 ipcMain.handle("get-shops", () => ({
   success: true,
-  shops: [...shops.values()]
+  shops: [...shops.values()],
+  platforms: COMMERCE_PLATFORMS,
+  executorPlatforms: commerceExecutor?.listExecutorPlatforms() ?? []
 }));
 
 ipcMain.handle("register-shop", (_event, input) => {
   if (!input?.id || !input?.baseUrl) {
-    return { success: false, error: "Shop id and baseUrl are required." };
+    return { success: false, error: "Shop-ID und Shop-URL sind erforderlich." };
   }
 
-  shops.set(input.id, {
-    id: input.id,
-    name: input.name || input.id,
-    baseUrl: input.baseUrl,
-    platform: "shopify",
-    config: input.config ?? {}
-  });
+  const platform = normalizeCommercePlatform(input.platform ?? "shopify");
+  if (!platform) {
+    return {
+      success: false,
+      error: `Unbekannte Commerce-Plattform. Unterstützte Typen: ${COMMERCE_PLATFORMS.join(", ")}`
+    };
+  }
+
+  const shop: CommerceShop = {
+    id: String(input.id).trim(),
+    name: String(input.name || input.id).trim(),
+    baseUrl: String(input.baseUrl).trim(),
+    platform,
+    config: input.config && typeof input.config === "object" ? input.config : {}
+  };
+
+  shops.set(shop.id, shop);
   persistShops();
 
-  return { success: true };
+  return {
+    success: true,
+    shop,
+    executorReady: commerceExecutor.hasExecutor(platform)
+  };
 });
 
 ipcMain.handle("create-task", (_event, input: TaskConfig) => {
@@ -318,6 +359,8 @@ ipcMain.handle("get-system-status", async () => {
     availableWorkers: orchestrator.getAvailableWorkers(),
     shopCount: shops.size,
     taskCount: orchestrator.getAllTasks().length,
+    commercePlatforms: COMMERCE_PLATFORMS,
+    commerceExecutorPlatforms: commerceExecutor.listExecutorPlatforms(),
     captchaProvider: "CapMonster",
     captchaApiKeyConfigured: Boolean(process.env["CAPMONSTER_API_KEY"]?.trim()),
     liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],
@@ -359,7 +402,7 @@ app.on("before-quit", event => {
   quitting = true;
 
   void (async () => {
-    await browserWorker?.close().catch(() => undefined);
+    await commerceExecutor?.close().catch(() => undefined);
     orchestrator?.cleanup();
     await persistenceCoordinator?.close().catch(() => undefined);
     await taskStore?.close().catch(() => undefined);
