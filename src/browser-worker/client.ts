@@ -21,6 +21,7 @@ export interface BrowserWorkerProcessHealth {
   activeTasks: number;
   browser?: BrowserWorkerHealth;
   running: boolean;
+  lastHeartbeatAt?: Date;
 }
 
 export class BrowserWorkerProcessClient {
@@ -35,11 +36,17 @@ export class BrowserWorkerProcessClient {
   private pid?: number;
   private nodeVersion?: string;
   private closing = false;
+  private heartbeatTimer?: NodeJS.Timeout;
+  private heartbeatInFlight = false;
+  private lastHeartbeatAt?: Date;
 
   constructor(
     private readonly requestTimeoutMs: number,
     private readonly profileRoot: string | undefined,
-    private readonly onExit: (client: BrowserWorkerProcessClient, error: Error) => void
+    private readonly onExit: (client: BrowserWorkerProcessClient, error: Error) => void,
+    private readonly heartbeatIntervalMs = 30_000,
+    private readonly heartbeatTimeoutMs = 10_000,
+    private readonly executeTimeoutMs = 65 * 60_000
   ) {}
 
   get load(): number {
@@ -60,7 +67,7 @@ export class BrowserWorkerProcessClient {
         task,
         shop,
         profile
-      });
+      }, this.executeTimeoutMs);
       if (response.type !== "execute-result") {
         throw new Error(`Unerwartete Browser-Worker-Antwort: ${response.type}`);
       }
@@ -89,21 +96,23 @@ export class BrowserWorkerProcessClient {
 
   async health(): Promise<BrowserWorkerProcessHealth> {
     if (!this.child || this.child.killed) {
-      return { activeTasks: this.taskIds.size, running: false };
+      return { activeTasks: this.taskIds.size, running: false, lastHeartbeatAt: this.lastHeartbeatAt };
     }
 
     await this.ensureReady();
-    const response = await this.request({ type: "health", requestId: randomUUID() }, 10_000);
+    const response = await this.request({ type: "health", requestId: randomUUID() }, this.heartbeatTimeoutMs);
     if (response.type !== "health-result") {
       throw new Error(`Unerwartete Health-Antwort: ${response.type}`);
     }
 
+    this.lastHeartbeatAt = new Date();
     return {
       pid: response.pid,
       nodeVersion: response.nodeVersion,
       activeTasks: this.taskIds.size,
       browser: { ...response.health, startedAt: new Date(response.health.startedAt) },
-      running: true
+      running: true,
+      lastHeartbeatAt: this.lastHeartbeatAt
     };
   }
 
@@ -111,6 +120,7 @@ export class BrowserWorkerProcessClient {
     const child = this.child;
     if (!child || child.killed) return;
     this.closing = true;
+    this.stopHeartbeat();
 
     try {
       await this.request({ type: "shutdown", requestId: randomUUID() }, 4_000);
@@ -142,6 +152,7 @@ export class BrowserWorkerProcessClient {
     this.child = child;
     this.stdoutBuffer = "";
     this.stderrBuffer = "";
+    this.lastHeartbeatAt = undefined;
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
@@ -184,6 +195,8 @@ export class BrowserWorkerProcessClient {
         this.readyResolve?.();
         this.readyResolve = undefined;
         this.readyReject = undefined;
+        this.lastHeartbeatAt = new Date();
+        this.startHeartbeat();
         continue;
       }
 
@@ -205,8 +218,10 @@ export class BrowserWorkerProcessClient {
 
     return new Promise<BrowserWorkerResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
+        const error = new Error(`Browser Worker Timeout für ${request.type}.`);
         this.pending.delete(request.requestId);
-        reject(new Error(`Browser Worker Timeout für ${request.type}.`));
+        reject(error);
+        this.recycleWorker(error);
       }, timeoutMs);
       timeout.unref();
 
@@ -216,12 +231,57 @@ export class BrowserWorkerProcessClient {
         clearTimeout(timeout);
         this.pending.delete(request.requestId);
         reject(error);
+        this.recycleWorker(error);
       });
     });
   }
 
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    if (this.heartbeatIntervalMs <= 0) return;
+
+    this.heartbeatTimer = setInterval(() => {
+      void this.runHeartbeat();
+    }, this.heartbeatIntervalMs);
+    this.heartbeatTimer.unref();
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
+    this.heartbeatInFlight = false;
+  }
+
+  private async runHeartbeat(): Promise<void> {
+    if (this.closing || this.heartbeatInFlight || !this.child || this.child.killed) return;
+    this.heartbeatInFlight = true;
+
+    try {
+      const response = await this.request({ type: "health", requestId: randomUUID() }, this.heartbeatTimeoutMs);
+      if (response.type !== "health-result") {
+        throw new Error(`Unerwartete Heartbeat-Antwort: ${response.type}`);
+      }
+      this.lastHeartbeatAt = new Date();
+    } catch (error) {
+      if (this.child) {
+        const reason = error instanceof Error ? error : new Error(String(error));
+        this.recycleWorker(new Error(`Browser Worker Heartbeat fehlgeschlagen: ${reason.message}`));
+      }
+    } finally {
+      this.heartbeatInFlight = false;
+    }
+  }
+
+  private recycleWorker(error: Error): void {
+    const child = this.child;
+    if (!child) return;
+    if (!child.killed) child.kill();
+    this.handleWorkerExit(error);
+  }
+
   private handleWorkerExit(error: Error): void {
     const wasCurrent = Boolean(this.child);
+    this.stopHeartbeat();
     this.readyReject?.(error);
     this.readyResolve = undefined;
     this.readyReject = undefined;
@@ -249,7 +309,14 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
   constructor(
     private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
     private readonly getProfile: (profileId: string) => AresProfile | undefined,
-    options: { processCount?: number; requestTimeoutMs?: number; profileRoot?: string } = {}
+    options: {
+      processCount?: number;
+      requestTimeoutMs?: number;
+      executeTimeoutMs?: number;
+      heartbeatIntervalMs?: number;
+      heartbeatTimeoutMs?: number;
+      profileRoot?: string;
+    } = {}
   ) {
     // @ts-ignore
     const requestedCount = options.processCount ?? Number(process.env.ARES_BROWSER_WORKER_PROCESSES ?? "1");
@@ -257,11 +324,17 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
       ? Math.min(4, Math.max(1, Math.floor(requestedCount)))
       : 1;
     const requestTimeoutMs = options.requestTimeoutMs ?? 120_000;
+    const executeTimeoutMs = options.executeTimeoutMs ?? 65 * 60_000;
+    const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
+    const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 10_000;
 
     this.clients = Array.from({ length: processCount }, () => new BrowserWorkerProcessClient(
       requestTimeoutMs,
       options.profileRoot,
-      (client, error) => this.handleClientExit(client, error)
+      (client, error) => this.handleClientExit(client, error),
+      heartbeatIntervalMs,
+      heartbeatTimeoutMs,
+      executeTimeoutMs
     ));
   }
 
