@@ -1,5 +1,6 @@
 import type { Task } from "../models";
 import type { AresProfile } from "../profiles/models";
+import type { CheckoutPaymentSession } from "../payments/models";
 import type { ShopifyRuntimeShop } from "./runtime-types";
 import type { BrowserWorkerHealth } from "./types";
 
@@ -11,6 +12,8 @@ export interface ExecuteTaskRequest {
   task: Task;
   shop: ShopifyRuntimeShop;
   profile: AresProfile;
+  /** Ephemeral only: never persisted to task/profile storage. */
+  paymentSession?: CheckoutPaymentSession;
 }
 
 export interface CancelTaskRequest {
