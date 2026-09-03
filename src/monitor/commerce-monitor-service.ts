@@ -130,6 +130,7 @@ export class CommerceMonitorService implements ITaskExecutor {
     try {
       while (!controller.signal.aborted) {
         await this.runCycle(task, shop, criteria, controller.signal);
+        task.lastError = undefined;
         if (controller.signal.aborted) break;
         await abortableDelay(this.intervalFor(task), controller.signal);
       }
