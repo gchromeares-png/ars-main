@@ -17,7 +17,7 @@ export class SemanticCheckoutProfilePlanner {
   async prepare(page: Page, profile: AresProfile): Promise<SemanticCheckoutProfilePlan> {
     const preferred = new SemanticProfileMapper(profile, { billingMode: "prefer-same-as-shipping" });
 
-    // A concrete billing value means an explicit billing address exists and must win.
+    // A concrete billing address value means an explicit billing address exists and wins.
     if (preferred.valueFor(semanticTarget("city", "billing"))) {
       return { values: preferred, billingMode: "explicit-billing" };
     }
@@ -26,8 +26,8 @@ export class SemanticCheckoutProfilePlanner {
       return { values: preferred, billingMode: "same-as-shipping" };
     }
 
-    // No usable same-as-shipping control: keep billing as a distinct target but source
-    // its value from shipping/default according to the central mapper policy.
+    // No usable same-as-shipping control: billing remains a distinct target identity,
+    // but its value source falls back centrally to shipping/default.
     return {
       values: new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }),
       billingMode: "separate-billing-fields"
@@ -43,7 +43,7 @@ export class SemanticCheckoutProfilePlanner {
       const text = await this.candidateText(candidate).catch(() => "");
       if (!SAME_AS_SHIPPING_TEXT.test(text)) continue;
 
-      const control = await this.resolveControl(candidate);
+      const control = await this.resolveControl(page, candidate);
       if (!control || !await control.isVisible({ timeout: 120 }).catch(() => false)) continue;
       if (await this.isSelected(control)) return true;
 
@@ -62,7 +62,7 @@ export class SemanticCheckoutProfilePlanner {
       const input = element as HTMLInputElement;
       const id = input.id || "";
       const explicitLabel = id
-        ? document.querySelector(`label[for="${CSS.escape(id)}"]`)?.textContent || ""
+        ? Array.from(document.querySelectorAll("label")).find(label => label.htmlFor === id)?.textContent || ""
         : "";
       const enclosingLabel = element.closest("label")?.textContent || "";
       return [
@@ -76,7 +76,7 @@ export class SemanticCheckoutProfilePlanner {
     });
   }
 
-  private async resolveControl(candidate: Locator): Promise<Locator | undefined> {
+  private async resolveControl(page: Page, candidate: Locator): Promise<Locator | undefined> {
     const tag = await candidate.evaluate(element => element.tagName.toLowerCase()).catch(() => "");
     const type = await candidate.getAttribute("type").catch(() => null);
     const role = await candidate.getAttribute("role").catch(() => null);
@@ -86,7 +86,10 @@ export class SemanticCheckoutProfilePlanner {
 
     if (tag === "label") {
       const forId = await candidate.getAttribute("for").catch(() => null);
-      if (forId) return candidate.page().locator(`#${CSS.escape(forId)}`).first();
+      if (forId) {
+        const escaped = forId.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        return page.locator(`[id="${escaped}"]`).first();
+      }
       const nested = candidate.locator('input[type="checkbox"], input[type="radio"], [role="checkbox"], [role="radio"]').first();
       if (await nested.count().catch(() => 0)) return nested;
     }
