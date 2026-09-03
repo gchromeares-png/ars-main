@@ -49,15 +49,47 @@ const CONTROL_SELECTOR = [
 ].join(", ");
 
 const INTENT_PROTOTYPES: Array<{ intent: Exclude<FieldIntent, "unknown">; text: string }> = [
-  { intent: "email", text: "contact email address, E-Mail-Adresse für Kontakt und Bestellbestätigung" },
-  { intent: "firstName", text: "person's given name, first name, Vorname der empfangenden Person" },
-  { intent: "lastName", text: "person's family name, surname, Nachname oder Familienname der empfangenden Person" },
-  { intent: "address1", text: "primary street delivery address, Straße und Hausnummer der Lieferadresse" },
-  { intent: "address2", text: "secondary address line, apartment, company, Zusatz zur Anschrift, Adresszusatz" },
-  { intent: "city", text: "delivery city, town or locality, Ort oder Stadt der Lieferadresse" },
-  { intent: "postalCode", text: "postal code, ZIP code, Postleitzahl der Lieferadresse" },
-  { intent: "phone", text: "contact phone or mobile number, Telefonnummer oder Mobilnummer" },
-  { intent: "countryCode", text: "delivery country or country code, Land der Lieferadresse" }
+  { intent: "email", text: "email address" },
+  { intent: "email", text: "E-Mail-Adresse" },
+  { intent: "email", text: "Kontakt E-Mail für Bestellbestätigung" },
+
+  { intent: "firstName", text: "first name" },
+  { intent: "firstName", text: "given name" },
+  { intent: "firstName", text: "Vorname" },
+  { intent: "firstName", text: "Vorname der empfangenden Person" },
+
+  { intent: "lastName", text: "last name" },
+  { intent: "lastName", text: "family name" },
+  { intent: "lastName", text: "surname" },
+  { intent: "lastName", text: "Nachname" },
+  { intent: "lastName", text: "Familienname" },
+  { intent: "lastName", text: "Nachname der empfangenden Person" },
+
+  { intent: "address1", text: "street address" },
+  { intent: "address1", text: "Straße und Hausnummer" },
+  { intent: "address1", text: "primary delivery address" },
+
+  { intent: "address2", text: "address line 2" },
+  { intent: "address2", text: "apartment or company address addition" },
+  { intent: "address2", text: "Adresszusatz" },
+
+  { intent: "city", text: "city" },
+  { intent: "city", text: "town or locality" },
+  { intent: "city", text: "Ort oder Stadt" },
+  { intent: "city", text: "Gemeinde der Lieferanschrift" },
+
+  { intent: "postalCode", text: "postal code" },
+  { intent: "postalCode", text: "ZIP code" },
+  { intent: "postalCode", text: "Postleitzahl" },
+  { intent: "postalCode", text: "Zustellcode für das Postgebiet" },
+
+  { intent: "phone", text: "phone number" },
+  { intent: "phone", text: "mobile number" },
+  { intent: "phone", text: "Telefonnummer oder Rufnummer" },
+
+  { intent: "countryCode", text: "country" },
+  { intent: "countryCode", text: "delivery country" },
+  { intent: "countryCode", text: "Land der Lieferadresse" }
 ];
 
 const AUTOCOMPLETE_INTENTS: Record<string, Exclude<FieldIntent, "unknown">> = {
@@ -96,6 +128,14 @@ function cosine(a: number[], b: number[]): number {
   }
   if (normA === 0 || normB === 0) return -1;
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function semanticIdentifier(value: string): string {
+  const normalized = normalize(value.replace(/[_-]+/g, " "));
+  if (!normalized) return "";
+  if (!/[A-Za-zÀ-ÖØ-öø-ÿ]{3,}/.test(normalized)) return "";
+  if (/^(?:field|input|control|form)\s*\d*$/i.test(normalized)) return "";
+  return normalized;
 }
 
 function postJson<T>(endpoint: string, payload: unknown, timeoutMs: number): Promise<T> {
@@ -143,7 +183,7 @@ function postJson<T>(endpoint: string, payload: unknown, timeoutMs: number): Pro
           const parsed = JSON.parse(responseBody) as T;
           finish(() => resolve(parsed));
         } catch {
-          finish(() => reject(new Error("Local embedding response was not valid JSON.")));
+          finish(() => reject(new Error("Local embedding response was not valid JSON."));
         }
       });
     });
@@ -160,11 +200,13 @@ function postJson<T>(endpoint: string, payload: unknown, timeoutMs: number): Pro
 
 export class OllamaEmbeddingProvider implements SemanticEmbeddingProvider {
   private disabledUntil = 0;
+  private warmed = false;
 
   constructor(
     private readonly endpoint: string = process.env["ARES_FIELD_EMBED_ENDPOINT"]?.trim() || "http://127.0.0.1:11434/api/embed",
     private readonly model: string = process.env["ARES_FIELD_EMBED_MODEL"]?.trim() || "embeddinggemma:300m-qat-q4_0",
-    private readonly timeoutMs: number = Number(process.env["ARES_FIELD_EMBED_TIMEOUT_MS"] || 1_200)
+    private readonly timeoutMs: number = Number(process.env["ARES_FIELD_EMBED_TIMEOUT_MS"] || 1_200),
+    private readonly coldStartTimeoutMs: number = Number(process.env["ARES_FIELD_EMBED_COLD_TIMEOUT_MS"] || 3_500)
   ) {}
 
   async embed(texts: string[]): Promise<number[][]> {
@@ -174,13 +216,17 @@ export class OllamaEmbeddingProvider implements SemanticEmbeddingProvider {
     }
 
     try {
+      const requestTimeoutMs = this.warmed
+        ? this.timeoutMs
+        : Math.max(this.timeoutMs, this.coldStartTimeoutMs);
       const payload = await postJson<OllamaEmbedResponse>(this.endpoint, {
         model: this.model,
         input: texts
-      }, this.timeoutMs);
+      }, requestTimeoutMs);
       if (!Array.isArray(payload.embeddings) || payload.embeddings.length !== texts.length) {
         throw new Error("Ollama embed response did not contain the expected embedding batch.");
       }
+      this.warmed = true;
       return payload.embeddings;
     } catch (error) {
       this.disabledUntil = Date.now() + 30_000;
@@ -271,8 +317,24 @@ export class FieldSemanticResolver {
 
     unresolved.forEach((item, unresolvedIndex) => {
       const vector = fieldVectors[unresolvedIndex] ?? [];
-      const ranking = (this.prototypeVectors ?? [])
-        .map(prototype => ({ intent: prototype.intent, score: cosine(vector, prototype.vector) }))
+      const scoresByIntent = new Map<Exclude<FieldIntent, "unknown">, number[]>();
+      for (const prototype of this.prototypeVectors ?? []) {
+        const score = cosine(vector, prototype.vector);
+        const scores = scoresByIntent.get(prototype.intent) ?? [];
+        scores.push(score);
+        scoresByIntent.set(prototype.intent, scores);
+      }
+
+      const ranking = Array.from(scoresByIntent.entries())
+        .map(([intent, scores]) => {
+          const ordered = [...scores].sort((left, right) => right - left);
+          const bestScore = ordered[0] ?? -1;
+          const secondScore = ordered[1] ?? bestScore;
+          return {
+            intent,
+            score: bestScore * 0.8 + secondScore * 0.2
+          };
+        })
         .sort((left, right) => right.score - left.score);
 
       const best = ranking[0];
@@ -297,16 +359,21 @@ export class FieldSemanticResolver {
   }
 
   private toSemanticText(field: FieldDescriptor): string {
-    return [
-      `form control type: ${field.tagName} ${field.inputType}`,
-      `label: ${field.label}`,
-      `aria label: ${field.ariaLabel}`,
-      `placeholder: ${field.placeholder}`,
-      `name: ${field.name}`,
-      `id: ${field.id}`,
-      `autocomplete: ${field.autocomplete}`,
-      `surrounding form text: ${field.nearbyText}`
-    ].map(normalize).filter(Boolean).join(" | ");
+    const name = semanticIdentifier(field.name);
+    const id = semanticIdentifier(field.id);
+    const parts = [
+      normalize(field.label) ? `label: ${normalize(field.label)}` : "",
+      normalize(field.ariaLabel) ? `aria label: ${normalize(field.ariaLabel)}` : "",
+      normalize(field.placeholder) ? `placeholder: ${normalize(field.placeholder)}` : "",
+      name ? `name: ${name}` : "",
+      id ? `id: ${id}` : "",
+      normalize(field.nearbyText) ? `context: ${normalize(field.nearbyText)}` : ""
+    ].filter(Boolean);
+
+    if (!parts.length) {
+      parts.push(`form control: ${normalize(`${field.tagName} ${field.inputType}`)}`);
+    }
+    return parts.join(" | ");
   }
 
   private cacheKey(field: FieldDescriptor): string {
