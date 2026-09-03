@@ -193,6 +193,20 @@ export class TaskOrchestrator {
     }
   }
 
+  setTaskQueueWaiting(taskId: string, waiting: boolean): void {
+    const task = this.registry.getTask(taskId);
+    if (!task) return;
+
+    if (waiting && task.state === TaskState.RUNNING) {
+      this.transition(task, TaskState.WAITING_QUEUE);
+      return;
+    }
+
+    if (!waiting && task.state === TaskState.WAITING_QUEUE) {
+      this.transition(task, TaskState.RUNNING);
+    }
+  }
+
   addWorker(worker: IWorker): void {
     this.workerPool.addWorker(worker);
     this.drainQueue();
@@ -258,6 +272,7 @@ export class TaskOrchestrator {
     return [
       TaskState.STARTING,
       TaskState.RUNNING,
+      TaskState.WAITING_QUEUE,
       TaskState.PRODUCT_FOUND,
       TaskState.CART,
       TaskState.CHECKOUT
