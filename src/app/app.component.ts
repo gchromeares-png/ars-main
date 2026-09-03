@@ -1,6 +1,7 @@
 import { Component, OnDestroy, OnInit } from "@angular/core";
 import { ElectronService } from "./services/electron.service";
 import { TaskState } from "../models";
+import { COMMERCE_PLATFORMS, CommercePlatform } from "../commerce/platforms";
 
 interface ProfileView {
   id: string;
@@ -35,7 +36,7 @@ interface ShopView {
   id: string;
   name: string;
   baseUrl: string;
-  platform: string;
+  platform: CommercePlatform;
 }
 
 interface TaskView {
@@ -79,6 +80,8 @@ interface SystemStatus {
   availableWorkers: number;
   shopCount: number;
   taskCount: number;
+  commercePlatforms?: CommercePlatform[];
+  commerceExecutorPlatforms?: CommercePlatform[];
   captchaProvider?: string;
   captchaApiKeyConfigured?: boolean;
   liveChallengeSupport?: string[];
@@ -98,6 +101,8 @@ export class AppComponent implements OnInit, OnDestroy {
   shops: ShopView[] = [];
   profiles: ProfileView[] = [];
   selectedProfileId = "";
+  commercePlatforms: CommercePlatform[] = [...COMMERCE_PLATFORMS];
+  executorPlatforms: CommercePlatform[] = ["shopify"];
 
   newProfile: ProfileView = {
     id: "",
@@ -134,6 +139,8 @@ export class AppComponent implements OnInit, OnDestroy {
     availableWorkers: 0,
     shopCount: 0,
     taskCount: 0,
+    commercePlatforms: [...COMMERCE_PLATFORMS],
+    commerceExecutorPlatforms: ["shopify"],
     captchaProvider: "CapMonster",
     captchaApiKeyConfigured: false,
     liveChallengeSupport: [],
@@ -143,7 +150,7 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   };
 
-  newShop = {
+  newShop: { id: string; name: string; baseUrl: string; platform: CommercePlatform } = {
     id: "",
     name: "",
     baseUrl: "",
@@ -256,6 +263,12 @@ export class AppComponent implements OnInit, OnDestroy {
     const result = await this.electron.getShops();
     if (result.success) {
       this.shops = result.shops;
+      if (Array.isArray(result.platforms) && result.platforms.length) {
+        this.commercePlatforms = result.platforms;
+      }
+      if (Array.isArray(result.executorPlatforms)) {
+        this.executorPlatforms = result.executorPlatforms;
+      }
       if (!this.selectedShopId && this.shops.length > 0) {
         this.selectedShopId = this.shops[0].id;
       }
@@ -292,6 +305,12 @@ export class AppComponent implements OnInit, OnDestroy {
     const result = await this.electron.getSystemStatus();
     if (result.success) {
       this.system = result;
+      if (Array.isArray(result.commercePlatforms) && result.commercePlatforms.length) {
+        this.commercePlatforms = result.commercePlatforms;
+      }
+      if (Array.isArray(result.commerceExecutorPlatforms)) {
+        this.executorPlatforms = result.commerceExecutorPlatforms;
+      }
     }
   }
 
@@ -301,6 +320,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
     const id = this.newShop.id.trim();
     const baseUrl = this.newShop.baseUrl.trim();
+    const platform = this.newShop.platform;
 
     if (!id || !baseUrl) {
       this.error = "Shop-ID und Shop-URL sind erforderlich.";
@@ -311,7 +331,8 @@ export class AppComponent implements OnInit, OnDestroy {
       ...this.newShop,
       id,
       name: this.newShop.name.trim() || id,
-      baseUrl
+      baseUrl,
+      platform
     });
 
     if (!result.success) {
@@ -319,8 +340,10 @@ export class AppComponent implements OnInit, OnDestroy {
       return;
     }
 
-    this.info = "Shop erfolgreich registriert.";
-    this.newShop = { id: "", name: "", baseUrl: "", platform: "shopify" };
+    this.info = result.executorReady
+      ? `${this.getPlatformLabel(platform)} Shop registriert · Task-Executor bereit.`
+      : `${this.getPlatformLabel(platform)} Shop registriert · Registry/Monitor vorbereitet, eigener Task-Executor folgt.`;
+    this.newShop = { id: "", name: "", baseUrl: "", platform };
 
     await Promise.all([
       this.loadShops(),
@@ -445,6 +468,30 @@ export class AppComponent implements OnInit, OnDestroy {
     return this.system.liveChallengeSupport?.length
       ? this.system.liveChallengeSupport.join(", ")
       : "turnstile, recaptcha, shopify-checkpoint";
+  }
+
+  getPlatformLabel(platform: CommercePlatform): string {
+    const labels: Record<CommercePlatform, string> = {
+      shopify: "Shopify",
+      woocommerce: "WooCommerce",
+      jtl: "JTL-Shop",
+      wix: "Wix Stores",
+      shopware: "Shopware",
+      magento: "Magento / Adobe Commerce",
+      bigcommerce: "BigCommerce",
+      prestashop: "PrestaShop",
+      squarespace: "Squarespace Commerce",
+      ecwid: "Ecwid",
+      lightspeed: "Lightspeed eCom",
+      commercetools: "commercetools",
+      "salesforce-commerce-cloud": "Salesforce Commerce Cloud",
+      custom: "Custom / Sonstige"
+    };
+    return labels[platform] || platform;
+  }
+
+  hasExecutorForShop(shop: ShopView): boolean {
+    return this.executorPlatforms.includes(shop.platform);
   }
 
   getSystemNodeStatusLabel(): string {
