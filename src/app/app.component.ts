@@ -2,7 +2,6 @@ import { Component, OnDestroy, OnInit } from "@angular/core";
 import { ElectronService } from "./services/electron.service";
 import { TaskState } from "../models";
 
-
 interface ProfileView {
   id: string;
   name: string;
@@ -163,75 +162,74 @@ export class AppComponent implements OnInit, OnDestroy {
     this.unsubscribeStatus?.();
   }
 
+  async loadProfiles(): Promise<void> {
+    const result = await this.electron.getProfiles();
+    if (result.success) {
+      this.profiles = result.profiles;
 
-async loadProfiles(): Promise<void> {
-  const result = await this.electron.getProfiles();
-  if (result.success) {
-    this.profiles = result.profiles;
-
-    if (!this.selectedProfileId && this.profiles.length > 0) {
-      this.selectedProfileId = this.profiles[0].id;
+      if (!this.selectedProfileId && this.profiles.length > 0) {
+        this.selectedProfileId = this.profiles[0].id;
+      }
     }
   }
-}
 
-async saveProfile(): Promise<void> {
-  this.error = "";
-  this.info = "";
+  async saveProfile(): Promise<void> {
+    this.error = "";
+    this.info = "";
 
-  const profile = this.newProfile;
+    const profile = this.newProfile;
 
-  if (
-    !profile.id.trim() ||
-    !profile.name.trim() ||
-    !profile.contact.firstName.trim() ||
-    !profile.contact.lastName.trim() ||
-    !profile.contact.email.trim() ||
-    !profile.address.address1.trim() ||
-    !profile.address.postalCode.trim() ||
-    !profile.address.city.trim()
-  ) {
-    this.error = "Bitte Profilname, Kontakt und Adresse vollständig ausfüllen.";
-    return;
+    if (
+      !profile.id.trim() ||
+      !profile.name.trim() ||
+      !profile.contact.firstName.trim() ||
+      !profile.contact.lastName.trim() ||
+      !profile.contact.email.trim() ||
+      !profile.address.address1.trim() ||
+      !profile.address.postalCode.trim() ||
+      !profile.address.city.trim()
+    ) {
+      this.error = "Bitte Profilname, Kontakt und Adresse vollständig ausfüllen.";
+      return;
+    }
+
+    const result = await this.electron.saveProfile({
+      ...profile,
+      id: profile.id.trim(),
+      name: profile.name.trim(),
+      contact: {
+        ...profile.contact,
+        firstName: profile.contact.firstName.trim(),
+        lastName: profile.contact.lastName.trim(),
+        email: profile.contact.email.trim(),
+        phone: profile.contact.phone?.trim() || ""
+      },
+      address: {
+        ...profile.address,
+        address1: profile.address.address1.trim(),
+        address2: profile.address.address2?.trim() || "",
+        postalCode: profile.address.postalCode.trim(),
+        city: profile.address.city.trim(),
+        countryCode: profile.address.countryCode.trim().toUpperCase() || "DE"
+      },
+      proxy: profile.proxy?.host
+        ? {
+            ...profile.proxy,
+            host: profile.proxy.host.trim(),
+            username: profile.proxy.username?.trim() || "",
+            password: profile.proxy.password || ""
+          }
+        : undefined
+    });
+
+    if (!result.success) {
+      this.error = result.error;
+      return;
+    }
+
+    this.info = "Profil gespeichert.";
+    await this.loadProfiles();
   }
-
-  const result = await this.electron.saveProfile({
-    ...profile,
-    id: profile.id.trim(),
-    name: profile.name.trim(),
-    contact: {
-      ...profile.contact,
-      firstName: profile.contact.firstName.trim(),
-      lastName: profile.contact.lastName.trim(),
-      email: profile.contact.email.trim(),
-      phone: profile.contact.phone?.trim() || ""
-    },
-    address: {
-      ...profile.address,
-      address1: profile.address.address1.trim(),
-      address2: profile.address.address2?.trim() || "",
-      postalCode: profile.address.postalCode.trim(),
-      city: profile.address.city.trim(),
-      countryCode: profile.address.countryCode.trim().toUpperCase() || "DE"
-    },
-    proxy: profile.proxy?.host
-      ? {
-          ...profile.proxy,
-          host: profile.proxy.host.trim(),
-          username: profile.proxy.username?.trim() || "",
-          password: profile.proxy.password || ""
-        }
-      : undefined
-  });
-
-  if (!result.success) {
-    this.error = result.error;
-    return;
-  }
-
-  this.info = "Profil gespeichert.";
-  await this.loadProfiles();
-}
 
   async loadShops(): Promise<void> {
     const result = await this.electron.getShops();
@@ -341,6 +339,30 @@ async saveProfile(): Promise<void> {
     ]);
   }
 
+  async pauseTask(taskId: string): Promise<void> {
+    this.error = "";
+    const result = await this.electron.pauseTask(taskId);
+    if (!result.success) {
+      this.error = result.error;
+    }
+    await Promise.all([
+      this.loadTasks(),
+      this.loadSystemStatus()
+    ]);
+  }
+
+  async resumeTask(taskId: string): Promise<void> {
+    this.error = "";
+    const result = await this.electron.resumeTask(taskId);
+    if (!result.success) {
+      this.error = result.error;
+    }
+    await Promise.all([
+      this.loadTasks(),
+      this.loadSystemStatus()
+    ]);
+  }
+
   async stopTask(taskId: string): Promise<void> {
     this.error = "";
     const result = await this.electron.stopTask(taskId);
@@ -409,6 +431,22 @@ async saveProfile(): Promise<void> {
     return task.state === TaskState.QUEUED;
   }
 
+  isPausable(task: TaskView): boolean {
+    return [
+      TaskState.QUEUED,
+      TaskState.STARTING,
+      TaskState.RUNNING,
+      TaskState.PRODUCT_FOUND,
+      TaskState.CART,
+      TaskState.CHECKOUT,
+      TaskState.RETRYING
+    ].includes(task.state);
+  }
+
+  isResumable(task: TaskView): boolean {
+    return task.state === TaskState.PAUSED;
+  }
+
   isStoppable(task: TaskView): boolean {
     return [
       TaskState.STARTING,
@@ -416,7 +454,8 @@ async saveProfile(): Promise<void> {
       TaskState.PRODUCT_FOUND,
       TaskState.CART,
       TaskState.CHECKOUT,
-      TaskState.RETRYING
+      TaskState.RETRYING,
+      TaskState.PAUSED
     ].includes(task.state);
   }
 
