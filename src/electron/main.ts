@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain } from "electron";
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { TaskOrchestrator } from "../orchestrator";
@@ -11,6 +12,13 @@ let mainWindow: BrowserWindow | null = null;
 let orchestrator: TaskOrchestrator;
 let quitting = false;
 
+interface SystemNodeStatus {
+  executable: string;
+  version?: string;
+  major?: number;
+  ok: boolean;
+  error?: string;
+}
 
 function broadcastTaskUpdate(task: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -62,6 +70,40 @@ function loadShops(): void {
   } catch {}
 }
 
+function parseNodeMajor(versionText: string): number | undefined {
+  const match = versionText.trim().match(/^v?(\d+)/);
+  return match ? Number(match[1]) : undefined;
+}
+
+function readSystemNodeStatus(): SystemNodeStatus {
+  const executable = process.env["ARES_NODE_EXECUTABLE"]?.trim() || "node";
+
+  try {
+    const version = execFileSync(executable, ["-v"], {
+      encoding: "utf8",
+      timeout: 4_000,
+      windowsHide: true
+    }).trim();
+    const major = parseNodeMajor(version);
+
+    return {
+      executable,
+      version,
+      major,
+      ok: typeof major === "number" && major >= 20,
+      error: typeof major === "number" && major >= 20
+        ? undefined
+        : `System Node muss mindestens v20 sein, aktuell: ${version || "unbekannt"}.`
+    };
+  } catch (error) {
+    return {
+      executable,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 function createBackend(): void {
   try {
     const userData = app?.getPath ? app.getPath("userData") : undefined;
@@ -80,7 +122,7 @@ function createBackend(): void {
     browserWorker
   );
 
-  const configuredConcurrency = Number(process.env.ARES_MAX_CONCURRENT_TASKS ?? "4");
+  const configuredConcurrency = Number(process.env["ARES_MAX_CONCURRENT_TASKS"] ?? "4");
   const maxConcurrentTasks = Number.isFinite(configuredConcurrency)
     ? Math.min(16, Math.max(1, Math.floor(configuredConcurrency)))
     : 4;
@@ -114,7 +156,7 @@ function createWindow(): BrowserWindow {
     }
   });
 
-  const devServerUrl = process.env.ARES_UI_URL;
+  const devServerUrl = process.env["ARES_UI_URL"];
   if (devServerUrl) {
     void win.loadURL(devServerUrl);
   } else {
@@ -222,16 +264,23 @@ ipcMain.handle("get-task-list", () => ({
   tasks: orchestrator.getAllTasks()
 }));
 
-ipcMain.handle("get-system-status", async () => ({
-  success: true,
-  availableWorkers: orchestrator.getAvailableWorkers(),
-  shopCount: shops.size,
-  taskCount: orchestrator.getAllTasks().length,
-  captchaProvider: "CapMonster",
-  captchaApiKeyConfigured: Boolean(process.env.CAPMONSTER_API_KEY?.trim()),
-  liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],
-  browserWorkerPool: await browserWorker.health()
-}));
+ipcMain.handle("get-system-status", async () => {
+  const systemNode = readSystemNodeStatus();
+
+  return {
+    success: true,
+    availableWorkers: orchestrator.getAvailableWorkers(),
+    shopCount: shops.size,
+    taskCount: orchestrator.getAllTasks().length,
+    captchaProvider: "CapMonster",
+    captchaApiKeyConfigured: Boolean(process.env["CAPMONSTER_API_KEY"]?.trim()),
+    liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],
+    electronNodeVersion: process.versions.node,
+    systemNodeRequirement: ">=20",
+    systemNode,
+    browserWorkerPool: await browserWorker.health()
+  };
+});
 
 app.whenReady().then(() => {
   createBackend();
