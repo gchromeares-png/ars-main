@@ -10,38 +10,7 @@ import {
   type SemanticTarget,
   type SemanticTargetKey
 } from "./semantic-target";
-
-export interface SemanticTargetValue {
-  target: SemanticTarget;
-  value: string;
-}
-
-export interface SemanticFieldValueSource {
-  valueFor(target: SemanticTarget): string | undefined;
-  targets(): SemanticTarget[];
-}
-
-export class SemanticTargetValueMap implements SemanticFieldValueSource {
-  private readonly values = new Map<SemanticTargetKey, SemanticTargetValue>();
-
-  constructor(entries: SemanticTargetValue[] = []) {
-    for (const entry of entries) {
-      const value = entry.value?.trim();
-      if (!value) continue;
-      this.values.set(targetKey(entry.target), { target: { ...entry.target }, value });
-    }
-  }
-
-  valueFor(target: SemanticTarget): string | undefined {
-    return this.values.get(targetKey(target))?.value;
-  }
-
-  targets(): SemanticTarget[] {
-    return [...this.values.values()].map(entry => ({ ...entry.target }));
-  }
-}
-
-export type FieldValueMap = SemanticTargetValueMap;
+import type { SemanticFieldValueSource } from "./semantic-target-values";
 
 export interface SemanticAutofillResult {
   filled: SemanticTargetKey[];
@@ -74,8 +43,8 @@ export class SemanticFieldAutofill {
     for (const item of ranked) {
       if (item.target.intent === "unknown") continue;
       const value = values.valueFor(item.target);
-      if (!value?.trim()) continue;
       this.rememberTarget(item.target);
+      if (!value?.trim()) continue;
       if (await this.isCompleted(item.target, value)) continue;
 
       const locator = fieldLocator(this.page, item.descriptor.index);
@@ -89,11 +58,7 @@ export class SemanticFieldAutofill {
     }
   }
 
-  async fillLocator(
-    target: SemanticTarget,
-    locator: Locator,
-    value: string
-  ): Promise<boolean> {
+  async fillLocator(target: SemanticTarget, locator: Locator, value: string): Promise<boolean> {
     const desired = normalizeValue(value);
     if (!desired || target.intent === "unknown") return false;
     const key = this.rememberTarget(target);
@@ -118,11 +83,7 @@ export class SemanticFieldAutofill {
     return true;
   }
 
-  async selectLocator(
-    target: SemanticTarget,
-    locator: Locator,
-    value: string
-  ): Promise<boolean> {
+  async selectLocator(target: SemanticTarget, locator: Locator, value: string): Promise<boolean> {
     const desired = normalizeValue(value);
     if (!desired || target.intent === "unknown") return false;
     const key = this.rememberTarget(target);
@@ -164,7 +125,10 @@ export class SemanticFieldAutofill {
 
     for (const [key, target] of uniqueTargets) {
       const value = values.valueFor(target);
-      if (!value?.trim()) continue;
+      if (!value?.trim()) {
+        missing.push(key);
+        continue;
+      }
       if (await this.isCompleted(target, value)) filled.push(key);
       else missing.push(key);
     }
