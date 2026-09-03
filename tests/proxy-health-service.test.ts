@@ -65,7 +65,7 @@ describe("ProxyHealthService", () => {
     const service = new ProxyHealthService({
       probeExitIp: jest.fn(async () => ({ exitIp: "203.0.113.20", latencyMs: 84 })),
       lookupReputation: jest.fn(async () => ({
-        reputation: { source: "proxycheck.io", available: false, error: "daily limit" }
+        reputation: { source: "proxycheck.io" as const, available: false, error: "daily limit" }
       }))
     });
 
