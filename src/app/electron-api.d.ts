@@ -16,9 +16,12 @@ declare global {
       getTaskStatus(taskId: string): Promise<any>;
       getTaskList(): Promise<any>;
       getTaskLogs(taskId: string, limit?: number): Promise<any>;
+      getProductMonitorEvents(taskId: string, limit?: number): Promise<any>;
       getSystemStatus(): Promise<any>;
       onTaskStatusUpdate(callback: (task: unknown) => void): () => void;
+      onProductMonitorUpdate(callback: (payload: unknown) => void): () => void;
       removeTaskStatusListener?(callback?: (task: unknown) => void): void;
+      removeProductMonitorListener?(callback?: (payload: unknown) => void): void;
     };
   }
 }
