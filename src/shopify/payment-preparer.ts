@@ -109,8 +109,8 @@ export class ShopifyPaymentPreparer {
       for (const pattern of patterns) {
         const candidates = [
           frame.getByRole("radio", { name: pattern }).first(),
-          frame.getByRole("button", { name: pattern }).first(),
-          frame.getByText(pattern).first()
+          frame.locator("label").filter({ hasText: pattern }).first(),
+          frame.locator('[role="radio"]').filter({ hasText: pattern }).first()
         ];
         for (const locator of candidates) {
           if (!await this.isVisible(locator)) continue;
@@ -118,7 +118,7 @@ export class ShopifyPaymentPreparer {
             await locator.click({ timeout: 1_000 });
             return true;
           } catch {
-            // Continue to the next semantic candidate/frame.
+            // Continue to the next payment-option candidate/frame.
           }
         }
       }
