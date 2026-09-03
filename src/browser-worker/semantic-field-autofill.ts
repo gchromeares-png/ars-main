@@ -43,13 +43,14 @@ export class SemanticFieldAutofill {
 
     for (const item of ranked) {
       if (item.target.intent === "unknown") continue;
-      const value = values.valueFor(item.target);
-      this.rememberTarget(item.target);
-      if (!value?.trim()) continue;
-      if (await this.isCompleted(item.target, value)) continue;
 
       const locator = fieldLocator(this.page, item.descriptor.index);
       if (!await locator.isVisible({ timeout: 120 }).catch(() => false)) continue;
+
+      this.rememberTarget(item.target);
+      const value = values.valueFor(item.target);
+      if (!value?.trim()) continue;
+      if (await this.isCompleted(item.target, value)) continue;
 
       if (item.descriptor.tagName === "select") {
         await this.selectLocator(item.target, locator, value).catch(() => false);
