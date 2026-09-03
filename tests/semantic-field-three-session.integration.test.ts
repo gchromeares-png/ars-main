@@ -3,10 +3,14 @@ import type { AddressInfo } from "net";
 import { chromium } from "patchright";
 import type { SemanticEmbeddingProvider } from "../src/browser-worker/field-semantic-resolver";
 import { FieldSemanticResolver } from "../src/browser-worker/field-semantic-resolver";
-import { SemanticFieldAutofill, type FieldValueMap } from "../src/browser-worker/semantic-field-autofill";
+import { SemanticFieldAutofill } from "../src/browser-worker/semantic-field-autofill";
+import { semanticTarget, targetKey, type AddressContext, type FieldIntent } from "../src/browser-worker/semantic-target";
+import { SemanticTargetValueMap } from "../src/browser-worker/semantic-target-values";
 import { GhostCursorUiInteractionHelper } from "../src/browser-worker/ui-interaction-helper";
 
 const describeBrowser = process.env["ARES_RUN_BROWSER_INTEGRATION"] === "1" ? describe : describe.skip;
+
+type SessionValueRecord = Partial<Record<Exclude<FieldIntent, "unknown">, string>>;
 
 class IntegrationEmbeddingProvider implements SemanticEmbeddingProvider {
   async embed(texts: string[]): Promise<number[][]> {
@@ -14,17 +18,22 @@ class IntegrationEmbeddingProvider implements SemanticEmbeddingProvider {
   }
 
   private vector(text: string): number[] {
-    const vector = new Array<number>(9).fill(0.01);
+    const vector = new Array<number>(14).fill(0.01);
     const concepts: Array<[RegExp, number]> = [
       [/mail|e-mail/, 0],
       [/given|first name|vorname|rufname/, 1],
       [/family|surname|nachname|familienname/, 2],
-      [/street|straße|hausnummer|straßenanschrift/, 3],
-      [/secondary|apartment|adresszusatz/, 4],
-      [/city|town|locality|stadt|ort|gemeinde|lieferort/, 5],
-      [/postal|zip|postleitzahl|zustellcode|postgebiet/, 6],
-      [/phone|mobile|telefon|mobil|rufnummer/, 7],
-      [/country|land|zielland/, 8]
+      [/full name|vollständiger name|empfängername/, 3],
+      [/street name without|straße ohne/, 4],
+      [/primary address|street delivery address|straße und hausnummer|zustellanschrift/, 5],
+      [/house number|hausnummer/, 6],
+      [/secondary|apartment|adresszusatz/, 7],
+      [/city|town|locality|stadt|ort|gemeinde|lieferort/, 8],
+      [/postal|zip|postleitzahl|zustellcode|postgebiet/, 9],
+      [/phone|mobile|telefon|mobil|rufnummer/, 10],
+      [/country|land|zielland/, 11],
+      [/shipping|delivery|liefer|zustell|versand/, 12],
+      [/billing|invoice|rechnung/, 13]
     ];
     for (const [pattern, index] of concepts) {
       if (pattern.test(text)) vector[index] = 1;
@@ -55,7 +64,17 @@ function formHtml(variant: "A" | "B" | "C"): string {
   </body></html>`;
 }
 
-const sessionValues: Array<{ id: "A" | "B" | "C"; userAgent: string; cookie: string; values: FieldValueMap }> = [
+function semanticValues(values: SessionValueRecord): SemanticTargetValueMap {
+  const entries = [] as Array<{ target: ReturnType<typeof semanticTarget>; value: string }>;
+  const contexts: AddressContext[] = ["shipping", "billing", "unknown"];
+  for (const [intent, value] of Object.entries(values) as Array<[Exclude<FieldIntent, "unknown">, string | undefined]>) {
+    if (!value) continue;
+    for (const context of contexts) entries.push({ target: semanticTarget(intent, context), value });
+  }
+  return new SemanticTargetValueMap(entries);
+}
+
+const sessionValues: Array<{ id: "A" | "B" | "C"; userAgent: string; cookie: string; values: SessionValueRecord }> = [
   {
     id: "A",
     userAgent: "ARES-Semantic-Test-A",
@@ -79,7 +98,7 @@ const sessionValues: Array<{ id: "A" | "B" | "C"; userAgent: string; cookie: str
 describeBrowser("semantic checkout autofill - three isolated sessions", () => {
   jest.setTimeout(45_000);
 
-  it("keeps cookies, user agents and field values isolated and never rewrites successful fields", async () => {
+  it("keeps cookies, user agents and field values isolated and never rewrites successful targets", async () => {
     const server = http.createServer((_, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end("<!doctype html><html><body>ARES semantic test</body></html>");
@@ -103,10 +122,11 @@ describeBrowser("semantic checkout autofill - three isolated sessions", () => {
           await interactions.click(page.locator("#probe"));
           expect(await page.locator("body").getAttribute("data-clicked")).toBe("yes");
 
+          const source = semanticValues(session.values);
           const autofill = new SemanticFieldAutofill(page, interactions, resolver);
-          await autofill.fillSemantic(session.values);
-          await autofill.fillSemantic(session.values); // must be a no-op for already successful fields
-          const result = await autofill.result(session.values);
+          await autofill.fillSemantic(source);
+          await autofill.fillSemantic(source); // no-op for already successful semantic targets
+          const result = await autofill.result(source);
 
           const values = await page.locator("[data-slot]").evaluateAll(elements => Object.fromEntries(elements.map(element => {
             const control = element as HTMLInputElement | HTMLSelectElement;
@@ -134,7 +154,9 @@ describeBrowser("semantic checkout autofill - three isolated sessions", () => {
         for (const [intent, expected] of Object.entries(session.values)) {
           if (!expected) continue;
           expect(result.values[intent]).toBe(expected);
-          expect(result.result.writeCounts[intent]).toBe(1);
+        }
+        for (const target of result.result.filled) {
+          expect(result.result.writeCounts[targetKey(target)]).toBe(1);
         }
       }
 
