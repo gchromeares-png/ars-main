@@ -15,7 +15,7 @@
           "options": {
             "outputPath": "dist/ares",
             "index": "src/index.html",
-            "main": "src/main.ts",
+            "main": "src/app/main.ts",
             "polyfills": "src/polyfills.ts",
             "tsConfig": "tsconfig.app.json",
             "inlineStyleLanguage": "scss",
