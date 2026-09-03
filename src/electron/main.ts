@@ -138,6 +138,8 @@ function createBackend(): void {
   orchestrator.on("taskQueued", forwardTask);
   orchestrator.on("taskStarted", forwardTask);
   orchestrator.on("taskUpdated", forwardTask);
+  orchestrator.on("taskPaused", forwardTask);
+  orchestrator.on("taskResumed", forwardTask);
   orchestrator.on("taskCompleted", forwardTask);
   orchestrator.on("taskFailed", forwardTask);
   orchestrator.on("taskCancelled", forwardTask);
@@ -229,6 +231,36 @@ ipcMain.handle("start-task", async (_event, taskId: string) => {
     return task?.lastError
       ? { success: false, error: task.lastError, task }
       : { success: true, task };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      task: orchestrator.getTask(taskId)
+    };
+  }
+});
+
+ipcMain.handle("pause-task", async (_event, taskId: string) => {
+  try {
+    await orchestrator.pauseTask(taskId);
+    const task = orchestrator.getTask(taskId);
+    broadcastTaskUpdate(task);
+    return { success: true, task };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      task: orchestrator.getTask(taskId)
+    };
+  }
+});
+
+ipcMain.handle("resume-task", async (_event, taskId: string) => {
+  try {
+    await orchestrator.resumeTask(taskId);
+    const task = orchestrator.getTask(taskId);
+    broadcastTaskUpdate(task);
+    return { success: true, task };
   } catch (error) {
     return {
       success: false,
