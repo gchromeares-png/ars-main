@@ -7,7 +7,6 @@ export interface SemanticTargetValue {
 
 export interface SemanticFieldValueSource {
   valueFor(target: SemanticTarget): string | undefined;
-  targets(): SemanticTarget[];
 }
 
 export class SemanticTargetValueMap implements SemanticFieldValueSource {
@@ -29,10 +28,6 @@ export class SemanticTargetValueMap implements SemanticFieldValueSource {
 
   valueFor(target: SemanticTarget): string | undefined {
     return this.values.get(targetKey(target))?.value;
-  }
-
-  targets(): SemanticTarget[] {
-    return [...this.values.values()].map(entry => ({ ...entry.target }));
   }
 
   entries(): SemanticTargetValue[] {
