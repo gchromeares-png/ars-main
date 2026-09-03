@@ -205,17 +205,60 @@
       </ng-container>
 
       <ng-container *ngIf="activeTab === 'proxies'">
-        <section class="section-heading"><div><div class="eyebrow">PROXY VAULT</div><h2>Proxys</h2></div><p>Proxys werden zentral gespeichert. Ein Task speichert nur die Proxy-ID; Credentials werden erst beim Start der konkreten Browser-Session aufgelöst.</p></section>
+        <section class="section-heading proxy-heading">
+          <div><div class="eyebrow">PROXY INTELLIGENCE</div><h2>Proxy Vault</h2></div>
+          <div class="heading-actions">
+            <span class="quota-note">proxycheck.io · keyless · 100 checks/day</span>
+            <button class="btn btn-secondary" [disabled]="testingAllProxies || !proxies.length" (click)="testAllProxies()">{{ testingAllProxies ? 'Checks laufen…' : 'Alle testen' }}</button>
+          </div>
+        </section>
         <section class="proxy-layout">
           <section class="panel proxy-editor">
-            <div class="panel-header"><div><div class="eyebrow">PROXY CONFIG</div><h3>Proxy speichern</h3></div></div>
+            <div class="panel-header"><div><div class="eyebrow">PROXY CONFIG</div><h3>Proxy hinzufügen</h3></div></div>
             <div class="form-grid"><label><span>Proxy-ID</span><input [(ngModel)]="newProxy.id" placeholder="de-resi-01"></label><label><span>Name</span><input [(ngModel)]="newProxy.name" placeholder="DE Residential 01"></label><label><span>Protokoll</span><select [(ngModel)]="newProxy.protocol"><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks5">SOCKS5</option></select></label><label><span>Host</span><input [(ngModel)]="newProxy.host" placeholder="proxy.example.net"></label><label><span>Port</span><input [(ngModel)]="newProxy.port" type="number" min="1" max="65535"></label><label><span>Username</span><input [(ngModel)]="newProxy.username" placeholder="optional"></label><label class="wide"><span>Passwort</span><input [(ngModel)]="newProxy.password" type="password" placeholder="optional"></label></div>
             <div class="primary-action-row"><button class="btn btn-primary" (click)="saveProxy()">Proxy speichern</button></div>
+            <div class="proxy-info-note"><strong>Lightweight Health Check</strong><span>Kein Browser. ARES misst Exit-IP und Latenz direkt über den Proxy und fragt Reputation/Geo anschließend über proxycheck.io ab.</span></div>
           </section>
+
           <section class="panel proxy-list-panel">
-            <div class="panel-header"><div><div class="eyebrow">AVAILABLE</div><h3>Proxy Vault</h3></div><span class="count-chip">{{ proxies.length }}</span></div>
+            <div class="panel-header"><div><div class="eyebrow">NETWORK NODES</div><h3>Gespeicherte Proxys</h3></div><span class="count-chip">{{ proxies.length }}</span></div>
             <div class="empty-state" *ngIf="!proxies.length">Noch keine Proxys gespeichert.</div>
-            <article class="proxy-card" *ngFor="let proxy of proxies; trackBy: trackProxy"><div class="proxy-main"><strong>{{ proxy.name }}</strong><small>{{ getProxyEndpoint(proxy) }}</small><small>{{ proxy.username ? 'Login vorhanden' : 'ohne Login' }}</small></div><div class="proxy-actions"><button class="btn btn-small btn-secondary" (click)="editProxy(proxy)">Bearbeiten</button><button class="btn btn-small btn-danger" (click)="deleteProxy(proxy.id)">Löschen</button></div></article>
+
+            <article class="proxy-card proxy-health-card" *ngFor="let proxy of proxies; trackBy: trackProxy" [class.online]="proxy.health?.status === 'online'" [class.offline]="proxy.health?.status === 'offline'">
+              <div class="proxy-card-head">
+                <div class="proxy-identity">
+                  <span class="health-dot" [class.online]="proxy.health?.status === 'online'" [class.offline]="proxy.health?.status === 'offline'"></span>
+                  <div><strong>{{ proxy.name }}</strong><small>{{ getProxyEndpoint(proxy) }} · {{ proxy.username ? 'AUTH' : 'NO AUTH' }}</small></div>
+                </div>
+                <div class="proxy-actions">
+                  <button class="btn btn-small btn-accent" [disabled]="isProxyTesting(proxy.id)" (click)="testProxy(proxy)">{{ isProxyTesting(proxy.id) ? 'TEST…' : 'TEST' }}</button>
+                  <button class="btn btn-small btn-secondary" (click)="editProxy(proxy)">EDIT</button>
+                  <button class="btn btn-small btn-danger" (click)="deleteProxy(proxy.id)">DEL</button>
+                </div>
+              </div>
+
+              <div class="proxy-health-grid">
+                <div><span>STATUS</span><strong>{{ proxy.health?.status === 'online' ? 'ONLINE' : proxy.health?.status === 'offline' ? 'OFFLINE' : 'UNKNOWN' }}</strong></div>
+                <div><span>LATENCY</span><strong>{{ proxy.health?.latencyMs != null ? proxy.health?.latencyMs + ' ms' : '—' }}</strong></div>
+                <div><span>EXIT IP</span><strong>{{ proxy.health?.exitIp || '—' }}</strong></div>
+                <div><span>LOCATION</span><strong>{{ getProxyLocation(proxy) }}</strong></div>
+                <div><span>NETWORK</span><strong>{{ getProxyNetwork(proxy) }}</strong></div>
+                <div><span>TYPE</span><strong>{{ proxy.health?.reputation?.detectedType || '—' }}</strong></div>
+              </div>
+
+              <div class="proxy-reputation-row">
+                <span class="metric-chip" [ngClass]="proxy.health?.reputation?.riskLevel || 'unknown'">{{ getProxyRiskLabel(proxy) }}</span>
+                <span class="metric-chip spam">{{ getProxySpamLabel(proxy) }}</span>
+                <span class="metric-chip">ATTACKS {{ proxy.health?.reputation?.attackTotal != null ? proxy.health?.reputation?.attackTotal : '—' }}</span>
+                <span class="metric-chip" [class.detected]="proxy.health?.reputation?.proxyDetected">{{ proxy.health?.reputation?.proxyDetected ? 'PROXY DETECTED' : 'DETECTION —' }}</span>
+              </div>
+
+              <div class="proxy-card-foot">
+                <small>{{ getProxyCheckLabel(proxy) }}</small>
+                <small *ngIf="proxy.health?.error" class="proxy-health-error">{{ proxy.health?.error }}</small>
+                <small *ngIf="proxy.health?.reputation?.error" class="proxy-health-error">Reputation: {{ proxy.health?.reputation?.error }}</small>
+              </div>
+            </article>
           </section>
         </section>
       </ng-container>

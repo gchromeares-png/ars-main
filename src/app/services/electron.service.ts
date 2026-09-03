@@ -74,6 +74,29 @@ export class ElectronService {
     return Promise.resolve({ success: true, proxy });
   }
 
+  testProxy(proxyId: string): Promise<any> {
+    if (this.api) return this.api.testProxy(proxyId);
+    const proxy = this.previewProxies.find(item => item.id === proxyId);
+    if (!proxy) return Promise.resolve({ success: false, error: `Proxy ${proxyId} wurde nicht gefunden.` });
+    proxy.health = {
+      proxyId,
+      status: "online",
+      checkedAt: new Date().toISOString(),
+      latencyMs: 74,
+      exitIp: "203.0.113.42",
+      geo: { country: "Germany", countryCode: "DE", region: "Hamburg", city: "Hamburg", provider: "Preview ISP", asn: "AS64500" },
+      reputation: { source: "proxycheck.io", available: true, riskScore: 12, riskLevel: "low", attackTotal: 0, spamHits: 0, proxyDetected: true, detectedType: "Residential" }
+    };
+    return Promise.resolve({ success: true, proxy, health: proxy.health });
+  }
+
+  async testAllProxies(): Promise<any> {
+    if (this.api) return this.api.testAllProxies();
+    const results = [];
+    for (const proxy of this.previewProxies) results.push(await this.testProxy(proxy.id));
+    return { success: true, results, proxies: this.previewProxies };
+  }
+
   deleteProxy(proxyId: string): Promise<any> {
     if (this.api) return this.api.deleteProxy(proxyId);
     const assignedProfile = this.previewProfiles.find(item => item.preferredProxyId === proxyId);

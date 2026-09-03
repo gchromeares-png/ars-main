@@ -8,6 +8,8 @@ declare global {
       deleteProfile(profileId: string): Promise<any>;
       getProxies(): Promise<any>;
       saveProxy(proxy: unknown): Promise<any>;
+      testProxy(proxyId: string): Promise<any>;
+      testAllProxies(): Promise<any>;
       deleteProxy(proxyId: string): Promise<any>;
       getShops(): Promise<any>;
       registerShop(config: unknown): Promise<any>;

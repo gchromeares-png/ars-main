@@ -167,6 +167,9 @@ export class AppComponent implements OnInit, OnDestroy {
   sessionCardExpiry = "";
   sessionCardSecurityCode = "";
 
+  testingAllProxies = false;
+  readonly testingProxyIds = new Set<string>();
+
   error = "";
   info = "";
 
@@ -353,6 +356,80 @@ export class AppComponent implements OnInit, OnDestroy {
     this.info = `Proxy ${result.proxy?.name || proxy.name} gespeichert.`;
     this.newProxy = this.emptyProxy();
     await Promise.all([this.loadProxies(), this.loadSystemStatus()]);
+  }
+
+  async testProxy(proxy: AresProxy): Promise<void> {
+    if (this.testingProxyIds.has(proxy.id) || this.testingAllProxies) return;
+    this.error = "";
+    this.info = "";
+    this.testingProxyIds.add(proxy.id);
+    try {
+      const result = await this.electron.testProxy(proxy.id);
+      await this.loadProxies();
+      if (!result.success) {
+        this.error = result.error || `Proxy ${proxy.name} ist nicht erreichbar.`;
+        return;
+      }
+      const latency = result.health?.latencyMs;
+      this.info = `${proxy.name}: online${typeof latency === "number" ? ` · ${latency} ms` : ""}.`;
+    } finally {
+      this.testingProxyIds.delete(proxy.id);
+    }
+  }
+
+  async testAllProxies(): Promise<void> {
+    if (this.testingAllProxies || !this.proxies.length) return;
+    this.error = "";
+    this.info = "";
+    this.testingAllProxies = true;
+    try {
+      const result = await this.electron.testAllProxies();
+      await this.loadProxies();
+      if (!result.success) {
+        this.error = result.error || "Proxy-Checks konnten nicht abgeschlossen werden.";
+        return;
+      }
+      const online = Array.isArray(result.results) ? result.results.filter((item: any) => item.success).length : 0;
+      this.info = `Proxy-Checks abgeschlossen · ${online}/${this.proxies.length} online.`;
+    } finally {
+      this.testingAllProxies = false;
+    }
+  }
+
+  isProxyTesting(proxyId: string): boolean {
+    return this.testingAllProxies || this.testingProxyIds.has(proxyId);
+  }
+
+  getProxyLocation(proxy: AresProxy): string {
+    const geo = proxy.health?.geo;
+    if (!geo) return "Ort unbekannt";
+    return [geo.city, geo.region, geo.countryCode || geo.country].filter(Boolean).join(" · ") || "Ort unbekannt";
+  }
+
+  getProxyNetwork(proxy: AresProxy): string {
+    const geo = proxy.health?.geo;
+    if (!geo) return "ASN / Provider unbekannt";
+    return [geo.asn, geo.provider].filter(Boolean).join(" · ") || "ASN / Provider unbekannt";
+  }
+
+  getProxyRiskLabel(proxy: AresProxy): string {
+    const reputation = proxy.health?.reputation;
+    if (!reputation?.available) return "RISK —";
+    return typeof reputation.riskScore === "number" ? `RISK ${reputation.riskScore}/100` : "RISK —";
+  }
+
+  getProxySpamLabel(proxy: AresProxy): string {
+    const reputation = proxy.health?.reputation;
+    if (!reputation?.available) return "SPAM —";
+    return typeof reputation.spamHits === "number" ? `SPAM ${reputation.spamHits}` : "SPAM —";
+  }
+
+  getProxyCheckLabel(proxy: AresProxy): string {
+    const health = proxy.health;
+    if (!health) return "Noch nicht getestet";
+    const time = new Date(health.checkedAt);
+    const formatted = Number.isNaN(time.getTime()) ? health.checkedAt : time.toLocaleString("de-DE");
+    return `Letzter Check ${formatted}`;
   }
 
   editProxy(proxy: AresProxy): void {
