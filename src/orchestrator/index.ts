@@ -152,6 +152,7 @@ export class TaskOrchestrator {
     this.transition(task, TaskState.QUEUED);
     this.eventBus.emit("taskResumed", task);
     await this.registry.saveTask(task.id);
+    this.enqueueTask(task.id);
     this.drainQueue();
   }
 
