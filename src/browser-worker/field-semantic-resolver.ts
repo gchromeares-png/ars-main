@@ -183,7 +183,7 @@ function postJson<T>(endpoint: string, payload: unknown, timeoutMs: number): Pro
           const parsed = JSON.parse(responseBody) as T;
           finish(() => resolve(parsed));
         } catch {
-          finish(() => reject(new Error("Local embedding response was not valid JSON."));
+          finish(() => reject(new Error("Local embedding response was not valid JSON.")));
         }
       });
     });
