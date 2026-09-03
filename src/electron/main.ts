@@ -9,6 +9,8 @@ import type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
 import { TaskConfig, TaskState } from "../models";
 import { ProfileRepository } from "../profiles/profile-repository";
 import { AresProfile } from "../profiles/models";
+import { ProxyRepository } from "../proxies/proxy-repository";
+import type { AresProxy } from "../proxies/models";
 import type { CheckoutPaymentSession, PaymentMethod } from "../payments/models";
 import { EphemeralPaymentExecutor } from "../payments/ephemeral-payment-executor";
 import { SqliteTaskStore } from "../persistence/sqlite-task-store";
@@ -21,12 +23,14 @@ import {
 import { CommerceTaskExecutorRouter } from "../commerce/task-executor-router";
 import { CommerceProductApiRouter } from "../commerce/product-api/router";
 import { CommerceMonitorService, isCommerceMonitorTask } from "../monitor/commerce-monitor-service";
+import { MonitorAutoCheckoutCoordinator } from "../monitor/auto-checkout-coordinator";
 
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: TaskOrchestrator;
 let browserWorker: BrowserWorkerPoolClient;
 let commerceExecutor: CommerceTaskExecutorRouter;
 let commerceMonitor: CommerceMonitorService;
+let autoCheckoutCoordinator: MonitorAutoCheckoutCoordinator;
 let taskStore: SqliteTaskStore;
 let persistenceCoordinator: TaskPersistenceCoordinator;
 let quitting = false;
@@ -57,6 +61,7 @@ function broadcastMonitorUpdate(payload: unknown): void {
 
 const shops = new Map<string, CommerceShop>();
 const profileRepository = new ProfileRepository();
+const proxyRepository = new ProxyRepository();
 const paymentSessions = new Map<string, CheckoutPaymentSession>();
 
 function normalizeStoredShop(input: any): CommerceShop | undefined {
@@ -166,6 +171,7 @@ function readSystemNodeStatus(): SystemNodeStatus {
 async function createBackend(): Promise<void> {
   const userData = app.getPath("userData");
   profileRepository.setStoragePath(path.join(userData, "profiles.json"));
+  proxyRepository.setStoragePath(path.join(userData, "proxies.json"));
   loadShops();
 
   browserWorker = new BrowserWorkerPoolClient(
@@ -174,7 +180,10 @@ async function createBackend(): Promise<void> {
       return shop?.platform === "shopify" ? shop as ShopifyRuntimeShop : undefined;
     },
     profileId => profileRepository.get(profileId),
-    { profileRoot: path.join(userData, "browser-profiles") }
+    {
+      profileRoot: path.join(userData, "browser-profiles"),
+      getProxy: proxyId => proxyRepository.get(proxyId)
+    }
   );
 
   taskStore = await SqliteTaskStore.open(path.join(userData, "ares.sqlite"));
@@ -185,7 +194,16 @@ async function createBackend(): Promise<void> {
     productApiRouter,
     taskStore,
     {
-      onEvent: (taskId, event) => broadcastMonitorUpdate({ taskId, event })
+      onEvent: (taskId, event) => {
+        broadcastMonitorUpdate({ taskId, event });
+        void autoCheckoutCoordinator?.handleProductEvent(taskId, event).catch(error => {
+          const task = orchestrator?.getTask(taskId);
+          if (task) {
+            task.lastError = error instanceof Error ? error.message : String(error);
+            broadcastTaskUpdate(task);
+          }
+        });
+      }
     }
   );
 
@@ -199,6 +217,19 @@ async function createBackend(): Promise<void> {
   commerceExecutor.registerMonitorExecutor(commerceMonitor);
 
   orchestrator = new TaskOrchestrator(taskStore, commerceExecutor);
+  autoCheckoutCoordinator = new MonitorAutoCheckoutCoordinator(orchestrator, {
+    getPaymentSession: taskId => paymentSessions.get(taskId),
+    setPaymentSession: (taskId, session) => paymentSessions.set(taskId, session),
+    onTriggered: (parent, child, event) => {
+      broadcastMonitorUpdate({
+        taskId: parent.id,
+        event,
+        autoCheckout: { childTaskId: child.id, status: "triggered" }
+      });
+      broadcastTaskUpdate(parent);
+      broadcastTaskUpdate(child);
+    }
+  });
   persistenceCoordinator = new TaskPersistenceCoordinator(orchestrator, taskStore);
   await orchestrator.initialize();
 
@@ -211,7 +242,7 @@ async function createBackend(): Promise<void> {
   }
 
   const forwardTask = (task: any) => {
-    if (task?.id && [TaskState.SUCCESS, TaskState.CANCELLED].includes(task.state)) {
+    if (task?.id && [TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED].includes(task.state)) {
       paymentSessions.delete(String(task.id));
     }
     mainWindow?.webContents.send("task-status-update", task);
@@ -231,8 +262,10 @@ async function createBackend(): Promise<void> {
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1280,
+    height: 820,
+    minWidth: 980,
+    minHeight: 680,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -254,6 +287,9 @@ ipcMain.handle("save-profile", (_event, profile: AresProfile) => {
   if (!profile?.id || !profile?.name) {
     return { success: false, error: "Profil-ID und Profilname sind erforderlich." };
   }
+  if (profile.preferredProxyId && !proxyRepository.get(profile.preferredProxyId)) {
+    return { success: false, error: `Standard-Proxy ${profile.preferredProxyId} existiert nicht.` };
+  }
   profileRepository.save(profile);
   return { success: true, profile };
 });
@@ -261,6 +297,43 @@ ipcMain.handle("save-profile", (_event, profile: AresProfile) => {
 ipcMain.handle("delete-profile", (_event, profileId: string) => ({
   success: profileRepository.delete(profileId)
 }));
+
+ipcMain.handle("get-proxies", () => ({ success: true, proxies: proxyRepository.getAll() }));
+
+ipcMain.handle("save-proxy", (_event, input: AresProxy) => {
+  try {
+    const proxy = proxyRepository.save(input);
+    return { success: true, proxy };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle("delete-proxy", (_event, proxyId: string) => {
+  const id = String(proxyId ?? "").trim();
+  if (!id) return { success: false, error: "Proxy-ID fehlt." };
+
+  const assignedProfile = profileRepository.getAll().find(profile => profile.preferredProxyId === id);
+  if (assignedProfile) {
+    return { success: false, error: `Proxy ist als Standard in Profil ${assignedProfile.name} zugeordnet.` };
+  }
+
+  const activeTask = orchestrator.getAllTasks().find(task => {
+    if ([TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED].includes(task.state)) return false;
+    const selection = task.config.data?.["proxySelection"] as { mode?: string; proxyId?: string } | undefined;
+    const action = task.config.data?.["monitorAction"] as {
+      mode?: string;
+      proxySelection?: { mode?: string; proxyId?: string };
+    } | undefined;
+    return (selection?.mode === "proxy" && selection.proxyId === id)
+      || (action?.mode === "auto-checkout" && action.proxySelection?.mode === "proxy" && action.proxySelection.proxyId === id);
+  });
+  if (activeTask) {
+    return { success: false, error: `Proxy ist noch Task ${activeTask.config.name} zugeordnet.` };
+  }
+
+  return { success: proxyRepository.delete(id) };
+});
 
 ipcMain.handle("set-payment-session", (_event, taskId: string, input: unknown) => {
   const id = String(taskId ?? "").trim();
@@ -432,6 +505,8 @@ ipcMain.handle("get-system-status", async () => {
     availableWorkers: orchestrator.getAvailableWorkers(),
     shopCount: shops.size,
     taskCount: orchestrator.getAllTasks().length,
+    profileCount: profileRepository.getAll().length,
+    proxyCount: proxyRepository.getAll().length,
     commercePlatforms: COMMERCE_PLATFORMS,
     commerceExecutorPlatforms: commerceExecutor.listExecutorPlatforms(),
     commerceMonitorReady: commerceExecutor.hasMonitorExecutor(),

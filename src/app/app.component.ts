@@ -3,9 +3,11 @@ import { ElectronService } from "./services/electron.service";
 import { TaskState } from "../models";
 import { COMMERCE_PLATFORMS, CommercePlatform } from "../commerce/platforms";
 import type { CheckoutPaymentSession, PaymentMethod } from "../payments/models";
+import type { AresProxy, ProxyProtocol, ProxySelection } from "../proxies/models";
 
-type AppTab = "dashboard" | "monitor" | "tasks" | "profiles" | "shops";
+type AppTab = "dashboard" | "tasks" | "profiles" | "proxies" | "shops";
 type ProfileTab = "identity" | "address" | "browser" | "payment";
+type TaskCreationMode = "monitor-only" | "auto-checkout";
 
 interface ProfileView {
   id: string;
@@ -24,12 +26,13 @@ interface ProfileView {
     countryCode: string;
   };
   proxy?: {
-    protocol?: "http" | "https" | "socks5";
+    protocol?: ProxyProtocol;
     host?: string;
     port?: number;
     username?: string;
     password?: string;
   };
+  preferredProxyId?: string;
   browser?: {
     headless?: boolean;
     userAgent?: string;
@@ -88,6 +91,8 @@ interface SystemStatus {
   availableWorkers: number;
   shopCount: number;
   taskCount: number;
+  profileCount?: number;
+  proxyCount?: number;
   commercePlatforms?: CommercePlatform[];
   commerceExecutorPlatforms?: CommercePlatform[];
   commerceMonitorReady?: boolean;
@@ -113,45 +118,14 @@ export class AppComponent implements OnInit, OnDestroy {
 
   shops: ShopView[] = [];
   profiles: ProfileView[] = [];
+  proxies: AresProxy[] = [];
   selectedProfileId = "";
   selectedShopId = "";
-  selectedMonitorShopId = "";
   commercePlatforms: CommercePlatform[] = [...COMMERCE_PLATFORMS];
   executorPlatforms: CommercePlatform[] = ["shopify"];
 
-  newProfile: ProfileView = {
-    id: "",
-    name: "",
-    contact: {
-      firstName: "",
-      lastName: "",
-      email: "",
-      phone: ""
-    },
-    address: {
-      address1: "",
-      address2: "",
-      postalCode: "",
-      city: "",
-      countryCode: "DE"
-    },
-    proxy: {
-      protocol: "http",
-      host: "",
-      port: undefined,
-      username: "",
-      password: ""
-    },
-    browser: {
-      headless: false,
-      userAgent: ""
-    },
-    paymentPreference: {
-      method: "card",
-      label: ""
-    }
-  };
-
+  newProfile: ProfileView = this.emptyProfile();
+  newProxy: AresProxy = this.emptyProxy();
   newShop: { id: string; name: string; baseUrl: string; platform: CommercePlatform } = {
     id: "",
     name: "",
@@ -166,25 +140,24 @@ export class AppComponent implements OnInit, OnDestroy {
     availableWorkers: 0,
     shopCount: 0,
     taskCount: 0,
+    profileCount: 0,
+    proxyCount: 0,
     commercePlatforms: [...COMMERCE_PLATFORMS],
     commerceExecutorPlatforms: ["shopify"],
     commerceMonitorReady: true,
     captchaProvider: "CapMonster",
     captchaApiKeyConfigured: false,
     liveChallengeSupport: [],
-    systemNode: {
-      executable: "node",
-      ok: false
-    }
+    systemNode: { executable: "node", ok: false }
   };
 
+  taskMode: TaskCreationMode = "monitor-only";
   taskName = "";
   searchTerm = "";
+  taskIntervalSeconds = 30;
   headless = false;
-
-  monitorName = "";
-  monitorSearchTerm = "";
-  monitorIntervalSeconds = 30;
+  taskProxyMode: ProxySelection["mode"] = "profile-default";
+  selectedTaskProxyId = "";
 
   taskPaymentEnabled = false;
   taskPaymentMethod: PaymentMethod = "card";
@@ -205,11 +178,12 @@ export class AppComponent implements OnInit, OnDestroy {
     await Promise.all([
       this.loadShops(),
       this.loadProfiles(),
+      this.loadProxies(),
       this.loadTasks(),
       this.loadSystemStatus()
     ]);
 
-    this.syncPaymentPreference();
+    this.syncProfileDefaults();
     this.unsubscribeStatus = this.electron.onTaskStatusUpdate(() => {
       const expandedTaskLogId = this.expandedTaskLogId;
       void Promise.all([
@@ -234,21 +208,49 @@ export class AppComponent implements OnInit, OnDestroy {
     this.profileTab = tab;
   }
 
+  get monitorOnlyTasks(): TaskView[] {
+    return this.tasks.filter(task => this.isMonitorOnlyTask(task));
+  }
+
+  get autoCheckoutTasks(): TaskView[] {
+    return this.tasks.filter(task => this.isAutoCheckoutTask(task));
+  }
+
+  get checkoutRuns(): TaskView[] {
+    return this.tasks.filter(task => this.isCheckoutChildTask(task));
+  }
+
+  get activeTaskCount(): number {
+    return this.tasks.filter(task => ![TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED].includes(task.state)).length;
+  }
+
+  get selectedShopSupportsCheckout(): boolean {
+    const shop = this.shops.find(item => item.id === this.selectedShopId);
+    return Boolean(shop && this.hasExecutorForShop(shop));
+  }
+
   async loadProfiles(): Promise<void> {
     const result = await this.electron.getProfiles();
-    if (result.success) {
-      this.profiles = result.profiles;
-      if (!this.selectedProfileId && this.profiles.length > 0) {
-        this.selectedProfileId = this.profiles[0].id;
-      }
+    if (!result.success) return;
+    this.profiles = result.profiles;
+    if (!this.selectedProfileId && this.profiles.length > 0) this.selectedProfileId = this.profiles[0].id;
+  }
+
+  async loadProxies(): Promise<void> {
+    const result = await this.electron.getProxies();
+    if (!result.success) return;
+    this.proxies = result.proxies;
+    if (this.selectedTaskProxyId && !this.proxies.some(proxy => proxy.id === this.selectedTaskProxyId)) {
+      this.selectedTaskProxyId = "";
+      if (this.taskProxyMode === "proxy") this.taskProxyMode = "profile-default";
     }
   }
 
   async saveProfile(): Promise<void> {
     this.error = "";
     this.info = "";
-
     const profile = this.newProfile;
+
     if (
       !profile.id.trim() ||
       !profile.name.trim() ||
@@ -260,6 +262,11 @@ export class AppComponent implements OnInit, OnDestroy {
       !profile.address.city.trim()
     ) {
       this.error = "Bitte Profilname, Kontakt und Adresse vollständig ausfüllen.";
+      return;
+    }
+
+    if (profile.preferredProxyId && !this.proxies.some(proxy => proxy.id === profile.preferredProxyId)) {
+      this.error = "Der ausgewählte Standard-Proxy existiert nicht mehr.";
       return;
     }
 
@@ -282,14 +289,7 @@ export class AppComponent implements OnInit, OnDestroy {
         city: profile.address.city.trim(),
         countryCode: profile.address.countryCode.trim().toUpperCase() || "DE"
       },
-      proxy: profile.proxy?.host
-        ? {
-            ...profile.proxy,
-            host: profile.proxy.host.trim(),
-            username: profile.proxy.username?.trim() || "",
-            password: profile.proxy.password || ""
-          }
-        : undefined,
+      preferredProxyId: profile.preferredProxyId || undefined,
       paymentPreference: {
         method: profile.paymentPreference?.method || "card",
         label: profile.paymentPreference?.label?.trim() || undefined
@@ -301,23 +301,85 @@ export class AppComponent implements OnInit, OnDestroy {
       return;
     }
 
-    this.info = "Profil gespeichert. Zahlungspräferenz gespeichert; Kartendaten werden niemals im Profil gespeichert.";
+    this.info = "Profil gespeichert.";
     await this.loadProfiles();
+  }
+
+  editProfile(profile: ProfileView): void {
+    this.newProfile = {
+      ...profile,
+      contact: { ...profile.contact },
+      address: { ...profile.address },
+      proxy: profile.proxy ? { ...profile.proxy } : undefined,
+      browser: { ...(profile.browser ?? {}) },
+      paymentPreference: { ...(profile.paymentPreference ?? { method: "card" }) }
+    };
+    this.profileTab = "identity";
+    this.info = `Profil ${profile.name} geladen.`;
+  }
+
+  resetProfileForm(): void {
+    this.newProfile = this.emptyProfile();
+    this.profileTab = "identity";
+  }
+
+  async saveProxy(): Promise<void> {
+    this.error = "";
+    this.info = "";
+    const proxy = this.newProxy;
+    if (!proxy.id.trim() || !proxy.name.trim() || !proxy.host.trim()) {
+      this.error = "Proxy-ID, Name und Host sind erforderlich.";
+      return;
+    }
+    const port = Number(proxy.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      this.error = "Proxy-Port muss zwischen 1 und 65535 liegen.";
+      return;
+    }
+
+    const result = await this.electron.saveProxy({
+      ...proxy,
+      id: proxy.id.trim(),
+      name: proxy.name.trim(),
+      host: proxy.host.trim(),
+      port,
+      username: proxy.username?.trim() || undefined,
+      password: proxy.password || undefined
+    });
+    if (!result.success) {
+      this.error = result.error;
+      return;
+    }
+    this.info = `Proxy ${result.proxy?.name || proxy.name} gespeichert.`;
+    this.newProxy = this.emptyProxy();
+    await Promise.all([this.loadProxies(), this.loadSystemStatus()]);
+  }
+
+  editProxy(proxy: AresProxy): void {
+    this.newProxy = { ...proxy };
+    this.info = `Proxy ${proxy.name} geladen.`;
+  }
+
+  async deleteProxy(proxyId: string): Promise<void> {
+    this.error = "";
+    this.info = "";
+    const result = await this.electron.deleteProxy(proxyId);
+    if (!result.success) {
+      this.error = result.error || "Proxy konnte nicht gelöscht werden.";
+      return;
+    }
+    if (this.newProxy.id === proxyId) this.newProxy = this.emptyProxy();
+    this.info = "Proxy gelöscht.";
+    await Promise.all([this.loadProxies(), this.loadSystemStatus()]);
   }
 
   async loadShops(): Promise<void> {
     const result = await this.electron.getShops();
-    if (result.success) {
-      this.shops = result.shops;
-      if (Array.isArray(result.platforms) && result.platforms.length) {
-        this.commercePlatforms = result.platforms;
-      }
-      if (Array.isArray(result.executorPlatforms)) {
-        this.executorPlatforms = result.executorPlatforms;
-      }
-      if (!this.selectedShopId && this.shops.length > 0) this.selectedShopId = this.shops[0].id;
-      if (!this.selectedMonitorShopId && this.shops.length > 0) this.selectedMonitorShopId = this.shops[0].id;
-    }
+    if (!result.success) return;
+    this.shops = result.shops;
+    if (Array.isArray(result.platforms) && result.platforms.length) this.commercePlatforms = result.platforms;
+    if (Array.isArray(result.executorPlatforms)) this.executorPlatforms = result.executorPlatforms;
+    if (!this.selectedShopId && this.shops.length > 0) this.selectedShopId = this.shops[0].id;
   }
 
   async loadTasks(): Promise<void> {
@@ -327,11 +389,8 @@ export class AppComponent implements OnInit, OnDestroy {
 
   async loadTaskLogs(taskId: string): Promise<void> {
     const result = await this.electron.getTaskLogs(taskId, 100);
-    if (result.success) {
-      this.taskLogs[taskId] = result.logs;
-    } else {
-      this.error = result.error || "Task-Verlauf konnte nicht geladen werden.";
-    }
+    if (result.success) this.taskLogs[taskId] = result.logs;
+    else this.error = result.error || "Task-Verlauf konnte nicht geladen werden.";
   }
 
   async toggleTaskLogs(taskId: string): Promise<void> {
@@ -345,21 +404,15 @@ export class AppComponent implements OnInit, OnDestroy {
 
   async loadSystemStatus(): Promise<void> {
     const result = await this.electron.getSystemStatus();
-    if (result.success) {
-      this.system = result;
-      if (Array.isArray(result.commercePlatforms) && result.commercePlatforms.length) {
-        this.commercePlatforms = result.commercePlatforms;
-      }
-      if (Array.isArray(result.commerceExecutorPlatforms)) {
-        this.executorPlatforms = result.commerceExecutorPlatforms;
-      }
-    }
+    if (!result.success) return;
+    this.system = result;
+    if (Array.isArray(result.commercePlatforms) && result.commercePlatforms.length) this.commercePlatforms = result.commercePlatforms;
+    if (Array.isArray(result.commerceExecutorPlatforms)) this.executorPlatforms = result.commerceExecutorPlatforms;
   }
 
   async registerShop(): Promise<void> {
     this.error = "";
     this.info = "";
-
     const id = this.newShop.id.trim();
     const baseUrl = this.newShop.baseUrl.trim();
     const platform = this.newShop.platform;
@@ -375,72 +428,67 @@ export class AppComponent implements OnInit, OnDestroy {
       baseUrl,
       platform
     });
-
     if (!result.success) {
       this.error = result.error;
       return;
     }
 
     this.info = result.executorReady
-      ? `${this.getPlatformLabel(platform)} Shop registriert · Browser-Executor bereit.`
-      : `${this.getPlatformLabel(platform)} Shop registriert · Monitor-Adapter kann unabhängig verfügbar sein.`;
+      ? `${this.getPlatformLabel(platform)} Shop registriert · Monitoring + Checkout-Executor bereit.`
+      : `${this.getPlatformLabel(platform)} Shop registriert · Monitoring verfügbar, Auto-Checkout benötigt einen Browser-Executor.`;
     this.newShop = { id: "", name: "", baseUrl: "", platform };
     await Promise.all([this.loadShops(), this.loadSystemStatus()]);
-  }
-
-  async createMonitorTask(): Promise<void> {
-    this.error = "";
-    this.info = "";
-
-    if (!this.monitorName.trim() || !this.selectedMonitorShopId || !this.monitorSearchTerm.trim()) {
-      this.error = "Monitor-Name, Shop und Produkt/Keyword sind erforderlich.";
-      return;
-    }
-
-    const intervalSeconds = Math.max(1, Math.floor(Number(this.monitorIntervalSeconds) || 30));
-    const result = await this.electron.createTask({
-      id: `monitor_${Date.now()}`,
-      name: this.monitorName.trim(),
-      shopId: this.selectedMonitorShopId,
-      data: {
-        productCriteria: {
-          searchTerm: this.monitorSearchTerm.trim()
-        },
-        monitorIntervalMs: intervalSeconds * 1_000
-      }
-    });
-
-    if (!result.success) {
-      this.error = result.error;
-      return;
-    }
-
-    this.info = `Monitor ${result.taskId} erstellt. Unter Tasks auf Start klicken.`;
-    this.monitorName = "";
-    this.monitorSearchTerm = "";
-    await Promise.all([this.loadTasks(), this.loadSystemStatus()]);
   }
 
   async createTask(): Promise<void> {
     this.error = "";
     this.info = "";
 
-    if (!this.taskName.trim() || !this.selectedShopId || !this.selectedProfileId) {
-      this.error = "Task-Name, Shop und Profil sind erforderlich.";
+    if (!this.taskName.trim() || !this.selectedShopId || !this.searchTerm.trim()) {
+      this.error = "Task-Name, Shop und Produkt/Keyword sind erforderlich.";
       return;
     }
 
-    const taskId = `task_${Date.now()}`;
+    if (this.taskMode === "auto-checkout") {
+      if (!this.selectedProfileId) {
+        this.error = "Für Auto-Checkout ist ein Profil erforderlich.";
+        return;
+      }
+      if (!this.selectedShopSupportsCheckout) {
+        this.error = "Für diesen Shop ist kein Browser-Checkout-Executor verfügbar.";
+        return;
+      }
+      if (this.taskProxyMode === "proxy" && !this.selectedTaskProxyId) {
+        this.error = "Bitte einen Proxy für die Checkout-Session auswählen.";
+        return;
+      }
+    }
+
+    const taskId = `${this.taskMode === "auto-checkout" ? "auto" : "monitor"}_${Date.now()}`;
+    const intervalSeconds = Math.max(1, Math.floor(Number(this.taskIntervalSeconds) || 30));
+    const proxySelection: ProxySelection = {
+      mode: this.taskProxyMode,
+      ...(this.taskProxyMode === "proxy" ? { proxyId: this.selectedTaskProxyId } : {})
+    };
+
+    const monitorAction = this.taskMode === "auto-checkout"
+      ? {
+          mode: "auto-checkout",
+          profileId: this.selectedProfileId,
+          proxySelection,
+          headless: this.headless,
+          paymentEnabled: this.taskPaymentEnabled
+        }
+      : { mode: "monitor-only" };
+
     const result = await this.electron.createTask({
       id: taskId,
       name: this.taskName.trim(),
       shopId: this.selectedShopId,
       data: {
-        searchTerm: this.searchTerm.trim(),
-        browserConfig: {
-          headless: this.headless
-        },
-        profileId: this.selectedProfileId || undefined
+        productCriteria: { searchTerm: this.searchTerm.trim() },
+        monitorIntervalMs: intervalSeconds * 1_000,
+        monitorAction
       }
     });
 
@@ -449,82 +497,53 @@ export class AppComponent implements OnInit, OnDestroy {
       return;
     }
 
-    if (this.taskPaymentEnabled) {
+    if (this.taskMode === "auto-checkout" && this.taskPaymentEnabled) {
       const paymentResult = await this.electron.setPaymentSession(taskId, this.buildPaymentSession());
       if (!paymentResult.success) {
         this.error = `Task erstellt, aber Zahlungs-Session konnte nicht gesetzt werden: ${paymentResult.error}`;
+        return;
       }
     }
 
-    this.info = this.taskPaymentEnabled
-      ? `Browser-Task ${result.taskId} erstellt · Zahlungsdaten liegen nur im RAM bis Task-Ende.`
-      : `Browser-Task ${result.taskId} erstellt.`;
+    this.info = this.taskMode === "auto-checkout"
+      ? `Auto-Checkout-Task ${result.taskId} erstellt. Bei Verfügbarkeit startet ARES genau eine isolierte Checkout-Session.`
+      : `Monitoring-Task ${result.taskId} erstellt.`;
     this.taskName = "";
     this.searchTerm = "";
     this.clearSensitivePaymentInputs();
     await Promise.all([this.loadTasks(), this.loadSystemStatus()]);
   }
 
-  syncPaymentPreference(): void {
+  syncProfileDefaults(): void {
     const profile = this.profiles.find(item => item.id === this.selectedProfileId);
-    if (!profile?.paymentPreference?.method) return;
-    this.taskPaymentMethod = profile.paymentPreference.method;
-    this.taskPaymentLabel = profile.paymentPreference.label || "";
-  }
-
-  private buildPaymentSession(): CheckoutPaymentSession {
-    const session: CheckoutPaymentSession = {
-      method: this.taskPaymentMethod,
-      label: this.taskPaymentLabel.trim() || undefined
-    };
-    if (this.taskPaymentMethod === "card") {
-      session.card = {
-        holderName: this.sessionCardHolderName.trim() || undefined,
-        cardNumber: this.sessionCardNumber.trim() || undefined,
-        expiry: this.sessionCardExpiry.trim() || undefined,
-        securityCode: this.sessionCardSecurityCode.trim() || undefined
-      };
+    if (!profile) return;
+    if (profile.paymentPreference?.method) {
+      this.taskPaymentMethod = profile.paymentPreference.method;
+      this.taskPaymentLabel = profile.paymentPreference.label || "";
     }
-    return session;
-  }
-
-  private clearSensitivePaymentInputs(): void {
-    this.sessionCardNumber = "";
-    this.sessionCardExpiry = "";
-    this.sessionCardSecurityCode = "";
+    this.taskProxyMode = "profile-default";
+    this.selectedTaskProxyId = "";
   }
 
   async startTask(taskId: string): Promise<void> {
     this.error = "";
     const result = await this.electron.startTask(taskId);
     if (!result.success) this.error = result.error;
-    await Promise.all([
-      this.loadTasks(),
-      this.loadSystemStatus(),
-      this.expandedTaskLogId === taskId ? this.loadTaskLogs(taskId) : Promise.resolve()
-    ]);
+    await this.refreshTaskView(taskId);
   }
 
   async pauseTask(taskId: string): Promise<void> {
     this.error = "";
     const result = await this.electron.pauseTask(taskId);
     if (!result.success) this.error = result.error;
-    await Promise.all([
-      this.loadTasks(),
-      this.loadSystemStatus(),
-      this.expandedTaskLogId === taskId ? this.loadTaskLogs(taskId) : Promise.resolve()
-    ]);
+    await this.refreshTaskView(taskId);
   }
 
   async resumeTask(taskId: string): Promise<void> {
     this.error = "";
     const result = await this.electron.resumeTask(taskId);
     if (!result.success) this.error = result.error;
-    await Promise.all([
-      this.loadTasks(),
-      this.loadSystemStatus(),
-      this.expandedTaskLogId === taskId ? this.loadTaskLogs(taskId) : Promise.resolve()
-    ]);
+    await this.refreshTaskView(taskId);
   }
 
   async stopTask(taskId: string): Promise<void> {
@@ -532,11 +551,7 @@ export class AppComponent implements OnInit, OnDestroy {
     await this.electron.clearPaymentSession(taskId);
     const result = await this.electron.stopTask(taskId);
     if (!result.success) this.error = result.error;
-    await Promise.all([
-      this.loadTasks(),
-      this.loadSystemStatus(),
-      this.expandedTaskLogId === taskId ? this.loadTaskLogs(taskId) : Promise.resolve()
-    ]);
+    await this.refreshTaskView(taskId);
   }
 
   isMonitorTask(task: TaskView): boolean {
@@ -544,22 +559,78 @@ export class AppComponent implements OnInit, OnDestroy {
     return Boolean(criteria && typeof criteria === "object");
   }
 
+  isAutoCheckoutTask(task: TaskView): boolean {
+    const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
+    return this.isMonitorTask(task) && action?.["mode"] === "auto-checkout";
+  }
+
+  isMonitorOnlyTask(task: TaskView): boolean {
+    return this.isMonitorTask(task) && !this.isAutoCheckoutTask(task);
+  }
+
+  isCheckoutChildTask(task: TaskView): boolean {
+    const trigger = task.config.data?.["triggerSource"] as Record<string, unknown> | undefined;
+    return Boolean(trigger?.["parentTaskId"]);
+  }
+
   getTaskKind(task: TaskView): string {
-    return this.isMonitorTask(task) ? "MONITOR" : "BROWSER";
+    if (this.isAutoCheckoutTask(task)) return "AUTO CHECKOUT";
+    if (this.isMonitorOnlyTask(task)) return "MONITOR";
+    if (this.isCheckoutChildTask(task)) return "CHECKOUT RUN";
+    return "BROWSER";
   }
 
   getTaskProfileName(task: TaskView): string {
-    if (this.isMonitorTask(task)) return "nicht benötigt";
-    const profileId = String(task.config.data?.["profileId"] ?? "");
-    if (!profileId) return "kein Profil";
+    let profileId = "";
+    if (this.isAutoCheckoutTask(task)) {
+      const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
+      profileId = String(action?.["profileId"] ?? "");
+    } else if (!this.isMonitorTask(task)) {
+      profileId = String(task.config.data?.["profileId"] ?? "");
+    }
+    if (!profileId) return this.isMonitorOnlyTask(task) ? "nicht benötigt" : "kein Profil";
     return this.profiles.find(profile => profile.id === profileId)?.name ?? profileId;
   }
 
+  getTaskProxyStatus(task: TaskView): string {
+    if (this.isMonitorOnlyTask(task)) return "nicht benötigt";
+
+    if (this.isAutoCheckoutTask(task)) {
+      const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
+      const selection = action?.["proxySelection"] as ProxySelection | undefined;
+      const profileId = String(action?.["profileId"] ?? "");
+      return this.proxySelectionLabel(selection, profileId);
+    }
+
+    const runtime = task.config.data?.["proxyRuntime"] as Record<string, unknown> | undefined;
+    if (runtime?.["mode"] === "direct") return "Direktverbindung";
+    if (runtime?.["proxyName"]) return String(runtime["proxyName"]);
+    if (runtime?.["mode"] === "legacy-profile") return "Legacy Profil-Proxy";
+
+    const selection = task.config.data?.["proxySelection"] as ProxySelection | undefined;
+    const profileId = String(task.config.data?.["profileId"] ?? "");
+    return this.proxySelectionLabel(selection, profileId);
+  }
+
+  getTaskAutomationStatus(task: TaskView): string {
+    if (!this.isAutoCheckoutTask(task)) return "";
+    const runtime = task.config.data?.["autoCheckoutRuntime"] as Record<string, unknown> | undefined;
+    if (!runtime) return "Wartet auf verfügbares Produkt";
+    if (runtime["status"] === "failed") return `Trigger fehlgeschlagen: ${String(runtime["error"] ?? "unbekannt")}`;
+    if (runtime["childTaskId"]) return `Checkout gestartet · ${String(runtime["childTaskId"])}`;
+    return "Checkout wird gestartet";
+  }
+
+  getTaskParentId(task: TaskView): string {
+    const trigger = task.config.data?.["triggerSource"] as Record<string, unknown> | undefined;
+    return trigger?.["parentTaskId"] ? String(trigger["parentTaskId"]) : "";
+  }
+
   getTaskCaptchaStatus(task: TaskView): string {
-    if (this.isMonitorTask(task)) return "Monitor nutzt keinen Browser-Challenge-Flow";
+    if (this.isMonitorTask(task)) return "Browser startet erst beim Checkout-Trigger";
     const data = task.config.data ?? {};
     const value = data["liveChallengeStatus"] ?? data["captchaStatus"] ?? data["challengeStatus"];
-    return value ? String(value) : "Kein aktueller Captcha-Status";
+    return value ? String(value) : "Kein aktueller Challenge-Status";
   }
 
   getTaskChallengeType(task: TaskView): string {
@@ -569,9 +640,13 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   getTaskPaymentStatus(task: TaskView): string {
-    if (this.isMonitorTask(task)) return "";
+    if (this.isMonitorOnlyTask(task)) return "";
+    if (this.isAutoCheckoutTask(task)) {
+      const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
+      return action?.["paymentEnabled"] ? "Session-Payment wird beim Treffer an den Checkout-Run übergeben." : "Payment bleibt manuell.";
+    }
     const preparation = task.config.data?.["paymentPreparation"] as Record<string, unknown> | undefined;
-    if (!preparation) return "Zahlungsart wird im Checkout erkannt, sobald sie sichtbar ist.";
+    if (!preparation) return "Wird im Checkout erkannt, sobald sichtbar.";
     return String(preparation["note"] ?? "Zahlungsstatus aktualisiert.");
   }
 
@@ -579,6 +654,20 @@ export class AppComponent implements OnInit, OnDestroy {
     const preparation = task.config.data?.["paymentPreparation"] as Record<string, unknown> | undefined;
     const methods = preparation?.["detectedMethods"];
     return Array.isArray(methods) && methods.length ? methods.join(", ") : "";
+  }
+
+  getProfileProxyName(profile: ProfileView): string {
+    if (profile.preferredProxyId) return this.getProxyName(profile.preferredProxyId);
+    if (profile.proxy?.host) return "Legacy Proxy";
+    return "Direkt";
+  }
+
+  getProxyName(proxyId: string): string {
+    return this.proxies.find(proxy => proxy.id === proxyId)?.name ?? proxyId;
+  }
+
+  getProxyEndpoint(proxy: AresProxy): string {
+    return `${proxy.protocol}://${proxy.host}:${proxy.port}`;
   }
 
   getCaptchaKeyStatusLabel(): string {
@@ -593,31 +682,18 @@ export class AppComponent implements OnInit, OnDestroy {
 
   getPlatformLabel(platform: CommercePlatform): string {
     const labels: Record<CommercePlatform, string> = {
-      shopify: "Shopify",
-      woocommerce: "WooCommerce",
-      jtl: "JTL-Shop",
-      wix: "Wix Stores",
-      shopware: "Shopware",
-      magento: "Magento / Adobe Commerce",
-      bigcommerce: "BigCommerce",
-      prestashop: "PrestaShop",
-      squarespace: "Squarespace Commerce",
-      ecwid: "Ecwid",
-      lightspeed: "Lightspeed eCom",
-      commercetools: "commercetools",
-      "salesforce-commerce-cloud": "Salesforce Commerce Cloud",
-      custom: "Custom / Sonstige"
+      shopify: "Shopify", woocommerce: "WooCommerce", jtl: "JTL-Shop", wix: "Wix Stores",
+      shopware: "Shopware", magento: "Magento / Adobe Commerce", bigcommerce: "BigCommerce",
+      prestashop: "PrestaShop", squarespace: "Squarespace Commerce", ecwid: "Ecwid",
+      lightspeed: "Lightspeed eCom", commercetools: "commercetools",
+      "salesforce-commerce-cloud": "Salesforce Commerce Cloud", custom: "Custom / Sonstige"
     };
     return labels[platform] || platform;
   }
 
   getPaymentMethodLabel(method?: PaymentMethod): string {
     const labels: Record<PaymentMethod, string> = {
-      card: "Karte",
-      paypal: "PayPal",
-      "shop-pay": "Shop Pay",
-      klarna: "Klarna",
-      other: "Andere"
+      card: "Karte", paypal: "PayPal", "shop-pay": "Shop Pay", klarna: "Klarna", other: "Andere"
     };
     return method ? labels[method] : "Nicht gesetzt";
   }
@@ -667,16 +743,8 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   isPausable(task: TaskView): boolean {
-    return [
-      TaskState.QUEUED,
-      TaskState.STARTING,
-      TaskState.RUNNING,
-      TaskState.WAITING_QUEUE,
-      TaskState.PRODUCT_FOUND,
-      TaskState.CART,
-      TaskState.CHECKOUT,
-      TaskState.RETRYING
-    ].includes(task.state);
+    return [TaskState.QUEUED, TaskState.STARTING, TaskState.RUNNING, TaskState.WAITING_QUEUE,
+      TaskState.PRODUCT_FOUND, TaskState.CART, TaskState.CHECKOUT, TaskState.RETRYING].includes(task.state);
   }
 
   isResumable(task: TaskView): boolean {
@@ -684,23 +752,64 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   isStoppable(task: TaskView): boolean {
-    return [
-      TaskState.STARTING,
-      TaskState.RUNNING,
-      TaskState.WAITING_QUEUE,
-      TaskState.PRODUCT_FOUND,
-      TaskState.CART,
-      TaskState.CHECKOUT,
-      TaskState.RETRYING,
-      TaskState.PAUSED
-    ].includes(task.state);
+    return [TaskState.STARTING, TaskState.RUNNING, TaskState.WAITING_QUEUE, TaskState.PRODUCT_FOUND,
+      TaskState.CART, TaskState.CHECKOUT, TaskState.RETRYING, TaskState.PAUSED].includes(task.state);
   }
 
-  trackTask(_index: number, task: TaskView): string {
-    return task.id;
+  trackTask(_index: number, task: TaskView): string { return task.id; }
+  trackShop(_index: number, shop: ShopView): string { return shop.id; }
+  trackProxy(_index: number, proxy: AresProxy): string { return proxy.id; }
+
+  private proxySelectionLabel(selection: ProxySelection | undefined, profileId: string): string {
+    if (selection?.mode === "direct") return "Direktverbindung";
+    if (selection?.mode === "proxy" && selection.proxyId) return this.getProxyName(selection.proxyId);
+    const profile = this.profiles.find(item => item.id === profileId);
+    return profile?.preferredProxyId ? `Profilstandard · ${this.getProxyName(profile.preferredProxyId)}` : "Profilstandard · direkt";
   }
 
-  trackShop(_index: number, shop: ShopView): string {
-    return shop.id;
+  private buildPaymentSession(): CheckoutPaymentSession {
+    const session: CheckoutPaymentSession = {
+      method: this.taskPaymentMethod,
+      label: this.taskPaymentLabel.trim() || undefined
+    };
+    if (this.taskPaymentMethod === "card") {
+      session.card = {
+        holderName: this.sessionCardHolderName.trim() || undefined,
+        cardNumber: this.sessionCardNumber.trim() || undefined,
+        expiry: this.sessionCardExpiry.trim() || undefined,
+        securityCode: this.sessionCardSecurityCode.trim() || undefined
+      };
+    }
+    return session;
+  }
+
+  private clearSensitivePaymentInputs(): void {
+    this.sessionCardNumber = "";
+    this.sessionCardExpiry = "";
+    this.sessionCardSecurityCode = "";
+  }
+
+  private async refreshTaskView(taskId: string): Promise<void> {
+    await Promise.all([
+      this.loadTasks(),
+      this.loadSystemStatus(),
+      this.expandedTaskLogId === taskId ? this.loadTaskLogs(taskId) : Promise.resolve()
+    ]);
+  }
+
+  private emptyProfile(): ProfileView {
+    return {
+      id: "",
+      name: "",
+      contact: { firstName: "", lastName: "", email: "", phone: "" },
+      address: { address1: "", address2: "", postalCode: "", city: "", countryCode: "DE" },
+      preferredProxyId: "",
+      browser: { headless: false, userAgent: "" },
+      paymentPreference: { method: "card", label: "" }
+    };
+  }
+
+  private emptyProxy(): AresProxy {
+    return { id: "", name: "", protocol: "http", host: "", port: 8080, username: "", password: "" };
   }
 }

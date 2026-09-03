@@ -27,6 +27,7 @@ interface BrowserPreviewLog {
 @Injectable({ providedIn: "root" })
 export class ElectronService {
   private readonly previewProfiles: any[] = [];
+  private readonly previewProxies: any[] = [];
   private readonly previewShops: any[] = [];
   private readonly previewTasks: BrowserPreviewTask[] = [];
   private readonly previewTaskLogs = new Map<string, BrowserPreviewLog[]>();
@@ -45,7 +46,6 @@ export class ElectronService {
 
   saveProfile(profile: unknown): Promise<any> {
     if (this.api) return this.api.saveProfile(profile);
-
     const savedProfile = profile as { id?: string };
     const index = this.previewProfiles.findIndex(item => item.id === savedProfile.id);
     if (index >= 0) this.previewProfiles[index] = profile;
@@ -57,6 +57,31 @@ export class ElectronService {
     if (this.api) return this.api.deleteProfile(profileId);
     const index = this.previewProfiles.findIndex(item => item.id === profileId);
     if (index >= 0) this.previewProfiles.splice(index, 1);
+    return Promise.resolve({ success: true });
+  }
+
+  getProxies(): Promise<any> {
+    if (this.api) return this.api.getProxies();
+    return Promise.resolve({ success: true, proxies: this.previewProxies });
+  }
+
+  saveProxy(proxy: unknown): Promise<any> {
+    if (this.api) return this.api.saveProxy(proxy);
+    const saved = proxy as { id?: string };
+    const index = this.previewProxies.findIndex(item => item.id === saved.id);
+    if (index >= 0) this.previewProxies[index] = proxy;
+    else this.previewProxies.push(proxy);
+    return Promise.resolve({ success: true, proxy });
+  }
+
+  deleteProxy(proxyId: string): Promise<any> {
+    if (this.api) return this.api.deleteProxy(proxyId);
+    const assignedProfile = this.previewProfiles.find(item => item.preferredProxyId === proxyId);
+    if (assignedProfile) {
+      return Promise.resolve({ success: false, error: `Proxy ist Profil ${assignedProfile.name || assignedProfile.id} zugeordnet.` });
+    }
+    const index = this.previewProxies.findIndex(item => item.id === proxyId);
+    if (index >= 0) this.previewProxies.splice(index, 1);
     return Promise.resolve({ success: true });
   }
 
@@ -73,17 +98,11 @@ export class ElectronService {
 
   registerShop(config: unknown): Promise<any> {
     if (this.api) return this.api.registerShop(config);
-
     const shop = config as { id?: string; name?: string; baseUrl?: string; platform?: string };
-    const normalizedShop = {
-      ...shop,
-      name: shop.name || shop.id,
-      platform: shop.platform || "shopify"
-    };
+    const normalizedShop = { ...shop, name: shop.name || shop.id, platform: shop.platform || "shopify" };
     const index = this.previewShops.findIndex(item => item.id === shop.id);
     if (index >= 0) this.previewShops[index] = normalizedShop;
     else this.previewShops.push(normalizedShop);
-
     return Promise.resolve({
       success: true,
       shop: normalizedShop,
@@ -94,7 +113,6 @@ export class ElectronService {
 
   createTask(config: unknown): Promise<any> {
     if (this.api) return this.api.createTask(config);
-
     const taskConfig = config as { id?: string; name?: string; shopId?: string; data?: Record<string, unknown> };
     const task: BrowserPreviewTask = {
       id: taskConfig.id || `preview_task_${Date.now()}`,
@@ -111,7 +129,6 @@ export class ElectronService {
       retries: 0,
       maxRetries: 0
     };
-
     this.previewTasks.push(task);
     this.recordPreviewLog(task, "taskCreated", "info", "Task erstellt");
     this.recordPreviewLog(task, "taskStateChanged", "info", "CREATED -> QUEUED");
@@ -207,6 +224,8 @@ export class ElectronService {
       availableWorkers: 0,
       shopCount: this.previewShops.length,
       taskCount: this.previewTasks.length,
+      profileCount: this.previewProfiles.length,
+      proxyCount: this.previewProxies.length,
       commercePlatforms: COMMERCE_PLATFORMS,
       commerceExecutorPlatforms: ["shopify"],
       commerceMonitorReady: true,
@@ -243,12 +262,7 @@ export class ElectronService {
     return () => undefined;
   }
 
-  private recordPreviewLog(
-    task: BrowserPreviewTask,
-    event: string,
-    level: BrowserPreviewLog["level"],
-    message: string
-  ): void {
+  private recordPreviewLog(task: BrowserPreviewTask, event: string, level: BrowserPreviewLog["level"], message: string): void {
     const logs = this.previewTaskLogs.get(task.id) ?? [];
     logs.push({
       id: ++this.previewLogId,

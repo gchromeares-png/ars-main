@@ -36,3 +36,11 @@ jobs:
         env:
           ARES_RUN_BROWSER_INTEGRATION: "1"
         run: npm test -- --runInBand
+
+      - name: Upload auto-checkout test screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-checkout-parallel-screenshot
+          path: test-artifacts/auto-checkout-parallel.png
+          if-no-files-found: ignore
