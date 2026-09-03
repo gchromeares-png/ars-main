@@ -2,7 +2,7 @@
   "name": "ares-task-orchestrator",
   "version": "1.0.0",
   "private": true,
-  "description": "ARES Task Orchestrator prototype",
+  "description": "ARES Task Orchestrator with persistent task history",
   "main": "dist/backend/electron/main.js",
   "scripts": {
     "build": "npm run build:backend && npm run build:ui",
