@@ -11,6 +11,8 @@ import { BezierCursorService } from "../browser/bezier-cursor-service";
 import type { BrowserWorker } from "../browser-worker/browser-worker";
 import { PatchrightBrowserWorker } from "../browser-worker/patchright-browser-worker";
 import type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
+import { IncapsulaWaitingRoom } from "../browser-worker/incapsula-waiting-room";
+import type { WaitingRoomStatus } from "../browser-worker/incapsula-waiting-room";
 import { LiveChallengeHandler } from "../challenges/live-challenge-handler";
 import type { LiveChallengeResult } from "../challenges/types";
 
@@ -55,12 +57,14 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
   private readonly cacheTtlMs = 45_000;
   private readonly maxFallbackPages = 2;
   private readonly cursor = new BezierCursorService();
+  private readonly waitingRoom = new IncapsulaWaitingRoom();
 
   constructor(
     private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
     private readonly getProfile: (profileId: string) => AresProfile | undefined = () => undefined,
     private readonly browserWorker: BrowserWorker = new PatchrightBrowserWorker(),
-    private readonly liveChallengeHandler: LiveChallengeHandler = new LiveChallengeHandler()
+    private readonly liveChallengeHandler: LiveChallengeHandler = new LiveChallengeHandler(),
+    private readonly onRuntimeStatus?: (taskId: string, dataPatch: Record<string, unknown>) => void
   ) {}
 
   async execute(task: Task): Promise<boolean> {
@@ -133,7 +137,11 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       }
 
       const cartUrl = new URL(`/cart/${found.product.variantId}:1`, baseUrl).toString();
-      await page.goto(cartUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      const cartNavigation = await this.navigateWithWaitingRoom(task, page, cartUrl);
+      if (cartNavigation === "cancelled" || cartNavigation === "timed-out") {
+        await this.browserWorker.closeContext(task.id).catch(() => undefined);
+        return false;
+      }
       await this.sleep(900);
 
       // Handle potential live checkpoint on cart
@@ -146,7 +154,11 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       });
 
       const checkoutUrl = new URL("/checkout", baseUrl).toString();
-      await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      const checkoutNavigation = await this.navigateWithWaitingRoom(task, page, checkoutUrl);
+      if (checkoutNavigation === "cancelled" || checkoutNavigation === "timed-out") {
+        await this.browserWorker.closeContext(task.id).catch(() => undefined);
+        return false;
+      }
 
       // Handle live checkpoint or captcha on checkout entry
       const challengeResult = await this.liveChallengeHandler.handleLiveChallenge(page, {
@@ -234,6 +246,50 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     url.search = "";
     url.hash = "";
     return url.toString();
+  }
+
+  private waitingRoomTimeoutMs(task: Task): number {
+    const raw = Number((task.config.data ?? {})["waitingRoomTimeoutMs"] ?? 60 * 60_000);
+    if (!Number.isFinite(raw)) return 60 * 60_000;
+    return Math.min(60 * 60_000, Math.max(10_000, Math.floor(raw)));
+  }
+
+  private reportWaitingRoom(task: Task, status: WaitingRoomStatus): void {
+    task.config.data = {
+      ...(task.config.data ?? {}),
+      waitingRoom: status
+    };
+    this.onRuntimeStatus?.(task.id, { waitingRoom: status });
+  }
+
+  private async navigateWithWaitingRoom(
+    task: Task,
+    page: Page,
+    url: string
+  ): Promise<"clear" | "released" | "cancelled" | "timed-out"> {
+    let navigationError: unknown;
+
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    } catch (error) {
+      navigationError = error;
+    }
+
+    const waiting = await this.waitingRoom.waitIfNeeded(page, {
+      maxWaitMs: this.waitingRoomTimeoutMs(task),
+      onStatus: status => this.reportWaitingRoom(task, status)
+    });
+
+    if (waiting.state === "timed-out") {
+      task.lastError = `Waiting Room nach ${Math.round(waiting.elapsedMs / 60_000)} Minuten nicht verlassen.`;
+      return "timed-out";
+    }
+
+    if (waiting.state === "cancelled") return "cancelled";
+    if (waiting.state === "released") return "released";
+
+    if (navigationError) throw navigationError;
+    return "clear";
   }
 
   private async fillCheckoutProfile(
