@@ -7,7 +7,9 @@ import type { Page } from "patchright";
 import { ITaskExecutor } from "../interfaces";
 import { Task } from "../models";
 import { AresProfile } from "../profiles/models";
-import { BezierCursorService } from "../browser/bezier-cursor-service";
+import { FieldSemanticResolver, OllamaEmbeddingProvider, type FieldIntent } from "../browser-worker/field-semantic-resolver";
+import { SemanticFieldAutofill, type FieldValueMap } from "../browser-worker/semantic-field-autofill";
+import { GhostCursorUiInteractionHelper } from "../browser-worker/ui-interaction-helper";
 import type { BrowserWorker } from "../browser-worker/browser-worker";
 import { PatchrightBrowserWorker } from "../browser-worker/patchright-browser-worker";
 import type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
@@ -16,6 +18,8 @@ import type { LiveChallengeResult } from "../challenges/types";
 import { ShopifyQueueWaiter } from "./queue-waiter";
 
 export type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
+
+type CheckoutFieldIntent = Exclude<FieldIntent, "unknown">;
 
 interface ShopifyVariant {
   id: number | string;
@@ -55,7 +59,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
   private readonly requestDelayMs = 500;
   private readonly cacheTtlMs = 45_000;
   private readonly maxFallbackPages = 2;
-  private readonly cursor = new BezierCursorService();
+  private readonly fieldResolver = new FieldSemanticResolver(new OllamaEmbeddingProvider());
 
   constructor(
     private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
@@ -287,7 +291,20 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     page: Page,
     profile: AresProfile
   ): Promise<{ filled: string[]; missing: string[] }> {
-    const fields = [
+    const countryCode = (profile.address.countryCode || "DE").toUpperCase();
+    const values: FieldValueMap = {
+      email: profile.contact.email,
+      firstName: profile.contact.firstName,
+      lastName: profile.contact.lastName,
+      address1: profile.address.address1,
+      address2: profile.address.address2 || "",
+      city: profile.address.city,
+      postalCode: profile.address.postalCode,
+      phone: profile.contact.phone || "",
+      countryCode
+    };
+
+    const fields: Array<{ key: CheckoutFieldIntent; value: string; selectors: string[] }> = [
       { key: "email", value: profile.contact.email, selectors: ['input[name="email"]', 'input[type="email"]', 'input[autocomplete="email"]'] },
       { key: "firstName", value: profile.contact.firstName, selectors: ['input[name="firstName"]', 'input[name*="first_name" i]', 'input[autocomplete="given-name"]'] },
       { key: "lastName", value: profile.contact.lastName, selectors: ['input[name="lastName"]', 'input[name*="last_name" i]', 'input[autocomplete="family-name"]'] },
@@ -298,61 +315,53 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       { key: "phone", value: profile.contact.phone || "", selectors: ['input[name="phone"]', 'input[type="tel"]', 'input[autocomplete="tel"]'] }
     ];
 
-    const required = new Set(["email", "firstName", "lastName", "address1", "city", "postalCode"]);
-    let filled: string[] = [];
-    let missing: string[] = [];
+    const interactions = new GhostCursorUiInteractionHelper(page);
+    const autofill = new SemanticFieldAutofill(page, interactions, this.fieldResolver);
+    const required = new Set<CheckoutFieldIntent>(["email", "firstName", "lastName", "address1", "city", "postalCode"]);
 
     for (let attempt = 0; attempt < 12; attempt++) {
       if (attempt > 0) await this.sleep(700);
       if (attempt === 3 || attempt === 7) {
         await this.liveChallengeHandler.handleLiveChallenge(page, { timeoutMs: 20_000 });
       }
-      filled = [];
-      missing = [];
 
+      // Fast semantic pass first. One batched local embedding request handles all
+      // unresolved controls; it never receives profile values.
+      await autofill.fillSemantic(values).catch(() => undefined);
+
+      // Compatibility fallback: existing selectors are kept, but share the same
+      // idempotent completion state so a successful logical field is not filled twice.
       for (const field of fields) {
-        if (!field.value) continue;
-        let done = false;
+        if (!field.value?.trim()) continue;
+        if (await autofill.isComplete(field.key, field.value)) continue;
 
         for (const selector of field.selectors) {
           const locator = page.locator(selector).first();
           try {
-            if (await locator.isVisible({ timeout: 250 })) {
-              await this.cursor.clickLocator(page, locator);
-              await locator.fill(field.value, { timeout: 1_000 });
-              filled.push(field.key);
-              done = true;
-              break;
-            }
+            if (await autofill.fillLocator(field.key, locator, field.value)) break;
           } catch {
             // Checkout may still be rendering; try the next selector/attempt.
           }
         }
-
-        if (!done) missing.push(field.key);
       }
 
-      const countryCode = (profile.address.countryCode || "DE").toUpperCase();
-      let countryDone = false;
-      for (const selector of ['select[name="countryCode"]', 'select[name*="country" i]']) {
-        try {
-          const locator = page.locator(selector).first();
-          if (await locator.isVisible({ timeout: 250 })) {
-            await locator.selectOption(countryCode, { timeout: 1_000 });
-            filled.push("countryCode");
-            countryDone = true;
-            break;
+      if (!await autofill.isComplete("countryCode", countryCode)) {
+        for (const selector of ['select[name="countryCode"]', 'select[name*="country" i]']) {
+          try {
+            const locator = page.locator(selector).first();
+            if (await autofill.selectLocator("countryCode", locator, countryCode)) break;
+          } catch {
+            // Some Shopify checkout versions expose country differently.
           }
-        } catch {
-          // Some Shopify checkout versions expose country differently.
         }
       }
-      if (!countryDone) missing.push("countryCode");
 
-      if ([...required].every(key => filled.includes(key))) break;
+      const snapshot = await autofill.result(values);
+      if ([...required].every(key => snapshot.filled.includes(key))) break;
     }
 
-    return { filled: [...new Set(filled)], missing: [...new Set(missing)] };
+    const result = await autofill.result(values);
+    return { filled: result.filled, missing: result.missing };
   }
 
   private async findProduct(baseUrl: string, searchTerm: string, page?: Page): Promise<ShopifyFlowResult> {
