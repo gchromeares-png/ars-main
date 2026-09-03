@@ -137,7 +137,8 @@ export class LiveChallengeHandler {
     // =========================================================================
     // 🚀 STUFE 2: GHOST-CURSOR MAUS-INTERAKTION + MENSCHLICHER FALLBACK
     // =========================================================================
-    if (currentType === "turnstile" && options.autoSolveTurnstile !== false) {
+    // Klickt bei normalem Turnstile UND bei Cloudflare-Vorschaltwänden ("generic-interstitial")
+    if ((currentType === "turnstile" || currentType === "generic-interstitial") && options.autoSolveTurnstile !== false) {
       await this.attemptTurnstileClick(page);
     } else if (currentType === "hcaptcha") {
       await this.attemptHCaptchaClick(page);
@@ -175,7 +176,7 @@ export class LiveChallengeHandler {
       // Alle 4 Sekunden erneute Interaktion mit ghost-cursor versuchen
       if (!isQueue && Date.now() - lastInteractionTime > 4_000) {
         lastInteractionTime = Date.now();
-        if (currentType === "turnstile" && options.autoSolveTurnstile !== false) {
+        if ((currentType === "turnstile" || currentType === "generic-interstitial") && options.autoSolveTurnstile !== false) {
           await this.attemptTurnstileClick(page);
         } else if (currentType === "hcaptcha") {
           await this.attemptHCaptchaClick(page);
@@ -284,6 +285,15 @@ export class LiveChallengeHandler {
 
   async checkIfResolved(page: Page): Promise<boolean> {
     if (page.isClosed()) return false;
+
+    // Schutz vor vorzeitigem Verlassen bei Cloudflare-Wänden
+    let title = "";
+    if (typeof page.title === "function") {
+      title = (await page.title().catch(() => "")) || "";
+    }
+    if (title.toLowerCase().includes("just a moment")) {
+      return false;
+    }
 
     const currentUrl = page.url();
     const isCheckpointUrl =
