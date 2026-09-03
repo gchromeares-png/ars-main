@@ -72,6 +72,8 @@ export interface ClickInteractionOptions extends BaseInteractionOptions {
 export interface FillInteractionOptions extends BaseInteractionOptions {}
 export interface SelectInteractionOptions extends BaseInteractionOptions {}
 export interface FocusInteractionOptions extends BaseInteractionOptions {}
+export interface HoverInteractionOptions extends BaseInteractionOptions {}
+export interface ScrollInteractionOptions extends BaseInteractionOptions {}
 
 export interface InteractionAttemptResult {
   success: boolean;

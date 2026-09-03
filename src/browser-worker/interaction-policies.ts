@@ -16,6 +16,11 @@ export const DEFAULT_READINESS_POLICY: InteractionReadinessPolicy = {
   evaluate: (_locator, state) => state.visible && state.enabled && state.stable && Boolean(state.box)
 };
 
+export const VISIBLE_STABLE_POLICY: InteractionReadinessPolicy = {
+  name: "visible-stable",
+  evaluate: (_locator, state) => state.visible && state.stable && Boolean(state.box)
+};
+
 export function locatorValueEquals(locator: Locator, expected: string): InteractionOutcomeExpectation {
   return {
     name: "locator-value-equals",
@@ -27,6 +32,13 @@ export function locatorFocused(locator: Locator): InteractionOutcomeExpectation 
   return {
     name: "locator-focused",
     verify: async () => locator.evaluate(element => element === document.activeElement).catch(() => false)
+  };
+}
+
+export function locatorHovered(locator: Locator): InteractionOutcomeExpectation {
+  return {
+    name: "locator-hovered",
+    verify: async () => locator.evaluate(element => element.matches(":hover")).catch(() => false)
   };
 }
 

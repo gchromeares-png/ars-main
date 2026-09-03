@@ -5,6 +5,7 @@ import {
   type ClickInteractionOptions,
   type FillInteractionOptions,
   type FocusInteractionOptions,
+  type HoverInteractionOptions,
   type InteractionAttemptResult,
   type InteractionAttemptTrace,
   type InteractionBox,
@@ -12,12 +13,16 @@ import {
   type InteractionPoint,
   type InteractionProfiles,
   type InteractionTargetState,
+  type ScrollInteractionOptions,
   type SelectInteractionOptions
 } from "./interaction-models";
 import {
   DEFAULT_READINESS_POLICY,
+  VISIBLE_STABLE_POLICY,
   locatorFocused,
-  locatorValueEquals
+  locatorHovered,
+  locatorValueEquals,
+  locatorVisible
 } from "./interaction-policies";
 import type { InteractionOutcomeExpectation, InteractionReadinessPolicy } from "./interaction-policies";
 import { SeededRandom } from "./seeded-random";
@@ -169,6 +174,84 @@ export class InteractionEngine {
       options.expected ?? locatorFocused(locator),
       () => locator.focus()
     );
+  }
+
+  async hover(locator: Locator, options: HoverInteractionOptions = {}): Promise<InteractionAttemptResult> {
+    return this.runFormAction(
+      locator,
+      options,
+      "ares-hover",
+      options.expected ?? locatorHovered(locator),
+      () => locator.hover()
+    );
+  }
+
+  async scrollIntoView(locator: Locator, options: ScrollInteractionOptions = {}): Promise<InteractionAttemptResult> {
+    const attempts = this.attemptCount(options.attempts);
+    const readinessTimeoutMs = options.readinessTimeoutMs ?? this.profiles.form.readinessTimeoutMs;
+    const verifyTimeoutMs = options.verifyTimeoutMs ?? this.profiles.form.verifyTimeoutMs;
+    const readiness = options.readiness ?? VISIBLE_STABLE_POLICY;
+    const expectation = options.expected ?? locatorVisible(locator);
+    const baseSeed = String(options.seed ?? "ares-scroll");
+    const trace: InteractionAttemptTrace[] = [];
+    let lastState: InteractionTargetState = { visible: false, enabled: false, stable: false };
+    let failureReason: InteractionFailureReason = "not-ready";
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const seed = `${baseSeed}:${attempt}`;
+      try {
+        await locator.scrollIntoViewIfNeeded();
+      } catch (error) {
+        failureReason = "action-error";
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          outcomeExpectation: expectation.name,
+          failureReason,
+          error: toError(error)
+        });
+        continue;
+      }
+
+      lastState = await this.observer.waitUntilReady(locator, readinessTimeoutMs);
+      if (!await this.isReady(readiness, locator, lastState)) {
+        failureReason = "not-ready";
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          outcomeExpectation: expectation.name,
+          failureReason
+        });
+        continue;
+      }
+
+      if (await this.waitForOutcome(expectation, verifyTimeoutMs)) {
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          outcomeExpectation: expectation.name
+        });
+        return { success: true, attempts: attempt, targetState: lastState, trace };
+      }
+
+      failureReason = "outcome-timeout";
+      trace.push({
+        attempt,
+        seed,
+        readinessPolicy: readiness.name,
+        targetState: lastState,
+        outcomeExpectation: expectation.name,
+        failureReason
+      });
+    }
+
+    return { success: false, attempts, targetState: lastState, failureReason, trace };
   }
 
   private async runFormAction(
