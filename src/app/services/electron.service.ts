@@ -31,6 +31,7 @@ export class ElectronService {
   private readonly previewTasks: BrowserPreviewTask[] = [];
   private readonly previewTaskLogs = new Map<string, BrowserPreviewLog[]>();
   private readonly previewMonitorEvents = new Map<string, any[]>();
+  private readonly previewPaymentSessions = new Map<string, unknown>();
   private previewLogId = 0;
 
   private get api(): any | undefined {
@@ -117,6 +118,18 @@ export class ElectronService {
     return Promise.resolve({ success: true, taskId: task.id, task });
   }
 
+  setPaymentSession(taskId: string, payment: unknown): Promise<any> {
+    if (this.api) return this.api.setPaymentSession(taskId, payment);
+    this.previewPaymentSessions.set(taskId, payment);
+    return Promise.resolve({ success: true });
+  }
+
+  clearPaymentSession(taskId: string): Promise<any> {
+    if (this.api) return this.api.clearPaymentSession(taskId);
+    this.previewPaymentSessions.delete(taskId);
+    return Promise.resolve({ success: true });
+  }
+
   startTask(taskId: string): Promise<any> {
     if (this.api) return this.api.startTask(taskId);
     const task = this.previewTasks.find(item => item.id === taskId);
@@ -150,6 +163,7 @@ export class ElectronService {
 
   stopTask(taskId: string): Promise<any> {
     if (this.api) return this.api.stopTask(taskId);
+    this.previewPaymentSessions.delete(taskId);
     const task = this.previewTasks.find(item => item.id === taskId);
     if (task) {
       const previous = task.state;
