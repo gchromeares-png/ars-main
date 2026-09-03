@@ -53,6 +53,11 @@
         <strong>{{ system.captchaApiKeyConfigured ? "READY" : "KEY FEHLT" }}</strong>
         <small>{{ system.captchaProvider || "CapMonster" }} · {{ getSupportedChallengeTypes() }}</small>
       </article>
+      <article class="stat-card node-card" [class.ready]="isSystemNodeOk()" [class.missing]="!isSystemNodeOk()">
+        <span>SYSTEM NODE</span>
+        <strong>{{ getSystemNodeStatusLabel() }}</strong>
+        <small>{{ getSystemNodeDetails() }}</small>
+      </article>
     </section>
 
     <div class="workspace">
