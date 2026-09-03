@@ -20,7 +20,8 @@ function normalizeProxy(input: any): AresProxy | undefined {
     host,
     port,
     username: typeof input?.username === "string" ? input.username.trim() || undefined : undefined,
-    password: typeof input?.password === "string" ? input.password || undefined : undefined
+    password: typeof input?.password === "string" ? input.password || undefined : undefined,
+    health: input?.health && typeof input.health === "object" ? input.health : undefined
   };
 }
 
