@@ -5,96 +5,118 @@
     <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
   </div>
 
-  <header class="topbar">
-    <div class="brand-block">
+  <aside class="sidebar">
+    <div class="sidebar-brand">
       <div class="crest">A</div>
       <div>
-        <div class="eyebrow">ARES // COMMERCE CONTROL</div>
-        <h1>ARES</h1>
+        <div class="eyebrow">ARES // CONTROL</div>
+        <strong>ARES</strong>
       </div>
     </div>
 
-    <nav class="main-tabs" aria-label="ARES Bereiche">
-      <button [class.active]="activeTab === 'dashboard'" (click)="setTab('dashboard')">Dashboard</button>
-      <button [class.active]="activeTab === 'monitor'" (click)="setTab('monitor')">Monitor</button>
-      <button [class.active]="activeTab === 'tasks'" (click)="setTab('tasks')">Tasks</button>
-      <button [class.active]="activeTab === 'profiles'" (click)="setTab('profiles')">Profile</button>
-      <button [class.active]="activeTab === 'shops'" (click)="setTab('shops')">Shops</button>
+    <nav class="side-nav" aria-label="ARES Bereiche">
+      <button [class.active]="activeTab === 'dashboard'" (click)="setTab('dashboard')">
+        <span class="nav-icon">⌂</span><span>Dashboard</span>
+      </button>
+      <button [class.active]="activeTab === 'monitor'" (click)="setTab('monitor')">
+        <span class="nav-icon">◎</span><span>Monitor</span><b>{{ monitorTasks.length }}</b>
+      </button>
+      <button [class.active]="activeTab === 'tasks'" (click)="setTab('tasks')">
+        <span class="nav-icon">▣</span><span>Tasks</span><b>{{ browserTasks.length }}</b>
+      </button>
+      <button [class.active]="activeTab === 'profiles'" (click)="setTab('profiles')">
+        <span class="nav-icon">◉</span><span>Profiles</span><b>{{ profiles.length }}</b>
+      </button>
+      <button [class.active]="activeTab === 'proxies'" (click)="setTab('proxies')">
+        <span class="nav-icon">↗</span><span>Proxys</span><b>{{ proxies.length }}</b>
+      </button>
+      <button [class.active]="activeTab === 'shops'" (click)="setTab('shops')">
+        <span class="nav-icon">◇</span><span>Shops</span><b>{{ shops.length }}</b>
+      </button>
     </nav>
 
-    <div class="backend-state">
-      <span class="pulse"></span>
-      ONLINE
-      <span class="key-chip" [class.ready]="system.captchaApiKeyConfigured" [class.missing]="!system.captchaApiKeyConfigured">
-        {{ getCaptchaKeyStatusLabel() }}
-      </span>
+    <div class="sidebar-status">
+      <div><span class="pulse"></span><strong>Backend online</strong></div>
+      <small>{{ activeTaskCount }} aktive Mission(en)</small>
+      <small>Node {{ system.electronNodeVersion || '–' }}</small>
     </div>
-  </header>
+  </aside>
 
-  <main class="content">
-    <div *ngIf="error" class="notice error">{{ error }}</div>
-    <div *ngIf="info" class="notice info">{{ info }}</div>
+  <div class="main-column">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">COMMERCE CONTROL CENTER</div>
+        <h1>{{ activeTab | titlecase }}</h1>
+      </div>
+      <div class="backend-state">
+        <span class="pulse"></span>
+        ONLINE
+        <span class="key-chip" [class.ready]="system.captchaApiKeyConfigured" [class.missing]="!system.captchaApiKeyConfigured">
+          {{ getCaptchaKeyStatusLabel() }}
+        </span>
+      </div>
+    </header>
 
-    <ng-container *ngIf="activeTab === 'dashboard'">
-      <section class="hero">
-        <div class="hero-copy">
-          <div class="eyebrow">MISSION CONTROL</div>
-          <h2>Monitoring und Browser-Automation sauber getrennt.</h2>
-          <p>Worker, Warteschlangen, Shops und Tasks bleiben übersichtlich sichtbar. Monitoring läuft API-first; Browser-Sessions starten nur für Browser-Tasks.</p>
-        </div>
-        <div class="hero-badge">
-          <span>RUNTIME</span>
-          <strong>{{ system.availableWorkers }} Slots</strong>
-          <small>Watchdog + Queue Recovery aktiv</small>
-        </div>
-      </section>
+    <main class="content">
+      <div *ngIf="error" class="notice error">{{ error }}</div>
+      <div *ngIf="info" class="notice info">{{ info }}</div>
 
-      <section class="stats-grid">
-        <article class="stat-card"><span>SHOPS</span><strong>{{ system.shopCount }}</strong><small>registriert</small></article>
-        <article class="stat-card"><span>TASKS</span><strong>{{ system.taskCount }}</strong><small>persistiert</small></article>
-        <article class="stat-card"><span>WORKER SLOTS</span><strong>{{ system.availableWorkers }}</strong><small>Orchestrator</small></article>
-        <article class="stat-card captcha-card" [class.ready]="system.captchaApiKeyConfigured" [class.missing]="!system.captchaApiKeyConfigured">
-          <span>CAPTCHA</span><strong>{{ system.captchaApiKeyConfigured ? 'READY' : 'KEY FEHLT' }}</strong>
-          <small>{{ system.captchaProvider || 'CapMonster' }} · {{ getSupportedChallengeTypes() }}</small>
-        </article>
-        <article class="stat-card node-card" [class.ready]="isSystemNodeOk()" [class.missing]="!isSystemNodeOk()">
-          <span>SYSTEM NODE</span><strong>{{ getSystemNodeStatusLabel() }}</strong><small>{{ getSystemNodeDetails() }}</small>
-        </article>
-        <article class="stat-card persistence-card" [class.ready]="isPersistenceOk()" [class.missing]="!isPersistenceOk()">
-          <span>PERSISTENZ</span><strong>{{ getPersistenceStatusLabel() }}</strong><small>{{ getPersistenceDetails() }}</small>
-        </article>
-      </section>
+      <ng-container *ngIf="activeTab === 'dashboard'">
+        <section class="hero">
+          <div class="hero-copy">
+            <div class="eyebrow">MISSION CONTROL</div>
+            <h2>Alles Wichtige auf einen Blick.</h2>
+            <p>Monitoring, Browser-Sessions, Profile, Proxys und Shops sind getrennt organisiert, nutzen aber dieselbe Runtime und Persistenz.</p>
+          </div>
+          <div class="hero-badge">
+            <span>RUNTIME</span>
+            <strong>{{ system.availableWorkers }} Slots</strong>
+            <small>Watchdog + Queue Recovery aktiv</small>
+          </div>
+        </section>
 
-      <app-runtime-control [system]="system" [tasks]="tasks"></app-runtime-control>
-    </ng-container>
+        <section class="stats-grid">
+          <article class="stat-card"><span>SHOPS</span><strong>{{ shops.length }}</strong><small>registriert</small></article>
+          <article class="stat-card"><span>MONITORE</span><strong>{{ monitorTasks.length }}</strong><small>Commerce Monitoring</small></article>
+          <article class="stat-card"><span>BROWSER TASKS</span><strong>{{ browserTasks.length }}</strong><small>persistierte Sessions</small></article>
+          <article class="stat-card"><span>PROFILE</span><strong>{{ profiles.length }}</strong><small>Checkout-Profile</small></article>
+          <article class="stat-card"><span>PROXYS</span><strong>{{ proxies.length }}</strong><small>Proxy Vault</small></article>
+          <article class="stat-card node-card" [class.ready]="isSystemNodeOk()" [class.missing]="!isSystemNodeOk()">
+            <span>SYSTEM NODE</span><strong>{{ getSystemNodeStatusLabel() }}</strong><small>{{ getSystemNodeDetails() }}</small>
+          </article>
+        </section>
 
-    <ng-container *ngIf="activeTab === 'monitor'">
-      <section class="section-heading">
-        <div><div class="eyebrow">PRODUCT MONITOR</div><h2>Monitor erstellen</h2></div>
-        <p>Kein Profil nötig. ARES verwendet den registrierten Commerce-Adapter und speichert nur echte Produktänderungen.</p>
-      </section>
+        <section class="quick-actions">
+          <button (click)="setTab('monitor')"><strong>Monitor anlegen</strong><small>Produkt + Shop + Intervall</small></button>
+          <button (click)="setTab('tasks')"><strong>Browser-Task</strong><small>Profil + Proxy + Payment</small></button>
+          <button (click)="setTab('profiles')"><strong>Profil verwalten</strong><small>Kontakt, Adresse, Zahlung</small></button>
+          <button (click)="setTab('proxies')"><strong>Proxy zuordnen</strong><small>Vault + Session-Routing</small></button>
+        </section>
 
-      <section class="panel monitor-panel">
-        <div class="form-grid">
-          <label><span>Monitor-Name</span><input [(ngModel)]="monitorName" placeholder="z. B. Pokémon Restock"></label>
-          <label>
-            <span>Shop</span>
-            <select [(ngModel)]="selectedMonitorShopId">
-              <option value="">Shop auswählen</option>
-              <option *ngFor="let shop of shops; trackBy: trackShop" [value]="shop.id">{{ shop.name }} · {{ getPlatformLabel(shop.platform) }}</option>
-            </select>
-          </label>
-          <label class="wide"><span>Produkt / Keyword</span><input [(ngModel)]="monitorSearchTerm" placeholder="z. B. Pokemon 151 Booster Bundle"></label>
-          <label><span>Intervall in Sekunden</span><input [(ngModel)]="monitorIntervalSeconds" type="number" min="1" step="1"></label>
-          <div class="form-action"><button class="btn btn-primary" (click)="createMonitorTask()">Monitor erstellen</button></div>
-        </div>
-      </section>
+        <app-runtime-control [system]="system" [tasks]="tasks"></app-runtime-control>
+      </ng-container>
 
-      <section class="panel compact-list-panel">
-        <div class="panel-header"><div><div class="eyebrow">MONITOR MISSIONS</div><h3>Vorhandene Monitore</h3></div></div>
-        <div class="empty-state" *ngIf="!tasks.length">Noch keine Tasks vorhanden.</div>
-        <ng-container *ngFor="let task of tasks; trackBy: trackTask">
-          <article class="compact-task" *ngIf="isMonitorTask(task)">
+      <ng-container *ngIf="activeTab === 'monitor'">
+        <section class="section-heading">
+          <div><div class="eyebrow">PRODUCT MONITOR</div><h2>Monitoring</h2></div>
+          <p>Monitor-Tasks benötigen kein Checkout-Profil und starten keine Browser-Session.</p>
+        </section>
+
+        <section class="panel monitor-panel">
+          <div class="panel-header"><div><div class="eyebrow">NEUER MONITOR</div><h3>Produkt beobachten</h3></div></div>
+          <div class="form-grid">
+            <label><span>Monitor-Name</span><input [(ngModel)]="monitorName" placeholder="z. B. Pokémon Restock"></label>
+            <label><span>Shop</span><select [(ngModel)]="selectedMonitorShopId"><option value="">Shop auswählen</option><option *ngFor="let shop of shops; trackBy: trackShop" [value]="shop.id">{{ shop.name }} · {{ getPlatformLabel(shop.platform) }}</option></select></label>
+            <label class="wide"><span>Produkt / Keyword</span><input [(ngModel)]="monitorSearchTerm" placeholder="z. B. Pokemon 151 Booster Bundle"></label>
+            <label><span>Intervall in Sekunden</span><input [(ngModel)]="monitorIntervalSeconds" type="number" min="1" step="1"></label>
+            <div class="form-action"><button class="btn btn-primary" (click)="createMonitorTask()">Monitor erstellen</button></div>
+          </div>
+        </section>
+
+        <section class="panel compact-list-panel">
+          <div class="panel-header"><div><div class="eyebrow">MONITOR MISSIONS</div><h3>Vorhandene Monitore</h3></div><span class="count-chip">{{ monitorTasks.length }}</span></div>
+          <div class="empty-state" *ngIf="!monitorTasks.length">Noch keine Monitore vorhanden.</div>
+          <article class="compact-task" *ngFor="let task of monitorTasks; trackBy: trackTask">
             <div><strong>{{ task.config.name }}</strong><small>{{ task.config.shopId }} · {{ task.state }}</small></div>
             <div class="task-actions">
               <button *ngIf="isStartable(task)" class="btn btn-small btn-primary" (click)="startTask(task.id)">Start</button>
@@ -103,192 +125,189 @@
               <button *ngIf="isStoppable(task)" class="btn btn-small btn-danger" (click)="stopTask(task.id)">Stop</button>
             </div>
           </article>
-        </ng-container>
-      </section>
-    </ng-container>
+        </section>
+      </ng-container>
 
-    <ng-container *ngIf="activeTab === 'tasks'">
-      <section class="section-heading">
-        <div><div class="eyebrow">BROWSER TASKS</div><h2>Browser-Mission erstellen</h2></div>
-        <p>Profil, isolierte Browser-Session, Queue-Waiting und optional session-only Zahlungsdaten. Der finale Kaufbutton wird nicht automatisch gedrückt.</p>
-      </section>
+      <ng-container *ngIf="activeTab === 'tasks'">
+        <section class="section-heading">
+          <div><div class="eyebrow">BROWSER TASKS</div><h2>Browser-Missionen</h2></div>
+          <p>Jeder Task erhält eine isolierte Browser-Session. Profil- und Proxy-Zuordnung werden vor dem Worker-Start aufgelöst.</p>
+        </section>
 
-      <section class="panel browser-task-panel">
-        <div class="form-grid">
-          <label><span>Task-Name</span><input [(ngModel)]="taskName" placeholder="z. B. Checkout Test"></label>
-          <label>
-            <span>Shop</span>
-            <select [(ngModel)]="selectedShopId">
-              <option value="">Shop auswählen</option>
-              <option *ngFor="let shop of shops; trackBy: trackShop" [value]="shop.id">{{ shop.name }} · {{ getPlatformLabel(shop.platform) }}</option>
-            </select>
-          </label>
-          <label>
-            <span>Profil</span>
-            <select [(ngModel)]="selectedProfileId" (ngModelChange)="syncPaymentPreference()">
-              <option value="">Profil auswählen</option>
-              <option *ngFor="let profile of profiles" [value]="profile.id">{{ profile.name }} — {{ profile.contact.firstName }} {{ profile.contact.lastName }}</option>
-            </select>
-            <small *ngIf="!profiles.length">Unter Profile zuerst ein Profil speichern.</small>
-          </label>
-          <label><span>Produkt / Keyword</span><input [(ngModel)]="searchTerm" placeholder="z. B. Pokemon ETB"></label>
-          <label class="switch-row"><input type="checkbox" [(ngModel)]="headless"><span>Headless Browser</span></label>
-          <label class="switch-row"><input type="checkbox" [(ngModel)]="taskPaymentEnabled"><span>Zahlungsmethode vorbereiten</span></label>
-        </div>
-
-        <div class="payment-session" *ngIf="taskPaymentEnabled">
-          <div class="payment-session-head">
-            <div><strong>Session-Zahlung</strong><small>Nur RAM · wird nach Task-Ende/Stop verworfen</small></div>
-            <span class="security-chip">NICHT PERSISTIERT</span>
-          </div>
+        <section class="panel browser-task-panel">
+          <div class="panel-header"><div><div class="eyebrow">NEUER TASK</div><h3>Session konfigurieren</h3></div></div>
           <div class="form-grid">
-            <label>
-              <span>Zahlungsart</span>
-              <select [(ngModel)]="taskPaymentMethod">
-                <option value="card">Karte</option>
-                <option value="paypal">PayPal</option>
-                <option value="shop-pay">Shop Pay</option>
-                <option value="klarna">Klarna</option>
-                <option value="other">Andere</option>
-              </select>
-            </label>
-            <label><span>Bezeichnung / bevorzugter Text</span><input [(ngModel)]="taskPaymentLabel" placeholder="optional, z. B. PayPal"></label>
+            <label><span>Task-Name</span><input [(ngModel)]="taskName" placeholder="z. B. Checkout Test"></label>
+            <label><span>Shop</span><select [(ngModel)]="selectedShopId"><option value="">Shop auswählen</option><option *ngFor="let shop of shops; trackBy: trackShop" [value]="shop.id">{{ shop.name }} · {{ getPlatformLabel(shop.platform) }}</option></select></label>
+            <label><span>Profil</span><select [(ngModel)]="selectedProfileId" (ngModelChange)="syncProfileDefaults()"><option value="">Profil auswählen</option><option *ngFor="let profile of profiles" [value]="profile.id">{{ profile.name }} — {{ profile.contact.firstName }} {{ profile.contact.lastName }}</option></select><small *ngIf="!profiles.length">Unter Profiles zuerst ein Profil speichern.</small></label>
+            <label><span>Produkt / Keyword</span><input [(ngModel)]="searchTerm" placeholder="z. B. Pokemon ETB"></label>
+            <label><span>Proxy-Zuordnung</span><select [(ngModel)]="taskProxyMode"><option value="profile-default">Profilstandard verwenden</option><option value="direct">Direkt / kein Proxy</option><option value="proxy">Bestimmten Proxy verwenden</option></select></label>
+            <label *ngIf="taskProxyMode === 'proxy'"><span>Session-Proxy</span><select [(ngModel)]="selectedTaskProxyId"><option value="">Proxy auswählen</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select><small *ngIf="!proxies.length">Im Proxy-Tab zuerst einen Proxy speichern.</small></label>
+            <label class="switch-row"><input type="checkbox" [(ngModel)]="headless"><span>Headless Browser</span></label>
+            <label class="switch-row"><input type="checkbox" [(ngModel)]="taskPaymentEnabled"><span>Zahlungsmethode vorbereiten</span></label>
           </div>
 
-          <div class="form-grid card-fields" *ngIf="taskPaymentMethod === 'card'">
-            <label><span>Karteninhaber</span><input [(ngModel)]="sessionCardHolderName" autocomplete="off"></label>
-            <label><span>Kartennummer</span><input [(ngModel)]="sessionCardNumber" inputmode="numeric" autocomplete="off"></label>
-            <label><span>Ablaufdatum</span><input [(ngModel)]="sessionCardExpiry" placeholder="MM/YY" autocomplete="off"></label>
-            <label><span>CVV / CVC</span><input [(ngModel)]="sessionCardSecurityCode" type="password" inputmode="numeric" autocomplete="off"></label>
+          <div class="assignment-preview">
+            <div><span>Profil</span><strong>{{ selectedProfileId ? getTaskProfileName({ id: '', config: { name: '', data: { profileId: selectedProfileId } }, state: TaskState.QUEUED }) : 'nicht gewählt' }}</strong></div>
+            <div><span>Proxy</span><strong>{{ taskProxyMode === 'direct' ? 'Direkt' : taskProxyMode === 'proxy' ? (selectedTaskProxyId ? getProxyName(selectedTaskProxyId) : 'Proxy fehlt') : 'Profilstandard' }}</strong></div>
+            <div><span>Payment</span><strong>{{ taskPaymentEnabled ? getPaymentMethodLabel(taskPaymentMethod) : 'manuell' }}</strong></div>
           </div>
-          <p class="security-note">ARES darf die Zahlungsart auswählen und sichtbare Zahlungsfelder vorbereiten. Externe Freigaben, 3-D-Secure und der finale Bezahlen/Bestellen-Button bleiben manuell.</p>
-        </div>
 
-        <div class="primary-action-row"><button class="btn btn-primary" (click)="createTask()">Browser-Task erstellen</button></div>
-      </section>
-
-      <section class="panel task-panel">
-        <div class="panel-header"><div><div class="eyebrow">ACTIVE MISSIONS</div><h3>Tasks & Monitore</h3></div></div>
-        <div class="empty-state" *ngIf="!tasks.length">Keine Tasks vorhanden.</div>
-
-        <article class="task-row" *ngFor="let task of tasks; trackBy: trackTask">
-          <div class="task-name-block">
-            <div class="task-title-line"><span class="kind-chip" [class.monitor]="isMonitorTask(task)">{{ getTaskKind(task) }}</span><strong>{{ task.config.name }}</strong></div>
-            <small>{{ task.config.shopId || 'kein Shop' }} · Profil: {{ getTaskProfileName(task) }}</small>
-            <small class="task-error" *ngIf="task.lastError">{{ task.lastError }}</small>
-            <div class="runtime-detail" *ngIf="!isMonitorTask(task)">
-              <strong>Challenge</strong><span>{{ getTaskCaptchaStatus(task) }}</span>
-              <small *ngIf="getTaskChallengeType(task)">Typ: {{ getTaskChallengeType(task) }}</small>
+          <div class="payment-session" *ngIf="taskPaymentEnabled">
+            <div class="payment-session-head"><div><strong>Session-Zahlung</strong><small>Nur RAM · nach Task-Ende/Stop verworfen</small></div><span class="security-chip">NICHT PERSISTIERT</span></div>
+            <div class="form-grid">
+              <label><span>Zahlungsart</span><select [(ngModel)]="taskPaymentMethod"><option value="card">Karte</option><option value="paypal">PayPal</option><option value="shop-pay">Shop Pay</option><option value="klarna">Klarna</option><option value="other">Andere</option></select></label>
+              <label><span>Bezeichnung / bevorzugter Text</span><input [(ngModel)]="taskPaymentLabel" placeholder="optional, z. B. PayPal"></label>
             </div>
-            <div class="runtime-detail payment-detail" *ngIf="!isMonitorTask(task)">
-              <strong>Zahlung</strong><span>{{ getTaskPaymentStatus(task) }}</span>
-              <small *ngIf="getTaskDetectedPaymentMethods(task)">Erkannt: {{ getTaskDetectedPaymentMethods(task) }}</small>
+            <div class="form-grid card-fields" *ngIf="taskPaymentMethod === 'card'">
+              <label><span>Karteninhaber</span><input [(ngModel)]="sessionCardHolderName" autocomplete="off"></label>
+              <label><span>Kartennummer</span><input [(ngModel)]="sessionCardNumber" inputmode="numeric" autocomplete="off"></label>
+              <label><span>Ablaufdatum</span><input [(ngModel)]="sessionCardExpiry" placeholder="MM/YY" autocomplete="off"></label>
+              <label><span>CVV / CVC</span><input [(ngModel)]="sessionCardSecurityCode" type="password" inputmode="numeric" autocomplete="off"></label>
             </div>
+            <p class="security-note">Zahlungsart und sichtbare Felder dürfen vorbereitet werden. Externe Freigaben und der finale Bezahlen/Bestellen-Button bleiben manuell.</p>
           </div>
 
-          <div class="retry-info">{{ task.retries ?? 0 }}/{{ task.maxRetries ?? 0 }} retries</div>
-          <span class="status" [ngClass]="task.state.toLowerCase()">{{ task.state }}</span>
+          <div class="primary-action-row"><button class="btn btn-primary" (click)="createTask()">Browser-Task erstellen</button></div>
+        </section>
 
-          <div class="task-actions">
-            <button *ngIf="isStartable(task)" class="btn btn-small btn-primary" (click)="startTask(task.id)">Start</button>
-            <button *ngIf="isPausable(task)" class="btn btn-small btn-warning" (click)="pauseTask(task.id)">Pause</button>
-            <button *ngIf="isResumable(task)" class="btn btn-small btn-primary" (click)="resumeTask(task.id)">Fortsetzen</button>
-            <button *ngIf="isStoppable(task)" class="btn btn-small btn-danger" (click)="stopTask(task.id)">Stop</button>
-            <button class="btn btn-small btn-secondary" (click)="toggleTaskLogs(task.id)">{{ expandedTaskLogId === task.id ? 'Logs schließen' : 'Logs' }}</button>
-          </div>
-
-          <div class="task-log-panel" *ngIf="expandedTaskLogId === task.id">
-            <div class="task-log-header"><div><strong>Task-Verlauf</strong><small>Letzte {{ taskLogs[task.id]?.length || 0 }} Einträge · SQLite</small></div><button class="btn btn-small btn-secondary" (click)="loadTaskLogs(task.id)">Aktualisieren</button></div>
-            <div class="task-log-empty" *ngIf="!taskLogs[task.id]?.length">Noch keine Log-Einträge vorhanden.</div>
-            <div class="task-log-entry" *ngFor="let log of taskLogs[task.id]" [class.warn]="log.level === 'warn'" [class.error]="log.level === 'error'">
-              <time>{{ log.createdAt | date:'HH:mm:ss' }}</time><strong>{{ log.event }}</strong><span>{{ log.state || '-' }}</span><p>{{ log.message }}</p>
+        <section class="panel task-panel">
+          <div class="panel-header"><div><div class="eyebrow">BROWSER MISSIONS</div><h3>Tasks</h3></div><span class="count-chip">{{ browserTasks.length }}</span></div>
+          <div class="empty-state" *ngIf="!browserTasks.length">Keine Browser-Tasks vorhanden.</div>
+          <article class="task-row" *ngFor="let task of browserTasks; trackBy: trackTask">
+            <div class="task-name-block">
+              <div class="task-title-line"><span class="kind-chip">BROWSER</span><strong>{{ task.config.name }}</strong></div>
+              <small>{{ task.config.shopId || 'kein Shop' }} · Profil: {{ getTaskProfileName(task) }}</small>
+              <small>Proxy: {{ getTaskProxyStatus(task) }}</small>
+              <small class="task-error" *ngIf="task.lastError">{{ task.lastError }}</small>
+              <div class="runtime-detail"><strong>Challenge</strong><span>{{ getTaskCaptchaStatus(task) }}</span><small *ngIf="getTaskChallengeType(task)">Typ: {{ getTaskChallengeType(task) }}</small></div>
+              <div class="runtime-detail payment-detail"><strong>Zahlung</strong><span>{{ getTaskPaymentStatus(task) }}</span><small *ngIf="getTaskDetectedPaymentMethods(task)">Erkannt: {{ getTaskDetectedPaymentMethods(task) }}</small></div>
             </div>
+            <div class="retry-info">{{ task.retries ?? 0 }}/{{ task.maxRetries ?? 0 }} retries</div>
+            <span class="status" [ngClass]="task.state.toLowerCase()">{{ task.state }}</span>
+            <div class="task-actions">
+              <button *ngIf="isStartable(task)" class="btn btn-small btn-primary" (click)="startTask(task.id)">Start</button>
+              <button *ngIf="isPausable(task)" class="btn btn-small btn-warning" (click)="pauseTask(task.id)">Pause</button>
+              <button *ngIf="isResumable(task)" class="btn btn-small btn-primary" (click)="resumeTask(task.id)">Fortsetzen</button>
+              <button *ngIf="isStoppable(task)" class="btn btn-small btn-danger" (click)="stopTask(task.id)">Stop</button>
+              <button class="btn btn-small btn-secondary" (click)="toggleTaskLogs(task.id)">{{ expandedTaskLogId === task.id ? 'Logs schließen' : 'Logs' }}</button>
+            </div>
+            <div class="task-log-panel" *ngIf="expandedTaskLogId === task.id">
+              <div class="task-log-header"><div><strong>Task-Verlauf</strong><small>Letzte {{ taskLogs[task.id]?.length || 0 }} Einträge · SQLite</small></div><button class="btn btn-small btn-secondary" (click)="loadTaskLogs(task.id)">Aktualisieren</button></div>
+              <div class="task-log-empty" *ngIf="!taskLogs[task.id]?.length">Noch keine Log-Einträge vorhanden.</div>
+              <div class="task-log-entry" *ngFor="let log of taskLogs[task.id]" [class.warn]="log.level === 'warn'" [class.error]="log.level === 'error'"><time>{{ log.createdAt | date:'HH:mm:ss' }}</time><strong>{{ log.event }}</strong><span>{{ log.state || '-' }}</span><p>{{ log.message }}</p></div>
+            </div>
+          </article>
+        </section>
+      </ng-container>
+
+      <ng-container *ngIf="activeTab === 'profiles'">
+        <section class="section-heading">
+          <div><div class="eyebrow">PROFILE VAULT</div><h2>Profiles</h2></div>
+          <p>Persönliche Daten, Adresse, Browser-Defaults und Zahlungspräferenz bleiben in einem Profil gebündelt.</p>
+        </section>
+
+        <section class="panel profile-panel">
+          <div class="profile-tabs">
+            <button [class.active]="profileTab === 'identity'" (click)="setProfileTab('identity')">Persönlich</button>
+            <button [class.active]="profileTab === 'address'" (click)="setProfileTab('address')">Adresse</button>
+            <button [class.active]="profileTab === 'browser'" (click)="setProfileTab('browser')">Browser</button>
+            <button [class.active]="profileTab === 'payment'" (click)="setProfileTab('payment')">Zahlung</button>
           </div>
-        </article>
-      </section>
-    </ng-container>
 
-    <ng-container *ngIf="activeTab === 'profiles'">
-      <section class="section-heading">
-        <div><div class="eyebrow">PROFILE VAULT</div><h2>Checkout-Profil</h2></div>
-        <p>Kontakt, Adresse und Browser-Einstellungen bleiben getrennt. Zahlungspräferenz ist speicherbar; echte Kartendaten ausdrücklich nicht.</p>
-      </section>
+          <div class="form-grid" *ngIf="profileTab === 'identity'">
+            <label><span>Profil-ID</span><input [(ngModel)]="newProfile.id" placeholder="privat-de-1"></label>
+            <label><span>Profilname</span><input [(ngModel)]="newProfile.name" placeholder="Privat DE"></label>
+            <label><span>Vorname</span><input [(ngModel)]="newProfile.contact.firstName"></label>
+            <label><span>Nachname</span><input [(ngModel)]="newProfile.contact.lastName"></label>
+            <label><span>E-Mail</span><input [(ngModel)]="newProfile.contact.email" type="email"></label>
+            <label><span>Telefon</span><input [(ngModel)]="newProfile.contact.phone"></label>
+          </div>
 
-      <section class="panel profile-panel">
-        <div class="profile-tabs">
-          <button [class.active]="profileTab === 'identity'" (click)="setProfileTab('identity')">Persönlich</button>
-          <button [class.active]="profileTab === 'address'" (click)="setProfileTab('address')">Adresse</button>
-          <button [class.active]="profileTab === 'browser'" (click)="setProfileTab('browser')">Browser & Proxy</button>
-          <button [class.active]="profileTab === 'payment'" (click)="setProfileTab('payment')">Zahlung</button>
-        </div>
+          <div class="form-grid" *ngIf="profileTab === 'address'">
+            <label class="wide"><span>Straße / Hausnummer</span><input [(ngModel)]="newProfile.address.address1"></label>
+            <label><span>Adresszusatz</span><input [(ngModel)]="newProfile.address.address2"></label>
+            <label><span>PLZ</span><input [(ngModel)]="newProfile.address.postalCode"></label>
+            <label><span>Stadt</span><input [(ngModel)]="newProfile.address.city"></label>
+            <label><span>Land</span><input [(ngModel)]="newProfile.address.countryCode" placeholder="DE"></label>
+          </div>
 
-        <div class="form-grid" *ngIf="profileTab === 'identity'">
-          <label><span>Profil-ID</span><input [(ngModel)]="newProfile.id" placeholder="privat-de-1"></label>
-          <label><span>Profilname</span><input [(ngModel)]="newProfile.name" placeholder="Privat DE"></label>
-          <label><span>Vorname</span><input [(ngModel)]="newProfile.contact.firstName"></label>
-          <label><span>Nachname</span><input [(ngModel)]="newProfile.contact.lastName"></label>
-          <label><span>E-Mail</span><input [(ngModel)]="newProfile.contact.email" type="email"></label>
-          <label><span>Telefon</span><input [(ngModel)]="newProfile.contact.phone"></label>
-        </div>
+          <div class="form-grid" *ngIf="profileTab === 'browser'">
+            <label><span>Standard-Proxy</span><select [(ngModel)]="newProfile.preferredProxyId"><option value="">Direkt / kein Standardproxy</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select><small>Kann pro Browser-Task überschrieben werden.</small></label>
+            <label class="switch-row"><input type="checkbox" [(ngModel)]="newProfile.browser!.headless"><span>Headless als Profilstandard</span></label>
+            <label class="wide"><span>User-Agent</span><input [(ngModel)]="newProfile.browser!.userAgent" placeholder="optional"></label>
+          </div>
 
-        <div class="form-grid" *ngIf="profileTab === 'address'">
-          <label class="wide"><span>Straße / Hausnummer</span><input [(ngModel)]="newProfile.address.address1"></label>
-          <label><span>Adresszusatz</span><input [(ngModel)]="newProfile.address.address2"></label>
-          <label><span>PLZ</span><input [(ngModel)]="newProfile.address.postalCode"></label>
-          <label><span>Stadt</span><input [(ngModel)]="newProfile.address.city"></label>
-          <label><span>Land</span><input [(ngModel)]="newProfile.address.countryCode" placeholder="DE"></label>
-        </div>
+          <div class="payment-preference" *ngIf="profileTab === 'payment'">
+            <div class="form-grid">
+              <label><span>Bevorzugte Zahlungsart</span><select [(ngModel)]="newProfile.paymentPreference!.method"><option value="card">Karte</option><option value="paypal">PayPal</option><option value="shop-pay">Shop Pay</option><option value="klarna">Klarna</option><option value="other">Andere</option></select></label>
+              <label><span>Bezeichnung</span><input [(ngModel)]="newProfile.paymentPreference!.label" placeholder="optional"></label>
+            </div>
+            <div class="vault-warning"><strong>Keine Kartennummer und kein CVV im Profil.</strong><span>Sensible Zahlungsdaten werden nur session-only am Browser-Task gesetzt.</span></div>
+          </div>
 
-        <div class="form-grid" *ngIf="profileTab === 'browser'">
-          <label><span>Proxy-Protokoll</span><select [(ngModel)]="newProfile.proxy!.protocol"><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks5">SOCKS5</option></select></label>
-          <label><span>Proxy Host</span><input [(ngModel)]="newProfile.proxy!.host" placeholder="optional"></label>
-          <label><span>Proxy Port</span><input [(ngModel)]="newProfile.proxy!.port" type="number" placeholder="optional"></label>
-          <label><span>Proxy User</span><input [(ngModel)]="newProfile.proxy!.username" placeholder="optional"></label>
-          <label><span>Proxy Passwort</span><input [(ngModel)]="newProfile.proxy!.password" type="password" placeholder="optional"></label>
-          <label class="wide"><span>User-Agent</span><input [(ngModel)]="newProfile.browser!.userAgent" placeholder="optional"></label>
-        </div>
+          <div class="primary-action-row split"><button class="btn btn-secondary" (click)="resetProfileForm()">Neu / leeren</button><button class="btn btn-primary" (click)="saveProfile()">Profil speichern</button></div>
 
-        <div class="payment-preference" *ngIf="profileTab === 'payment'">
+          <div class="profile-list" *ngIf="profiles.length">
+            <article class="profile-card" *ngFor="let profile of profiles">
+              <div><strong>{{ profile.name }}</strong><small>{{ profile.contact.firstName }} {{ profile.contact.lastName }} · {{ profile.address.city }}</small><small>Proxy: {{ getProfileProxyName(profile) }} · Zahlung: {{ getPaymentMethodLabel(profile.paymentPreference?.method) }}</small></div>
+              <button class="btn btn-small btn-secondary" (click)="editProfile(profile)">Bearbeiten</button>
+            </article>
+          </div>
+        </section>
+      </ng-container>
+
+      <ng-container *ngIf="activeTab === 'proxies'">
+        <section class="section-heading">
+          <div><div class="eyebrow">PROXY VAULT</div><h2>Proxys</h2></div>
+          <p>Proxy-Zugangsdaten werden zentral gespeichert. Tasks speichern nur die Proxy-ID und lösen Zugangsdaten erst beim Session-Start auf.</p>
+        </section>
+
+        <section class="proxy-layout">
+          <section class="panel proxy-editor">
+            <div class="panel-header"><div><div class="eyebrow">PROXY CONFIG</div><h3>Proxy speichern</h3></div></div>
+            <div class="form-grid">
+              <label><span>Proxy-ID</span><input [(ngModel)]="newProxy.id" placeholder="de-resi-01"></label>
+              <label><span>Name</span><input [(ngModel)]="newProxy.name" placeholder="DE Residential 01"></label>
+              <label><span>Protokoll</span><select [(ngModel)]="newProxy.protocol"><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks5">SOCKS5</option></select></label>
+              <label><span>Host</span><input [(ngModel)]="newProxy.host" placeholder="proxy.example.net"></label>
+              <label><span>Port</span><input [(ngModel)]="newProxy.port" type="number" min="1" max="65535"></label>
+              <label><span>Username</span><input [(ngModel)]="newProxy.username" placeholder="optional"></label>
+              <label class="wide"><span>Passwort</span><input [(ngModel)]="newProxy.password" type="password" placeholder="optional"></label>
+            </div>
+            <div class="primary-action-row"><button class="btn btn-primary" (click)="saveProxy()">Proxy speichern</button></div>
+          </section>
+
+          <section class="panel proxy-list-panel">
+            <div class="panel-header"><div><div class="eyebrow">AVAILABLE</div><h3>Proxy Vault</h3></div><span class="count-chip">{{ proxies.length }}</span></div>
+            <div class="empty-state" *ngIf="!proxies.length">Noch keine Proxys gespeichert.</div>
+            <article class="proxy-card" *ngFor="let proxy of proxies; trackBy: trackProxy">
+              <div class="proxy-main"><strong>{{ proxy.name }}</strong><small>{{ getProxyEndpoint(proxy) }}</small><small>{{ proxy.username ? 'Login vorhanden' : 'ohne Login' }}</small></div>
+              <div class="proxy-actions"><button class="btn btn-small btn-secondary" (click)="editProxy(proxy)">Bearbeiten</button><button class="btn btn-small btn-danger" (click)="deleteProxy(proxy.id)">Löschen</button></div>
+            </article>
+          </section>
+        </section>
+      </ng-container>
+
+      <ng-container *ngIf="activeTab === 'shops'">
+        <section class="section-heading">
+          <div><div class="eyebrow">SHOP REGISTRY</div><h2>Shops</h2></div>
+          <p>Plattform und Basis-URL werden einmal registriert; Monitor und Browser-Executor greifen danach auf dieselbe Registry zu.</p>
+        </section>
+
+        <section class="panel shops-panel">
           <div class="form-grid">
-            <label><span>Bevorzugte Zahlungsart</span><select [(ngModel)]="newProfile.paymentPreference!.method"><option value="card">Karte</option><option value="paypal">PayPal</option><option value="shop-pay">Shop Pay</option><option value="klarna">Klarna</option><option value="other">Andere</option></select></label>
-            <label><span>Bezeichnung</span><input [(ngModel)]="newProfile.paymentPreference!.label" placeholder="optional"></label>
+            <label><span>Shop-ID</span><input [(ngModel)]="newShop.id" placeholder="mein-shop"></label>
+            <label><span>Name</span><input [(ngModel)]="newShop.name" placeholder="Mein Shop"></label>
+            <label><span>Plattform</span><select [(ngModel)]="newShop.platform"><option *ngFor="let platform of commercePlatforms" [ngValue]="platform">{{ getPlatformLabel(platform) }}</option></select></label>
+            <label><span>Shop-URL</span><input [(ngModel)]="newShop.baseUrl" placeholder="https://dein-shop.de"></label>
           </div>
-          <div class="vault-warning"><strong>Keine Kartennummer und kein CVV im Profil.</strong><span>Kartendaten werden nur beim Erstellen eines Browser-Tasks session-only eingegeben und nach Task-Ende aus dem RAM entfernt.</span></div>
-        </div>
-
-        <div class="primary-action-row"><button class="btn btn-primary" (click)="saveProfile()">Profil speichern</button></div>
-
-        <div class="profile-list" *ngIf="profiles.length">
-          <article class="profile-card" *ngFor="let profile of profiles">
-            <div><strong>{{ profile.name }}</strong><small>{{ profile.contact.firstName }} {{ profile.contact.lastName }} · {{ profile.address.city }}</small></div>
-            <span class="platform-pill">{{ getPaymentMethodLabel(profile.paymentPreference?.method) }}</span>
-          </article>
-        </div>
-      </section>
-    </ng-container>
-
-    <ng-container *ngIf="activeTab === 'shops'">
-      <section class="section-heading">
-        <div><div class="eyebrow">SHOP REGISTRY</div><h2>Shops verwalten</h2></div>
-        <p>Plattform und Basis-URL einmal sauber registrieren; Monitor und Browser-Executor greifen danach auf dieselbe Registry zu.</p>
-      </section>
-
-      <section class="panel shops-panel">
-        <div class="form-grid">
-          <label><span>Shop-ID</span><input [(ngModel)]="newShop.id" placeholder="mein-shop"></label>
-          <label><span>Name</span><input [(ngModel)]="newShop.name" placeholder="Mein Shop"></label>
-          <label><span>Plattform</span><select [(ngModel)]="newShop.platform"><option *ngFor="let platform of commercePlatforms" [ngValue]="platform">{{ getPlatformLabel(platform) }}</option></select></label>
-          <label><span>Shop-URL</span><input [(ngModel)]="newShop.baseUrl" placeholder="https://dein-shop.de"></label>
-        </div>
-        <div class="primary-action-row"><button class="btn btn-primary" (click)="registerShop()">Shop registrieren</button></div>
-
-        <div class="shop-grid" *ngIf="shops.length">
-          <article class="shop-card" *ngFor="let shop of shops; trackBy: trackShop">
-            <div><strong>{{ shop.name }}</strong><small>{{ shop.baseUrl }}</small><small>{{ hasExecutorForShop(shop) ? 'Browser-Executor bereit' : 'Monitor/Registry' }}</small></div>
-            <span class="platform-pill">{{ getPlatformLabel(shop.platform) }}</span>
-          </article>
-        </div>
-      </section>
-    </ng-container>
-  </main>
+          <div class="primary-action-row"><button class="btn btn-primary" (click)="registerShop()">Shop registrieren</button></div>
+          <div class="shop-grid" *ngIf="shops.length">
+            <article class="shop-card" *ngFor="let shop of shops; trackBy: trackShop"><div><strong>{{ shop.name }}</strong><small>{{ shop.baseUrl }}</small><small>{{ hasExecutorForShop(shop) ? 'Browser-Executor bereit' : 'Monitor/Registry' }}</small></div><span class="platform-pill">{{ getPlatformLabel(shop.platform) }}</span></article>
+          </div>
+        </section>
+      </ng-container>
+    </main>
+  </div>
 </div>
