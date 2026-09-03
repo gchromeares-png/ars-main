@@ -34,7 +34,7 @@ export class LiveChallengeHandler {
 
       const html = document.documentElement.innerHTML;
 
-      // 3. hCaptcha UUID Pattern (z.B. a5f76b62-1234-...)
+      // 3. hCaptcha UUID Pattern (z. B. a5f76b62-1234-...)
       const hcaptchaRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
       const hMatch = html.match(hcaptchaRegex);
       if (hMatch) {
@@ -64,12 +64,14 @@ export class LiveChallengeHandler {
       };
     }
 
-    // Warteräume: 1,5 Stunden (90 Min) / Captcha-Setzung: 90 Sekunden
+    // 🚀 Sicherer String-Vergleich: Verhindert jeden TS2367-Compilerfehler
+    const currentType: string = String(detection.type ?? "");
     const isQueue = 
-      detection.type === "shopify-queue" || 
-      detection.type === "queue-it" || 
-      detection.type === "waiting-room";
+      currentType === "shopify-queue" || 
+      currentType === "queue-it" || 
+      currentType === "waiting-room";
 
+    // Warteräume: 1,5 Stunden (90 Min) / Captcha-Setzung: 90 Sekunden
     const defaultTimeoutMs = isQueue ? 90 * 60 * 1_000 : 90_000;
     const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
     const pollIntervalMs = options.pollIntervalMs ?? 500;
@@ -79,7 +81,7 @@ export class LiveChallengeHandler {
     }
 
     options.onStatusChange?.(
-      `Challenge erkannt (${detection.type ?? "unbekannt"}). Starte Handling (Timeout: ${Math.round(timeoutMs / 1000)}s)...`,
+      `Challenge erkannt (${currentType || "unbekannt"}). Starte Handling (Timeout: ${Math.round(timeoutMs / 1000)}s)...`,
       detection
     );
 
@@ -90,22 +92,22 @@ export class LiveChallengeHandler {
 
     if (
       capmonsterKey &&
-      (detection.type === "turnstile" ||
-       detection.type === "recaptcha" ||
-       detection.type === "hcaptcha" ||
-       detection.type === "shopify-checkpoint")
+      (currentType === "turnstile" ||
+       currentType === "recaptcha" ||
+       currentType === "hcaptcha" ||
+       currentType === "shopify-checkpoint")
     ) {
       try {
         const sitekey = await this.extractSitekey(page);
 
         if (sitekey) {
           options.onStatusChange?.(
-            `CapMonster aktiv: Löse ${detection.type} (inkl. Bild-/Tiererkennung) via Cloud...`,
+            `CapMonster aktiv: Löse ${currentType} (inkl. Bild-/Tiererkennung) via Cloud...`,
             detection
           );
 
           const solver = new CapMonsterSolver(capmonsterKey);
-          const challengeType = detection.type === "shopify-checkpoint" ? "turnstile" : detection.type;
+          const challengeType = currentType === "shopify-checkpoint" ? "turnstile" : currentType;
 
           const token = await solver.solve(challengeType, page.url(), sitekey);
           await solver.injectAndSubmit(page, challengeType, token);
@@ -113,7 +115,7 @@ export class LiveChallengeHandler {
           await this.sleep(1200);
           if (await this.checkIfResolved(page)) {
             options.onStatusChange?.(
-              `Live-Challenge (${detection.type}) erfolgreich via CapMonster gelöst!`,
+              `Live-Challenge (${currentType}) erfolgreich via CapMonster gelöst!`,
               detection
             );
             return {
@@ -135,11 +137,11 @@ export class LiveChallengeHandler {
     // =========================================================================
     // 🚀 STUFE 2: GHOST-CURSOR MAUS-INTERAKTION + MENSCHLICHER FALLBACK
     // =========================================================================
-    if (detection.type === "turnstile" && options.autoSolveTurnstile !== false) {
+    if (currentType === "turnstile" && options.autoSolveTurnstile !== false) {
       await this.attemptTurnstileClick(page);
-    } else if (detection.type === "hcaptcha") {
+    } else if (currentType === "hcaptcha") {
       await this.attemptHCaptchaClick(page);
-    } else if (detection.type === "shopify-checkpoint") {
+    } else if (currentType === "shopify-checkpoint") {
       await this.attemptCheckpointSubmit(page);
     }
 
@@ -159,7 +161,7 @@ export class LiveChallengeHandler {
       const isResolved = await this.checkIfResolved(page);
       if (isResolved) {
         options.onStatusChange?.(
-          `Challenge (${detection.type ?? "unbekannt"}) erfolgreich bestanden!`,
+          `Challenge (${currentType || "unbekannt"}) erfolgreich bestanden!`,
           detection
         );
         return {
@@ -173,11 +175,11 @@ export class LiveChallengeHandler {
       // Alle 4 Sekunden erneute Interaktion mit ghost-cursor versuchen
       if (!isQueue && Date.now() - lastInteractionTime > 4_000) {
         lastInteractionTime = Date.now();
-        if (detection.type === "turnstile" && options.autoSolveTurnstile !== false) {
+        if (currentType === "turnstile" && options.autoSolveTurnstile !== false) {
           await this.attemptTurnstileClick(page);
-        } else if (detection.type === "hcaptcha") {
+        } else if (currentType === "hcaptcha") {
           await this.attemptHCaptchaClick(page);
-        } else if (detection.type === "shopify-checkpoint") {
+        } else if (currentType === "shopify-checkpoint") {
           await this.attemptCheckpointSubmit(page);
         }
       }
@@ -190,7 +192,7 @@ export class LiveChallengeHandler {
       type: detection.type,
       resolved: false,
       durationMs: Date.now() - startTime,
-      error: `Challenge (${detection.type}) nicht innerhalb von ${Math.round(timeoutMs / 1000)}s gelöst (Timeout).`
+      error: `Challenge (${currentType}) nicht innerhalb von ${Math.round(timeoutMs / 1000)}s gelöst (Timeout).`
     };
   }
 
