@@ -51,11 +51,27 @@ interface TaskView {
   lastError?: string;
 }
 
+interface TaskLogView {
+  id?: number;
+  taskId: string;
+  event: string;
+  state?: TaskState;
+  level: "info" | "warn" | "error";
+  message: string;
+  createdAt: string | Date;
+}
+
 interface SystemNodeStatus {
   executable: string;
   version?: string;
   major?: number;
   ok: boolean;
+  error?: string;
+}
+
+interface PersistenceStatus {
+  type: string;
+  ready: boolean;
   error?: string;
 }
 
@@ -69,6 +85,7 @@ interface SystemStatus {
   electronNodeVersion?: string;
   systemNodeRequirement?: string;
   systemNode?: SystemNodeStatus;
+  persistence?: PersistenceStatus;
   browserPreview?: boolean;
 }
 
@@ -111,6 +128,8 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   };
   tasks: TaskView[] = [];
+  taskLogs: Record<string, TaskLogView[]> = {};
+  expandedTaskLogId = "";
   system: SystemStatus = {
     availableWorkers: 0,
     shopCount: 0,
@@ -151,9 +170,11 @@ export class AppComponent implements OnInit, OnDestroy {
     ]);
 
     this.unsubscribeStatus = this.electron.onTaskStatusUpdate(() => {
+      const expandedTaskLogId = this.expandedTaskLogId;
       void Promise.all([
         this.loadTasks(),
-        this.loadSystemStatus()
+        this.loadSystemStatus(),
+        expandedTaskLogId ? this.loadTaskLogs(expandedTaskLogId) : Promise.resolve()
       ]);
     });
   }
@@ -248,6 +269,25 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   }
 
+  async loadTaskLogs(taskId: string): Promise<void> {
+    const result = await this.electron.getTaskLogs(taskId, 100);
+    if (result.success) {
+      this.taskLogs[taskId] = result.logs;
+    } else {
+      this.error = result.error || "Task-Verlauf konnte nicht geladen werden.";
+    }
+  }
+
+  async toggleTaskLogs(taskId: string): Promise<void> {
+    if (this.expandedTaskLogId === taskId) {
+      this.expandedTaskLogId = "";
+      return;
+    }
+
+    this.expandedTaskLogId = taskId;
+    await this.loadTaskLogs(taskId);
+  }
+
   async loadSystemStatus(): Promise<void> {
     const result = await this.electron.getSystemStatus();
     if (result.success) {
@@ -335,7 +375,8 @@ export class AppComponent implements OnInit, OnDestroy {
     }
     await Promise.all([
       this.loadTasks(),
-      this.loadSystemStatus()
+      this.loadSystemStatus(),
+      this.expandedTaskLogId === taskId ? this.loadTaskLogs(taskId) : Promise.resolve()
     ]);
   }
 
@@ -347,7 +388,8 @@ export class AppComponent implements OnInit, OnDestroy {
     }
     await Promise.all([
       this.loadTasks(),
-      this.loadSystemStatus()
+      this.loadSystemStatus(),
+      this.expandedTaskLogId === taskId ? this.loadTaskLogs(taskId) : Promise.resolve()
     ]);
   }
 
@@ -359,7 +401,8 @@ export class AppComponent implements OnInit, OnDestroy {
     }
     await Promise.all([
       this.loadTasks(),
-      this.loadSystemStatus()
+      this.loadSystemStatus(),
+      this.expandedTaskLogId === taskId ? this.loadTaskLogs(taskId) : Promise.resolve()
     ]);
   }
 
@@ -371,7 +414,8 @@ export class AppComponent implements OnInit, OnDestroy {
     }
     await Promise.all([
       this.loadTasks(),
-      this.loadSystemStatus()
+      this.loadSystemStatus(),
+      this.expandedTaskLogId === taskId ? this.loadTaskLogs(taskId) : Promise.resolve()
     ]);
   }
 
@@ -423,8 +467,24 @@ export class AppComponent implements OnInit, OnDestroy {
     return node.ok ? base : `${base} · ${node.error || "Worker kann evtl. nicht starten."}`;
   }
 
+  getPersistenceStatusLabel(): string {
+    if (this.system.browserPreview) return "PREVIEW";
+    return this.system.persistence?.ready && !this.system.persistence?.error ? "SQLITE OK" : "DB FEHLER";
+  }
+
+  getPersistenceDetails(): string {
+    if (this.system.browserPreview) return "Browser-Vorschau speichert nur im Arbeitsspeicher.";
+    const persistence = this.system.persistence;
+    if (!persistence) return "Persistenzstatus unbekannt.";
+    return persistence.error || `${persistence.type.toUpperCase()} · Task-Historie aktiv`;
+  }
+
   isSystemNodeOk(): boolean {
     return Boolean(this.system.browserPreview || this.system.systemNode?.ok);
+  }
+
+  isPersistenceOk(): boolean {
+    return Boolean(this.system.browserPreview || (this.system.persistence?.ready && !this.system.persistence?.error));
   }
 
   isStartable(task: TaskView): boolean {
