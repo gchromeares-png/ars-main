@@ -32,3 +32,15 @@ export interface Task {
   retries: number;
   maxRetries: number;
 }
+
+export type TaskLogLevel = "info" | "warn" | "error";
+
+export interface TaskLogEntry {
+  id?: number;
+  taskId: string;
+  event: string;
+  state?: TaskState;
+  level: TaskLogLevel;
+  message: string;
+  createdAt: Date;
+}
