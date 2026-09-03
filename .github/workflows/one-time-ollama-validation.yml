@@ -1,0 +1,75 @@
+name: One-time Ollama semantic validation
+
+on:
+  push:
+    branches:
+      - one-time-ollama-validation
+    paths:
+      - .github/workflows/one-time-ollama-validation.yml
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout isolated branch
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install Patchright Chrome
+        run: npm run browser:install
+
+      - name: Setup Ollama
+        uses: ai-action/setup-ollama@v2
+        with:
+          version: 0.33.2
+
+      - name: Start Ollama on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          nohup ollama serve > ollama.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:11434/api/version >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat ollama.log || true
+          exit 1
+
+      - name: Start Ollama on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Start-Process -FilePath ollama -ArgumentList 'serve' -WindowStyle Hidden
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/version' | Out-Null
+              $ready = $true
+              break
+            } catch {
+              Start-Sleep -Seconds 1
+            }
+          }
+          if (-not $ready) { throw 'Ollama server did not become ready' }
+
+      - name: Pull embedding model
+        run: ollama pull embeddinggemma:300m-qat-q4_0
+
+      - name: Run only the isolated real-Ollama test
+        env:
+          ARES_FIELD_EMBED_MODEL: embeddinggemma:300m-qat-q4_0
+          ARES_FIELD_EMBED_ENDPOINT: http://127.0.0.1:11434/api/embed
+        run: npx jest tests/one-time-ollama-semantic.integration.test.ts --runInBand
