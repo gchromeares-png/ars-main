@@ -52,6 +52,14 @@ interface TaskView {
   lastError?: string;
 }
 
+interface SystemNodeStatus {
+  executable: string;
+  version?: string;
+  major?: number;
+  ok: boolean;
+  error?: string;
+}
+
 interface SystemStatus {
   availableWorkers: number;
   shopCount: number;
@@ -59,6 +67,10 @@ interface SystemStatus {
   captchaProvider?: string;
   captchaApiKeyConfigured?: boolean;
   liveChallengeSupport?: string[];
+  electronNodeVersion?: string;
+  systemNodeRequirement?: string;
+  systemNode?: SystemNodeStatus;
+  browserPreview?: boolean;
 }
 
 @Component({
@@ -106,7 +118,11 @@ export class AppComponent implements OnInit, OnDestroy {
     taskCount: 0,
     captchaProvider: "CapMonster",
     captchaApiKeyConfigured: false,
-    liveChallengeSupport: []
+    liveChallengeSupport: [],
+    systemNode: {
+      executable: "node",
+      ok: false
+    }
   };
 
   newShop = {
@@ -363,6 +379,30 @@ async saveProfile(): Promise<void> {
     return this.system.liveChallengeSupport?.length
       ? this.system.liveChallengeSupport.join(", ")
       : "turnstile, recaptcha, shopify-checkpoint";
+  }
+
+  getSystemNodeStatusLabel(): string {
+    if (this.system.browserPreview) return "Browser-Vorschau";
+    if (!this.system.systemNode) return "Node unbekannt";
+    return this.system.systemNode.ok ? "NODE OK" : "NODE FEHLER";
+  }
+
+  getSystemNodeDetails(): string {
+    if (this.system.browserPreview) {
+      return "Echter Worker-Check läuft nur in Electron.";
+    }
+
+    const node = this.system.systemNode;
+    if (!node) return "System Node konnte nicht geprüft werden.";
+
+    const version = node.version || "unbekannt";
+    const requirement = this.system.systemNodeRequirement || ">=20";
+    const base = `${node.executable} ${version} · benötigt ${requirement}`;
+    return node.ok ? base : `${base} · ${node.error || "Worker kann evtl. nicht starten."}`;
+  }
+
+  isSystemNodeOk(): boolean {
+    return Boolean(this.system.browserPreview || this.system.systemNode?.ok);
   }
 
   isStartable(task: TaskView): boolean {
