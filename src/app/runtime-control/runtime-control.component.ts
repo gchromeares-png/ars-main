@@ -58,6 +58,10 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
     return this.workers.filter(worker => worker.running && worker.browser?.state !== "degraded").length;
   }
 
+  get activeWorkerTaskCount(): number {
+    return this.workers.reduce((sum, worker) => sum + Number(worker.activeTasks ?? 0), 0);
+  }
+
   get restartCount(): number {
     return this.workers.reduce((sum, worker) => sum + Number(worker.restartCount ?? 0), 0);
   }
