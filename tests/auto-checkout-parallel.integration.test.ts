@@ -23,6 +23,17 @@ const shop: CommerceShop = {
   config: {}
 };
 
+interface ResultRow {
+  parent: string;
+  child: string;
+  profile: string;
+  proxy: string;
+  session: string;
+  userDataDir: string;
+  trigger: string;
+  price: string;
+}
+
 class MemoryMonitorRepository implements ProductMonitorEventRepository {
   readonly records: Array<{ taskId: string; event: ProductMonitorEvent }> = [];
 
@@ -124,7 +135,7 @@ function createParent(orchestrator: TaskOrchestrator, id: string, profileId: str
   });
 }
 
-async function renderResultScreenshot(rows: Array<Record<string, string>>): Promise<void> {
+async function renderResultScreenshot(rows: ResultRow[]): Promise<void> {
   const artifactDir = path.join(process.cwd(), "test-artifacts");
   await mkdir(artifactDir, { recursive: true });
 
@@ -215,16 +226,13 @@ describeBrowser("parallel monitor → auto checkout integration", () => {
     void orchestrator.startTask(parentA.id);
     void orchestrator.startTask(parentB.id);
 
-    // Let both monitors establish their unavailable baseline first.
     await new Promise(resolve => setTimeout(resolve, 1_500));
     expect(orchestrator.getAllTasks()).toHaveLength(2);
     expect(checkoutProbe.executions).toHaveLength(0);
 
-    // Controlled variable change: product becomes available and price drops.
     available = true;
     price = 44.99;
 
-    // User-requested real observation window after the variable change.
     await new Promise(resolve => setTimeout(resolve, 20_000));
 
     const allTasks = orchestrator.getAllTasks();
@@ -247,12 +255,10 @@ describeBrowser("parallel monitor → auto checkout integration", () => {
     expect(executionA.sessionId).not.toBe(executionB.sessionId);
     expect(executionA.userDataDir).not.toBe(executionB.userDataDir);
 
-    // The price/availability change must be persisted by both monitor chains.
     const changedEvents = monitorRepository.records.filter(record => record.event.current.available);
     expect(changedEvents).toHaveLength(2);
     expect(changedEvents.every(record => record.event.current.price?.amount === 44.99)).toBe(true);
 
-    // Payment sessions are copied to the matching child only.
     expect(payments.get(executionA.taskId)?.card?.securityCode).toBe("111");
     expect(payments.get(executionB.taskId)?.card?.securityCode).toBe("222");
 
