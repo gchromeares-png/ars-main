@@ -92,7 +92,10 @@ export class TaskOrchestrator {
       const success = await this.executor.execute(task);
 
       const currentState = task.state as TaskState;
-      if (currentState === TaskState.CANCELLED) return;
+      if (currentState === TaskState.CANCELLED || currentState === TaskState.PAUSED) {
+        await this.registry.saveTask(task.id);
+        return;
+      }
 
       if (success) {
         this.transition(task, TaskState.CHECKOUT);
@@ -109,11 +112,46 @@ export class TaskOrchestrator {
     }
   }
 
+  async pauseTask(taskId: string): Promise<void> {
+    const task = this.registry.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+
+    this.removePendingTask(taskId);
+    this.retryScheduler.cancelRetry(taskId);
+
+    if (!this.stateMachine.canTransition(task.state, TaskState.PAUSED)) {
+      throw new Error(`Task ${taskId} cannot pause from ${task.state}`);
+    }
+
+    this.transition(task, TaskState.PAUSED);
+    this.cancellationManager.cancelTask(taskId);
+    void this.executor.cancelTask?.(taskId).catch(error => {
+      task.lastError = error instanceof Error ? error.message : String(error);
+    });
+
+    await this.registry.saveTask(task.id);
+    this.drainQueue();
+  }
+
+  async resumeTask(taskId: string): Promise<void> {
+    const task = this.registry.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.state !== TaskState.PAUSED) {
+      throw new Error(`Task ${taskId} cannot resume from ${task.state}`);
+    }
+
+    this.transition(task, TaskState.QUEUED);
+    this.eventBus.emit("taskResumed", task);
+    await this.registry.saveTask(task.id);
+    this.drainQueue();
+  }
+
   cancelTask(taskId: string): void {
     const task = this.registry.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
 
     this.removePendingTask(taskId);
+    this.retryScheduler.cancelRetry(taskId);
     this.cancellationManager.cancelTask(taskId);
     void this.executor.cancelTask?.(taskId).catch(error => {
       task.lastError = error instanceof Error ? error.message : String(error);
@@ -197,6 +235,7 @@ export class TaskOrchestrator {
       newState === TaskState.QUEUED ? "taskQueued" :
       newState === TaskState.SUCCESS ? "taskCompleted" :
       newState === TaskState.CANCELLED ? "taskCancelled" :
+      newState === TaskState.PAUSED ? "taskPaused" :
       "taskUpdated";
 
     this.eventBus.emit(event, task);
