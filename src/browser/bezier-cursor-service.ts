@@ -5,6 +5,8 @@ import {
   type UiClickOptions,
   type UiFillOptions,
   type UiFocusOptions,
+  type UiHoverOptions,
+  type UiScrollOptions,
   type UiSelectOptions
 } from "../browser-worker/ui-interaction-helper";
 
@@ -30,6 +32,14 @@ export class BezierCursorService {
 
   async focusLocator(page: Page, locator: Locator, options?: UiFocusOptions): Promise<void> {
     await this.forPage(page).focus(locator, options);
+  }
+
+  async hoverLocator(page: Page, locator: Locator, options?: UiHoverOptions): Promise<void> {
+    await this.forPage(page).hover(locator, options);
+  }
+
+  async scrollLocatorIntoView(page: Page, locator: Locator, options?: UiScrollOptions): Promise<void> {
+    await this.forPage(page).scrollIntoView(locator, options);
   }
 
   private forPage(page: Page): GhostCursorUiInteractionHelper {
