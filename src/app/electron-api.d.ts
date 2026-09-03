@@ -10,6 +10,8 @@ declare global {
       registerShop(config: unknown): Promise<any>;
       createTask(config: unknown): Promise<any>;
       startTask(taskId: string): Promise<any>;
+      pauseTask(taskId: string): Promise<any>;
+      resumeTask(taskId: string): Promise<any>;
       stopTask(taskId: string): Promise<any>;
       getTaskStatus(taskId: string): Promise<any>;
       getTaskList(): Promise<any>;
