@@ -1,4 +1,5 @@
 import type { Locator } from "patchright";
+import type { InteractionOutcomeExpectation, InteractionReadinessPolicy } from "./interaction-policies";
 
 export interface InteractionPoint {
   x: number;
@@ -20,15 +21,11 @@ export interface InteractionTargetState {
 }
 
 export interface PointerInteractionProfile {
-  /** Number of intermediate mouse points. */
   minSteps: number;
   maxSteps: number;
-  /** Delay between generated pointer points. */
   minStepDelayMs: number;
   maxStepDelayMs: number;
-  /** Keep the click away from the outer edge of the target. 0..0.45 */
   targetInsetRatio: number;
-  /** Maximum offset around the target center as a ratio of the usable area. */
   targetVariationRatio: number;
 }
 
@@ -42,23 +39,40 @@ export interface InteractionProfiles {
   form: FormInteractionProfile;
 }
 
-export type InteractionOutcomeVerifier = () => boolean | Promise<boolean>;
+export type InteractionFailureReason =
+  | "not-ready"
+  | "action-error"
+  | "outcome-timeout";
+
+export interface InteractionAttemptTrace {
+  attempt: number;
+  seed: string;
+  readinessPolicy: string;
+  targetState: InteractionTargetState;
+  targetPoint?: InteractionPoint;
+  outcomeExpectation?: string;
+  failureReason?: InteractionFailureReason;
+  error?: string;
+}
 
 export interface ClickInteractionOptions {
   seed?: number | string;
   attempts?: number;
   readinessTimeoutMs?: number;
   verifyTimeoutMs?: number;
-  expected?: InteractionOutcomeVerifier;
+  readiness?: InteractionReadinessPolicy;
+  expected?: InteractionOutcomeExpectation;
   button?: "left" | "right" | "middle";
   clickCount?: number;
 }
 
 export interface FillInteractionOptions {
+  seed?: number | string;
   attempts?: number;
   readinessTimeoutMs?: number;
   verifyTimeoutMs?: number;
-  expected?: InteractionOutcomeVerifier;
+  readiness?: InteractionReadinessPolicy;
+  expected?: InteractionOutcomeExpectation;
 }
 
 export interface InteractionAttemptResult {
@@ -66,6 +80,8 @@ export interface InteractionAttemptResult {
   attempts: number;
   targetState: InteractionTargetState;
   targetPoint?: InteractionPoint;
+  failureReason?: InteractionFailureReason;
+  trace: InteractionAttemptTrace[];
 }
 
 export interface InteractionTarget {
