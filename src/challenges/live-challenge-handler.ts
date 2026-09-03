@@ -112,11 +112,88 @@ export class LiveChallengeHandler {
           const token = await solver.solve(challengeType, page.url(), sitekey);
           await solver.injectAndSubmit(page, challengeType, token);
 
+Es betrifft nur eine einzige Datei:
+
+👉 src/challenges/live-challenge-handler.ts
+
+Dort gibt es genau zwei Stellen:
+
+1. Stelle: Der Aufruf in handleLiveChallenge (ca. Zeile 110–125)
+
+Suche im CapMonster-Block nach dieser Stelle:
+
+Vorher:
+
+          const token = await solver.solve(challengeType, page.url(), sitekey);
+          await solver.injectAndSubmit(page, challengeType, token);
+
           await this.sleep(1200);
           if (await this.checkIfResolved(page)) {
             options.onStatusChange?.(
               `Live-Challenge (${currentType}) im Browser erfolgreich gelöst!`,
               detection
+            );
+            return {
+              handled: true,
+              type: detection.type,
+              resolved: true,
+              durationMs: Date.now() - startTime
+            };
+          }
+
+Nachher:
+
+          const token = await solver.solve(challengeType, page.url(), sitekey);
+          await solver.injectAndSubmit(page, challengeType, token);
+
+          // 🚀 PASSIVES ÜBERGANGSFENSTER: Bis zu 3,5s pollen, ob Token greift (ohne Klicks)
+          if (await this.waitForResolvedTransition(page, 3500, 250)) {
+            options.onStatusChange?.(
+              `Live-Challenge (${currentType}) im Browser erfolgreich gelöst!`,
+              detection
+            );
+            return {
+              handled: true,
+              type: detection.type,
+              resolved: true,
+              durationMs: Date.now() - startTime
+            };
+          }
+
+2. Stelle: Die neue Hilfsfunktion einfügen (ganz unten in der Klasse)
+
+Scrolle ganz nach unten in der Klasse LiveChallengeHandler. Direkt über private
+sleep(ms: number) fügst du diese neue Methode ein:
+
+  /**
+   * 🚀 Wartet rein passiv darauf, dass die Seite nach einer Token-Injection
+   * die Challenge verlässt, bevor der interaktive Fallback (Ghost-Cursor) anspringt.
+   */
+  private async waitForResolvedTransition(
+    page: Page,
+    timeoutMs: number = 3_500,
+    pollIntervalMs: number = 250
+  ): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (page.isClosed()) return false;
+      if (await this.checkIfResolved(page)) {
+        return true;
+      }
+      await this.sleep(pollIntervalMs);
+    }
+    return false;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+Das war schon alles!
+
+Keine andere Datei muss berührt werden. Sobald du das einbaust, hat CapMonster
+ein sauberes, klick-freies Zeitfenster zum Weiterleiten.
+
             );
             return {
               handled: true,
