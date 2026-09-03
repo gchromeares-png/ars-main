@@ -7,8 +7,10 @@ import type { Page } from "patchright";
 import { ITaskExecutor } from "../interfaces";
 import { Task } from "../models";
 import { AresProfile } from "../profiles/models";
-import { FieldSemanticResolver, OllamaEmbeddingProvider, type FieldIntent } from "../browser-worker/field-semantic-resolver";
-import { SemanticFieldAutofill, type FieldValueMap } from "../browser-worker/semantic-field-autofill";
+import { FieldSemanticResolver, OllamaEmbeddingProvider } from "../browser-worker/field-semantic-resolver";
+import { SemanticFieldAutofill } from "../browser-worker/semantic-field-autofill";
+import { SemanticCheckoutProfilePlanner } from "../browser-worker/semantic-checkout-profile-planner";
+import { semanticTarget, type FieldIntent, type SemanticTarget } from "../browser-worker/semantic-target";
 import { GhostCursorUiInteractionHelper } from "../browser-worker/ui-interaction-helper";
 import type { BrowserWorker } from "../browser-worker/browser-worker";
 import { PatchrightBrowserWorker } from "../browser-worker/patchright-browser-worker";
@@ -19,7 +21,8 @@ import { ShopifyQueueWaiter } from "./queue-waiter";
 
 export type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
 
-type CheckoutFieldIntent = Exclude<FieldIntent, "unknown">;
+type ConcreteFieldIntent = Exclude<FieldIntent, "unknown">;
+type CheckoutTarget = SemanticTarget & { intent: ConcreteFieldIntent };
 
 interface ShopifyVariant {
   id: number | string;
@@ -290,34 +293,41 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
   private async fillCheckoutProfile(
     page: Page,
     profile: AresProfile
-  ): Promise<{ filled: string[]; missing: string[] }> {
-    const countryCode = (profile.address.countryCode || "DE").toUpperCase();
-    const values: FieldValueMap = {
-      email: profile.contact.email,
-      firstName: profile.contact.firstName,
-      lastName: profile.contact.lastName,
-      address1: profile.address.address1,
-      address2: profile.address.address2 || "",
-      city: profile.address.city,
-      postalCode: profile.address.postalCode,
-      phone: profile.contact.phone || "",
-      countryCode
-    };
-
-    const fields: Array<{ key: CheckoutFieldIntent; value: string; selectors: string[] }> = [
-      { key: "email", value: profile.contact.email, selectors: ['input[name="email"]', 'input[type="email"]', 'input[autocomplete="email"]'] },
-      { key: "firstName", value: profile.contact.firstName, selectors: ['input[name="firstName"]', 'input[name*="first_name" i]', 'input[autocomplete="given-name"]'] },
-      { key: "lastName", value: profile.contact.lastName, selectors: ['input[name="lastName"]', 'input[name*="last_name" i]', 'input[autocomplete="family-name"]'] },
-      { key: "address1", value: profile.address.address1, selectors: ['input[name="address1"]', 'input[name*="address1" i]', 'input[autocomplete="address-line1"]'] },
-      { key: "address2", value: profile.address.address2 || "", selectors: ['input[name="address2"]', 'input[name*="address2" i]', 'input[autocomplete="address-line2"]'] },
-      { key: "city", value: profile.address.city, selectors: ['input[name="city"]', 'input[autocomplete="address-level2"]'] },
-      { key: "postalCode", value: profile.address.postalCode, selectors: ['input[name="postalCode"]', 'input[name*="postal" i]', 'input[name*="zip" i]', 'input[autocomplete="postal-code"]'] },
-      { key: "phone", value: profile.contact.phone || "", selectors: ['input[name="phone"]', 'input[type="tel"]', 'input[autocomplete="tel"]'] }
-    ];
-
+  ): Promise<{
+    filled: SemanticTarget[];
+    missing: SemanticTarget[];
+    writeCounts: Record<string, number>;
+    billingMode: "explicit-billing" | "same-as-shipping" | "separate-billing-fields";
+  }> {
     const interactions = new GhostCursorUiInteractionHelper(page);
+    const plan = await new SemanticCheckoutProfilePlanner(interactions).prepare(page, profile);
     const autofill = new SemanticFieldAutofill(page, interactions, this.fieldResolver);
-    const required = new Set<CheckoutFieldIntent>(["email", "firstName", "lastName", "address1", "city", "postalCode"]);
+
+    // This Set describes global field requirements only. Concrete write/completion
+    // identity is always the full SemanticTarget (intent + context).
+    const requiredIntents = new Set<ConcreteFieldIntent>([
+      "email",
+      "firstName",
+      "lastName",
+      "address1",
+      "city",
+      "postalCode"
+    ]);
+
+    // Compatibility fallback for checkout versions whose fields cannot be resolved
+    // semantically. These are explicit unknown-context targets and receive their
+    // values only from the central profile mapper.
+    const fallbackFields: Array<{ target: CheckoutTarget; selectors: string[]; select?: boolean }> = [
+      { target: semanticTarget("email", "unknown") as CheckoutTarget, selectors: ['input[name="email"]', 'input[type="email"]', 'input[autocomplete="email"]'] },
+      { target: semanticTarget("firstName", "unknown") as CheckoutTarget, selectors: ['input[name="firstName"]', 'input[name*="first_name" i]', 'input[autocomplete="given-name"]'] },
+      { target: semanticTarget("lastName", "unknown") as CheckoutTarget, selectors: ['input[name="lastName"]', 'input[name*="last_name" i]', 'input[autocomplete="family-name"]'] },
+      { target: semanticTarget("address1", "unknown") as CheckoutTarget, selectors: ['input[name="address1"]', 'input[name*="address1" i]', 'input[autocomplete="address-line1"]'] },
+      { target: semanticTarget("address2", "unknown") as CheckoutTarget, selectors: ['input[name="address2"]', 'input[name*="address2" i]', 'input[autocomplete="address-line2"]'] },
+      { target: semanticTarget("city", "unknown") as CheckoutTarget, selectors: ['input[name="city"]', 'input[autocomplete="address-level2"]'] },
+      { target: semanticTarget("postalCode", "unknown") as CheckoutTarget, selectors: ['input[name="postalCode"]', 'input[name*="postal" i]', 'input[name*="zip" i]', 'input[autocomplete="postal-code"]'] },
+      { target: semanticTarget("phone", "unknown") as CheckoutTarget, selectors: ['input[name="phone"]', 'input[type="tel"]', 'input[autocomplete="tel"]'] },
+      { target: semanticTarget("countryCode", "unknown") as CheckoutTarget, selectors: ['select[name="countryCode"]', 'select[name*="country" i]'], select: true }
+    ];
 
     for (let attempt = 0; attempt < 12; attempt++) {
       if (attempt > 0) await this.sleep(700);
@@ -325,43 +335,38 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
         await this.liveChallengeHandler.handleLiveChallenge(page, { timeoutMs: 20_000 });
       }
 
-      // Fast semantic pass first. One batched local embedding request handles all
-      // unresolved controls; it never receives profile values.
-      await autofill.fillSemantic(values).catch(() => undefined);
+      await autofill.fillSemantic(plan.values).catch(() => undefined);
 
-      // Compatibility fallback: existing selectors are kept, but share the same
-      // idempotent completion state so a successful logical field is not filled twice.
-      for (const field of fields) {
-        if (!field.value?.trim()) continue;
-        if (await autofill.isComplete(field.key, field.value)) continue;
+      for (const fallback of fallbackFields) {
+        if (autofill.hasObservedIntent(fallback.target.intent)) continue;
+        const value = plan.values.valueFor(fallback.target);
+        if (!value?.trim()) continue;
 
-        for (const selector of field.selectors) {
+        for (const selector of fallback.selectors) {
           const locator = page.locator(selector).first();
           try {
-            if (await autofill.fillLocator(field.key, locator, field.value)) break;
+            const success = fallback.select
+              ? await autofill.selectLocator(fallback.target, locator, value)
+              : await autofill.fillLocator(fallback.target, locator, value);
+            if (success) break;
           } catch {
             // Checkout may still be rendering; try the next selector/attempt.
           }
         }
       }
 
-      if (!await autofill.isComplete("countryCode", countryCode)) {
-        for (const selector of ['select[name="countryCode"]', 'select[name*="country" i]']) {
-          try {
-            const locator = page.locator(selector).first();
-            if (await autofill.selectLocator("countryCode", locator, countryCode)) break;
-          } catch {
-            // Some Shopify checkout versions expose country differently.
-          }
-        }
-      }
-
-      const snapshot = await autofill.result(values);
-      if ([...required].every(key => snapshot.filled.includes(key))) break;
+      const snapshot = await autofill.result(plan.values);
+      const missingRequiredTarget = snapshot.missing.some(target =>
+        target.intent !== "unknown" && requiredIntents.has(target.intent)
+      );
+      if (!missingRequiredTarget) break;
     }
 
-    const result = await autofill.result(values);
-    return { filled: result.filled, missing: result.missing };
+    const result = await autofill.result(plan.values);
+    return {
+      ...result,
+      billingMode: plan.billingMode
+    };
   }
 
   private async findProduct(baseUrl: string, searchTerm: string, page?: Page): Promise<ShopifyFlowResult> {
