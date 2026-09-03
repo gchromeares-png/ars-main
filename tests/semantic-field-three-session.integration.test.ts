@@ -19,7 +19,7 @@ class IntegrationEmbeddingProvider implements SemanticEmbeddingProvider {
       [/mail|e-mail/, 0],
       [/given|first name|vorname|rufname/, 1],
       [/family|surname|nachname|familienname/, 2],
-      [/street|straße|hausnummer|anschrift/, 3],
+      [/street|straße|hausnummer|straßenanschrift/, 3],
       [/secondary|apartment|adresszusatz/, 4],
       [/city|town|locality|stadt|ort|gemeinde|lieferort/, 5],
       [/postal|zip|postleitzahl|zustellcode|postgebiet/, 6],
