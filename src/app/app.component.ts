@@ -56,6 +56,9 @@ interface SystemStatus {
   availableWorkers: number;
   shopCount: number;
   taskCount: number;
+  captchaProvider?: string;
+  captchaApiKeyConfigured?: boolean;
+  liveChallengeSupport?: string[];
 }
 
 @Component({
@@ -97,7 +100,14 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   };
   tasks: TaskView[] = [];
-  system: SystemStatus = { availableWorkers: 0, shopCount: 0, taskCount: 0 };
+  system: SystemStatus = {
+    availableWorkers: 0,
+    shopCount: 0,
+    taskCount: 0,
+    captchaProvider: "CapMonster",
+    captchaApiKeyConfigured: false,
+    liveChallengeSupport: []
+  };
 
   newShop = {
     id: "",
@@ -331,6 +341,28 @@ async saveProfile(): Promise<void> {
     const profileId = String(task.config.data?.["profileId"] ?? "");
     if (!profileId) return "kein Profil";
     return this.profiles.find(profile => profile.id === profileId)?.name ?? profileId;
+  }
+
+  getTaskCaptchaStatus(task: TaskView): string {
+    const data = task.config.data ?? {};
+    const value = data["liveChallengeStatus"] ?? data["captchaStatus"] ?? data["challengeStatus"];
+    return value ? String(value) : "Kein aktueller Captcha-Status";
+  }
+
+  getTaskChallengeType(task: TaskView): string {
+    const data = task.config.data ?? {};
+    const value = data["liveChallengeType"] ?? data["captchaType"] ?? data["challengeType"];
+    return value ? String(value) : "";
+  }
+
+  getCaptchaKeyStatusLabel(): string {
+    return this.system.captchaApiKeyConfigured ? "API-Key gesetzt" : "API-Key fehlt";
+  }
+
+  getSupportedChallengeTypes(): string {
+    return this.system.liveChallengeSupport?.length
+      ? this.system.liveChallengeSupport.join(", ")
+      : "turnstile, recaptcha, shopify-checkpoint";
   }
 
   isStartable(task: TaskView): boolean {
