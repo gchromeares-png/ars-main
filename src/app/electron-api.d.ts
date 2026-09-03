@@ -6,6 +6,9 @@ declare global {
       getProfiles(): Promise<any>;
       saveProfile(profile: unknown): Promise<any>;
       deleteProfile(profileId: string): Promise<any>;
+      getProxies(): Promise<any>;
+      saveProxy(proxy: unknown): Promise<any>;
+      deleteProxy(proxyId: string): Promise<any>;
       getShops(): Promise<any>;
       registerShop(config: unknown): Promise<any>;
       createTask(config: unknown): Promise<any>;
