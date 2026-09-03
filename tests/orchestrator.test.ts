@@ -131,6 +131,27 @@ describe("TaskOrchestrator", () => {
     executor.complete(task.id, true);
   });
 
+  it("restores previously active tasks as paused after initialization", async () => {
+    const repository = new TaskRepositoryMock();
+    const now = new Date();
+    await repository.save({
+      id: "restored-running",
+      config: { id: "restored-running", name: "restored" },
+      state: TaskState.RUNNING,
+      createdAt: now,
+      updatedAt: now,
+      retries: 0,
+      maxRetries: 3
+    });
+
+    const o = new TaskOrchestrator(repository, new TaskExecutorMock());
+    await o.initialize();
+
+    const restored = o.getTask("restored-running");
+    expect(restored?.state).toBe(TaskState.PAUSED);
+    expect(restored?.lastError).toContain("App-Neustart");
+  });
+
   it("keeps excess tasks queued and starts the next task when a worker is released", async () => {
     const executor = new DeferredExecutor();
     const o = new TaskOrchestrator(new TaskRepositoryMock(), executor);
