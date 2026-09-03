@@ -15,6 +15,7 @@ const api = {
   stopTask: (taskId: string) => ipcRenderer.invoke("stop-task", taskId),
   getTaskStatus: (taskId: string) => ipcRenderer.invoke("get-task-status", taskId),
   getTaskList: () => ipcRenderer.invoke("get-task-list"),
+  getTaskLogs: (taskId: string, limit = 100) => ipcRenderer.invoke("get-task-logs", taskId, limit),
   getSystemStatus: () => ipcRenderer.invoke("get-system-status"),
   onTaskStatusUpdate: (callback: (task: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
