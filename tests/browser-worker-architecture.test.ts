@@ -51,13 +51,16 @@ describe("external Node browser worker architecture", () => {
     expect(electronMain).toContain('from "../browser-worker/client"');
   });
 
-  it("performs graceful async worker-pool shutdown before Electron exits", () => {
+  it("performs graceful async executor shutdown before Electron exits", () => {
     const clientSource = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/client.ts"), "utf8");
+    const routerSource = fs.readFileSync(path.resolve(__dirname, "../src/commerce/task-executor-router.ts"), "utf8");
     const electronMain = fs.readFileSync(path.resolve(__dirname, "../src/electron/main.ts"), "utf8");
 
     expect(clientSource).toContain("async close(): Promise<void>");
     expect(clientSource).toContain('type: "shutdown"');
+    expect(routerSource).toContain("async close(): Promise<void>");
+    expect(routerSource).toContain("await executor.close?.()");
     expect(electronMain).toContain("event.preventDefault()");
-    expect(electronMain).toContain("await browserWorker?.close()");
+    expect(electronMain).toContain("await commerceExecutor?.close()");
   });
 });
