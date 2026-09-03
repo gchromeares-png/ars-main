@@ -26,6 +26,7 @@ export interface UiFillOptions {
 }
 
 export interface UiSelectOptions extends UiFillOptions {}
+export interface UiFocusOptions extends UiFillOptions {}
 
 export interface UiInteractionHelper {
   moveTo(target: Locator, options?: UiMoveOptions): Promise<void>;
@@ -33,16 +34,16 @@ export interface UiInteractionHelper {
   click(target: Locator, options?: UiClickOptions): Promise<void>;
   fill(target: Locator, value: string, options?: UiFillOptions): Promise<void>;
   select(target: Locator, value: string, options?: UiSelectOptions): Promise<void>;
-  focus(target: Locator): Promise<void>;
+  focus(target: Locator, options?: UiFocusOptions): Promise<void>;
 }
 
 /**
  * Backwards-compatible facade for normal UI automation.
- * All stateful click/form work is delegated to InteractionEngine.
- * CAPTCHA/challenge handling is intentionally separate.
+ * Stateful actions delegate to InteractionEngine; challenge handling stays separate.
  */
 export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   private readonly engine: InteractionEngine;
+  private position: UiPoint = { x: 0, y: 0 };
 
   constructor(private readonly page: Page) {
     this.engine = new InteractionEngine(page);
@@ -62,7 +63,7 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
     }
     const steps = 10;
     const delay = Math.max(0, Math.floor(options.stepDelayMs ?? 0));
-    const start = { x: 0, y: 0 };
+    const start = { ...this.position };
     for (let index = 1; index <= steps; index++) {
       const t = index / steps;
       await this.page.mouse.move(
@@ -71,6 +72,7 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
       );
       if (delay > 0) await new Promise<void>(resolve => setTimeout(resolve, delay));
     }
+    this.position = { ...target };
   }
 
   async click(target: Locator, options: UiClickOptions = {}): Promise<void> {
@@ -81,9 +83,7 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
       button: options.button,
       clickCount: options.clickCount
     });
-    if (!result.success) {
-      throw new Error(`Interaction click failed: ${result.failureReason ?? "unknown"}`);
-    }
+    this.assertSuccess("click", result.success, result.failureReason);
   }
 
   async fill(target: Locator, value: string, options: UiFillOptions = {}): Promise<void> {
@@ -92,36 +92,28 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
       seed: options.seed,
       expected: options.expected
     });
-    if (!result.success) {
-      throw new Error(`Interaction fill failed: ${result.failureReason ?? "unknown"}`);
-    }
+    this.assertSuccess("fill", result.success, result.failureReason);
   }
 
   async select(target: Locator, value: string, options: UiSelectOptions = {}): Promise<void> {
-    await target.scrollIntoViewIfNeeded().catch(() => undefined);
-    await target.waitFor({ state: "visible" });
-    if (!await target.isEnabled()) throw new Error("Interaction select failed: target disabled");
-
-    const attempts = Math.max(1, Math.min(5, Math.floor(options.attempts ?? 2)));
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-      try {
-        await target.selectOption(value);
-        const selected = await target.inputValue().catch(() => "");
-        const verified = options.expected
-          ? await options.expected.verify(this.page)
-          : selected === value;
-        if (verified) return;
-      } catch {
-        // Re-evaluate the live element on the next bounded attempt.
-      }
-    }
-    throw new Error("Interaction select failed: outcome-timeout");
+    const result = await this.engine.select(target, value, {
+      attempts: options.attempts,
+      seed: options.seed,
+      expected: options.expected
+    });
+    this.assertSuccess("select", result.success, result.failureReason);
   }
 
-  async focus(target: Locator): Promise<void> {
-    await target.scrollIntoViewIfNeeded().catch(() => undefined);
-    await target.waitFor({ state: "visible" });
-    if (!await target.isEnabled()) throw new Error("Interaction focus failed: target disabled");
-    await target.focus();
+  async focus(target: Locator, options: UiFocusOptions = {}): Promise<void> {
+    const result = await this.engine.focus(target, {
+      attempts: options.attempts,
+      seed: options.seed,
+      expected: options.expected
+    });
+    this.assertSuccess("focus", result.success, result.failureReason);
+  }
+
+  private assertSuccess(action: string, success: boolean, failureReason?: string): void {
+    if (!success) throw new Error(`Interaction ${action} failed: ${failureReason ?? "unknown"}`);
   }
 }
