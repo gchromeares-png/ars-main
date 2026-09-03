@@ -1,11 +1,10 @@
 import type { ITaskExecutor } from "../interfaces";
-import type { Task } from "../models";
+import type { Task, TaskLogEntry } from "../models";
 import type { CommerceShop } from "../commerce/platforms";
 import type { CommerceProductApiRouter } from "../commerce/product-api/router";
 import type {
   ProductCriteria,
-  ProductMonitorEvent,
-  ProductObservation
+  ProductMonitorEvent
 } from "./models";
 import { ProductMatcher } from "./product-matcher";
 import { ProductMonitor } from "./product-monitor";
@@ -13,6 +12,7 @@ import { ProductMonitor } from "./product-monitor";
 export interface ProductMonitorEventRepository {
   recordProductMonitorEvent(taskId: string, event: ProductMonitorEvent): Promise<void>;
   findProductMonitorEventsByTaskId(taskId: string, limit?: number): Promise<Array<ProductMonitorEvent & { id?: number; taskId: string }>>;
+  appendLog?(entry: TaskLogEntry): Promise<void>;
 }
 
 export interface CommerceMonitorServiceOptions {
@@ -37,7 +37,6 @@ export function getTaskProductCriteria(task: Task): ProductCriteria | undefined 
   if (!raw) return undefined;
 
   const criteria: ProductCriteria = {};
-
   if (typeof raw["searchTerm"] === "string") criteria.searchTerm = raw["searchTerm"];
   if (typeof raw["sku"] === "string") criteria.sku = raw["sku"];
   if (typeof raw["gtin"] === "string") criteria.gtin = raw["gtin"];
@@ -47,7 +46,6 @@ export function getTaskProductCriteria(task: Task): ProductCriteria | undefined 
   if (typeof raw["minPrice"] === "number") criteria.minPrice = raw["minPrice"];
   if (typeof raw["maxPrice"] === "number") criteria.maxPrice = raw["maxPrice"];
   if (typeof raw["minimumScore"] === "number") criteria.minimumScore = raw["minimumScore"];
-
   return criteria;
 }
 
@@ -64,15 +62,22 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
 
   return new Promise(resolve => {
     const timer = setTimeout(done, ms);
-
     function done(): void {
       clearTimeout(timer);
       signal.removeEventListener("abort", done);
       resolve();
     }
-
     signal.addEventListener("abort", done, { once: true });
   });
+}
+
+function monitorMessage(event: ProductMonitorEvent): string {
+  const product = event.current.variantTitle
+    ? `${event.current.title} · ${event.current.variantTitle}`
+    : event.current.title;
+  const stock = typeof event.current.stock === "number" ? ` · Bestand ${event.current.stock}` : "";
+  const price = event.current.price ? ` · ${event.current.price.amount} ${event.current.price.currency ?? ""}`.trimEnd() : "";
+  return `${product} · ${event.type}${stock}${price}`;
 }
 
 export class CommerceMonitorService implements ITaskExecutor {
@@ -128,7 +133,6 @@ export class CommerceMonitorService implements ITaskExecutor {
         if (controller.signal.aborted) break;
         await abortableDelay(this.intervalFor(task), controller.signal);
       }
-
       task.lastError = undefined;
       return true;
     } catch (error) {
@@ -136,9 +140,7 @@ export class CommerceMonitorService implements ITaskExecutor {
       task.lastError = error instanceof Error ? error.message : String(error);
       return false;
     } finally {
-      if (this.activeRuns.get(task.id) === run) {
-        this.activeRuns.delete(task.id);
-      }
+      if (this.activeRuns.get(task.id) === run) this.activeRuns.delete(task.id);
     }
   }
 
@@ -157,19 +159,11 @@ export class CommerceMonitorService implements ITaskExecutor {
     const resolvedCriteria = criteria ?? getTaskProductCriteria(task);
     if (!resolvedCriteria) throw new Error("Monitoring-Task hat keine productCriteria.");
 
-    const observations = await this.productApiRouter.search(
-      resolvedShop,
-      resolvedCriteria,
-      this.searchLimit
-    );
-
+    const observations = await this.productApiRouter.search(resolvedShop, resolvedCriteria, this.searchLimit);
     if (signal?.aborted) return [];
 
     const ranked = observations
-      .map(observation => ({
-        observation,
-        match: this.matcher.match(observation, resolvedCriteria)
-      }))
+      .map(observation => ({ observation, match: this.matcher.match(observation, resolvedCriteria) }))
       .filter(candidate => candidate.match.matched)
       .sort((a, b) => b.match.score - a.match.score);
 
@@ -178,11 +172,20 @@ export class CommerceMonitorService implements ITaskExecutor {
 
     for (const candidate of ranked) {
       if (signal?.aborted) break;
-
       const event = monitor.observe(candidate.observation, resolvedCriteria);
       if (!event || !isRelevantChange(event)) continue;
 
       await this.repository.recordProductMonitorEvent(task.id, event);
+      if (this.repository.appendLog) {
+        await this.repository.appendLog({
+          taskId: task.id,
+          event: `product:${event.type}`,
+          state: task.state,
+          level: "info",
+          message: monitorMessage(event),
+          createdAt: new Date(event.observedAt)
+        });
+      }
       relevantEvents.push(event);
       this.options.onEvent?.(task.id, event);
     }
@@ -199,9 +202,7 @@ export class CommerceMonitorService implements ITaskExecutor {
   }
 
   async close(): Promise<void> {
-    for (const run of this.activeRuns.values()) {
-      run.controller.abort();
-    }
+    for (const run of this.activeRuns.values()) run.controller.abort();
     this.activeRuns.clear();
     this.monitors.clear();
   }
