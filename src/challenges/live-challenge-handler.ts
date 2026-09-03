@@ -1,4 +1,5 @@
-import { CapMonsterSolver } from './capmonster-solver';
+import { createCursor } from "ghost-cursor";
+import { CapMonsterSolver } from "./capmonster-solver";
 import type { Page } from "patchright";
 import { LiveChallengeDetector } from "./live-challenge-detector";
 import type {
@@ -11,14 +12,48 @@ export class LiveChallengeHandler {
   constructor(private readonly detector: LiveChallengeDetector = new LiveChallengeDetector()) {}
 
   /**
-   * Main entry point for Live-Captcha handling in the active browser page.
-   * Detects if a challenge is present and handles automated resolution or
-   * waits for user solving in the live browser session.
+   * Findet den Sitekey aus mehreren Quellen (DOM, Iframes, hCaptcha UUIDs, Turnstile RegEx).
    */
+  async extractSitekey(page: Page): Promise<string | null> {
+    return page.evaluate(() => {
+      // 1. data-sitekey Attribut (hCaptcha / reCAPTCHA / Turnstile)
+      const el = document.querySelector("[data-sitekey]");
+      if (el && el.getAttribute("data-sitekey")) {
+        return el.getAttribute("data-sitekey");
+      }
+
+      // 2. Iframe URL Parameter (sitekey=... oder key=...)
+      const iframes = Array.from(document.querySelectorAll("iframe"));
+      for (const frame of iframes) {
+        const src = frame.src || "";
+        const match = src.match(/sitekey=([^&]+)/) || src.match(/key=([^&]+)/);
+        if (match && match[1]) {
+          return decodeURIComponent(match[1]);
+        }
+      }
+
+      const html = document.documentElement.innerHTML;
+
+      // 3. hCaptcha UUID Pattern (z.B. a5f76b62-1234-...)
+      const hcaptchaRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+      const hMatch = html.match(hcaptchaRegex);
+      if (hMatch) {
+        return hMatch[0];
+      }
+
+      // 4. Cloudflare Turnstile Sitekey Pattern (0x4...)
+      const turnstileRegex = /0x4[A-Za-z0-9_-]{18,30}/;
+      const tMatch = html.match(turnstileRegex);
+      if (tMatch) {
+        return tMatch[0];
+      }
+
+      return null;
+    }).catch(() => null);
+  }
+
   async handleLiveChallenge(page: Page, options: LiveChallengeOptions = {}): Promise<LiveChallengeResult> {
     const startTime = Date.now();
-    const timeoutMs = options.timeoutMs ?? 60_000;
-    const pollIntervalMs = options.pollIntervalMs ?? 500;
 
     const detection = await this.detector.detect(page);
     if (!detection.detected) {
@@ -29,54 +64,56 @@ export class LiveChallengeHandler {
       };
     }
 
+    // Warteräume: 1,5 Stunden (90 Min) / Captcha-Setzung: 90 Sekunden
+    const isQueue = 
+      detection.type === "shopify-queue" || 
+      detection.type === "queue-it" || 
+      detection.type === "waiting-room";
+
+    const defaultTimeoutMs = isQueue ? 90 * 60 * 1_000 : 90_000;
+    const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
+    const pollIntervalMs = options.pollIntervalMs ?? 500;
+
     if (options.bringToFrontOnChallenge !== false) {
       await page.bringToFront().catch(() => undefined);
     }
 
     options.onStatusChange?.(
-      `Live-Challenge erkannt (${detection.type ?? "unbekannt"}). Starte Handling...`,
+      `Challenge erkannt (${detection.type ?? "unbekannt"}). Starte Handling (Timeout: ${Math.round(timeoutMs / 1000)}s)...`,
       detection
     );
 
     // =========================================================================
-    // 🚀 CAPMONSTER AUTO-SOLVE WEICHE
+    // 🚀 STUFE 1: CAPMONSTER CLOUD SOLVER (Inkl. hCaptcha Tiererkennung)
     // =========================================================================
-    const capmonsterKey = process.env['CAPMONSTER_API_KEY'];
+    const capmonsterKey = process.env["CAPMONSTER_API_KEY"];
 
-    if (capmonsterKey && (detection.type === 'turnstile' || detection.type === 'recaptcha' || detection.type === 'shopify-checkpoint')) {
+    if (
+      capmonsterKey &&
+      (detection.type === "turnstile" ||
+       detection.type === "recaptcha" ||
+       detection.type === "hcaptcha" ||
+       detection.type === "shopify-checkpoint")
+    ) {
       try {
-        // Sitekey aus dem DOM oder Iframe-Src extrahieren
-        const sitekey = await page.evaluate(() => {
-          const el = document.querySelector('[data-sitekey]');
-          if (el) return el.getAttribute('data-sitekey');
-
-          const frame = document.querySelector('iframe[src*="sitekey="]') as HTMLIFrameElement;
-          if (frame && frame.src) {
-            const match = frame.src.match(/sitekey=([^&]+)/);
-            if (match) return decodeURIComponent(match[1]);
-          }
-          return null;
-        });
+        const sitekey = await this.extractSitekey(page);
 
         if (sitekey) {
           options.onStatusChange?.(
-            `CapMonster aktiv: Löse Challenge (${detection.type}) via Cloud-Dienst...`,
+            `CapMonster aktiv: Löse ${detection.type} (inkl. Bild-/Tiererkennung) via Cloud...`,
             detection
           );
 
           const solver = new CapMonsterSolver(capmonsterKey);
-          const challengeType = detection.type === 'shopify-checkpoint' ? 'turnstile' : detection.type;
+          const challengeType = detection.type === "shopify-checkpoint" ? "turnstile" : detection.type;
 
           const token = await solver.solve(challengeType, page.url(), sitekey);
           await solver.injectAndSubmit(page, challengeType, token);
 
-          // Kurz warten und prüfen, ob die Challenge gelöst ist
           await this.sleep(1200);
-          const isResolved = await this.checkIfResolved(page);
-
-          if (isResolved) {
+          if (await this.checkIfResolved(page)) {
             options.onStatusChange?.(
-              `Live-Challenge (${detection.type}) erfolgreich durch CapMonster gelöst!`,
+              `Live-Challenge (${detection.type}) erfolgreich via CapMonster gelöst!`,
               detection
             );
             return {
@@ -89,16 +126,19 @@ export class LiveChallengeHandler {
         }
       } catch (solverErr: any) {
         options.onStatusChange?.(
-          `CapMonster fehlgeschlagen (${solverErr?.message || solverErr}). Wechsle zu normalem Browser-Handling...`,
+          `CapMonster Hinweis (${solverErr?.message || solverErr}). Schalte auf Live-Browser-Interaktion...`,
           detection
         );
       }
     }
-    // =========================================================================
 
-    // Initial automated interaction attempt (z. B. Turnstile Checkbox-Klick)
+    // =========================================================================
+    // 🚀 STUFE 2: GHOST-CURSOR MAUS-INTERAKTION + MENSCHLICHER FALLBACK
+    // =========================================================================
     if (detection.type === "turnstile" && options.autoSolveTurnstile !== false) {
       await this.attemptTurnstileClick(page);
+    } else if (detection.type === "hcaptcha") {
+      await this.attemptHCaptchaClick(page);
     } else if (detection.type === "shopify-checkpoint") {
       await this.attemptCheckpointSubmit(page);
     }
@@ -112,14 +152,14 @@ export class LiveChallengeHandler {
           type: detection.type,
           resolved: false,
           durationMs: Date.now() - startTime,
-          error: "Browser-Seite wurde während der Live-Challenge geschlossen."
+          error: "Browser-Seite wurde während der Challenge geschlossen."
         };
       }
 
       const isResolved = await this.checkIfResolved(page);
       if (isResolved) {
         options.onStatusChange?.(
-          `Live-Challenge (${detection.type ?? "unbekannt"}) im Browser erfolgreich gelöst!`,
+          `Challenge (${detection.type ?? "unbekannt"}) erfolgreich bestanden!`,
           detection
         );
         return {
@@ -130,11 +170,13 @@ export class LiveChallengeHandler {
         };
       }
 
-      // Re-attempt auto-interaction periodically (every 4 seconds) if still waiting
-      if (Date.now() - lastInteractionTime > 4_000) {
+      // Alle 4 Sekunden erneute Interaktion mit ghost-cursor versuchen
+      if (!isQueue && Date.now() - lastInteractionTime > 4_000) {
         lastInteractionTime = Date.now();
         if (detection.type === "turnstile" && options.autoSolveTurnstile !== false) {
           await this.attemptTurnstileClick(page);
+        } else if (detection.type === "hcaptcha") {
+          await this.attemptHCaptchaClick(page);
         } else if (detection.type === "shopify-checkpoint") {
           await this.attemptCheckpointSubmit(page);
         }
@@ -148,86 +190,94 @@ export class LiveChallengeHandler {
       type: detection.type,
       resolved: false,
       durationMs: Date.now() - startTime,
-      error: `Live-Challenge (${detection.type ?? "unbekannt"}) im Browser nicht innerhalb von ${Math.round(
-        timeoutMs / 1000
-      )}s gelöst (Timeout).`
+      error: `Challenge (${detection.type}) nicht innerhalb von ${Math.round(timeoutMs / 1000)}s gelöst (Timeout).`
     };
   }
 
   /**
-   * Attempts to find and click the Cloudflare Turnstile verification checkbox.
+   * 🚀 GHOST-CURSOR: Klickt die Cloudflare Turnstile Checkbox mit natürlicher Bézier-Kurve.
    */
   async attemptTurnstileClick(page: Page): Promise<boolean> {
     if (page.isClosed()) return false;
 
     try {
-      // 1. Try inside Turnstile iframe
-      const frameLocator = page
-        .frameLocator(
-          'iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"], iframe[title*="Turnstile" i], iframe[title*="Cloudflare" i]'
-        )
-        .first();
+      const iframeElement = await page.$(
+        'iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"], iframe[title*="Turnstile" i], iframe[title*="Cloudflare" i]'
+      );
 
-      const checkbox = frameLocator
-        .locator('input[type="checkbox"], .ctp-checkbox-label, #challenge-stage, label, span.mark')
-        .first();
+      if (iframeElement) {
+        const box = await iframeElement.boundingBox();
+        if (box) {
+          const clickX = box.x + 30 + Math.floor(Math.random() * 6);
+          const clickY = box.y + box.height / 2 + Math.floor(Math.random() * 6 - 3);
 
-      if (await checkbox.isVisible({ timeout: 1_200 }).catch(() => false)) {
-        await checkbox.click({ timeout: 2_000 }).catch(() => undefined);
-        return true;
+          const cursor = createCursor(page);
+          await cursor.moveTo({ x: clickX, y: clickY });
+          await this.sleep(50 + Math.floor(Math.random() * 40));
+          await cursor.click();
+          return true;
+        }
       }
-
-      // 2. Direct selector fallback on main document
-      const directTarget = page.locator('.cf-turnstile input[type="checkbox"], #challenge-stage input').first();
-      if (await directTarget.isVisible({ timeout: 800 }).catch(() => false)) {
-        await directTarget.click({ timeout: 1_500 }).catch(() => undefined);
-        return true;
-      }
-    } catch {
-      // Ignore transient errors during frame attachment
-    }
+    } catch {}
 
     return false;
   }
 
   /**
-   * Submits a Shopify checkpoint form if a captcha token is already populated.
+   * 🚀 GHOST-CURSOR: Klickt die hCaptcha Checkbox (Pokémon Center) mit natürlicher Bézier-Kurve.
    */
+  async attemptHCaptchaClick(page: Page): Promise<boolean> {
+    if (page.isClosed()) return false;
+
+    try {
+      const iframeElement = await page.$(
+        'iframe[src*="hcaptcha.com"], iframe[title*="hCaptcha" i], iframe[src*="newassets.hcaptcha.com"]'
+      );
+
+      if (iframeElement) {
+        const box = await iframeElement.boundingBox();
+        if (box) {
+          const clickX = box.x + 28 + Math.floor(Math.random() * 6);
+          const clickY = box.y + box.height / 2 + Math.floor(Math.random() * 6 - 3);
+
+          const cursor = createCursor(page);
+          await cursor.moveTo({ x: clickX, y: clickY });
+          await this.sleep(60 + Math.floor(Math.random() * 40));
+          await cursor.click();
+          return true;
+        }
+      }
+    } catch {}
+
+    return false;
+  }
+
   async attemptCheckpointSubmit(page: Page): Promise<boolean> {
     if (page.isClosed()) return false;
 
     try {
-      const hasToken = await page
-        .evaluate(() => {
-          const cf = document.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]')?.value;
-          const rc = document.querySelector<HTMLTextAreaElement>('textarea[name="g-recaptcha-response"]')?.value;
-          const hc = document.querySelector<HTMLTextAreaElement>('textarea[name="h-captcha-response"]')?.value;
-          return Boolean((cf && cf.trim()) || (rc && rc.trim()) || (hc && hc.trim()));
-        })
-        .catch(() => false);
+      const hasToken = await page.evaluate(() => {
+        const cf = document.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]')?.value;
+        const rc = document.querySelector<HTMLTextAreaElement>('textarea[name="g-recaptcha-response"]')?.value;
+        const hc = document.querySelector<HTMLTextAreaElement>('textarea[name="h-captcha-response"]')?.value;
+        return Boolean((cf && cf.trim()) || (rc && rc.trim()) || (hc && hc.trim()));
+      }).catch(() => false);
 
       if (hasToken) {
-        const submitButton = page
-          .locator(
-            'form[action*="/checkpoint"] button[type="submit"], form[action*="/checkpoint"] input[type="submit"], #checkpoint-submit, button#submit'
-          )
-          .first();
+        const submitButton = page.locator(
+          'form[action*="/checkpoint"] button[type="submit"], form[action*="/checkpoint"] input[type="submit"], #checkpoint-submit, button#submit'
+        ).first();
 
         if (await submitButton.isVisible({ timeout: 800 }).catch(() => false)) {
           await submitButton.click({ timeout: 1_500 }).catch(() => undefined);
           return true;
         }
       }
-    } catch {
-      // Ignore transient DOM evaluation errors
-    }
+    } catch {}
 
     return false;
   }
 
-  /**
-   * Verifies whether the page has successfully progressed past the challenge/checkpoint.
-   */
   async checkIfResolved(page: Page): Promise<boolean> {
     if (page.isClosed()) return false;
 
@@ -236,32 +286,26 @@ export class LiveChallengeHandler {
       currentUrl.includes("/checkpoint") || currentUrl.includes("/challenge") || currentUrl.includes("/throttle");
 
     if (!isCheckpointUrl) {
-      // If we are no longer on a checkpoint URL, check whether challenge widgets remain
-      const hasChallengeWidgets = await page
-        .evaluate(() => {
-          return Boolean(
-            document.querySelector(
-              'iframe[src*="challenges.cloudflare.com"], iframe[src*="google.com/recaptcha"], iframe[src*="hcaptcha.com"], .cf-turnstile, .g-recaptcha, .h-captcha'
-            )
-          );
-        })
-        .catch(() => false);
+      const hasChallengeWidgets = await page.evaluate(() => {
+        return Boolean(
+          document.querySelector(
+            'iframe[src*="challenges.cloudflare.com"], iframe[src*="google.com/recaptcha"], iframe[src*="hcaptcha.com"], .cf-turnstile, .g-recaptcha, .h-captcha'
+          )
+        );
+      }).catch(() => false);
 
       if (!hasChallengeWidgets) {
         return true;
       }
     }
 
-    // Check if checkout fields or confirmation elements have rendered
-    const hasCheckoutFields = await page
-      .evaluate(() => {
-        return Boolean(
-          document.querySelector(
-            'input[name="email"], input[name="firstName"], input[name="address1"], #checkout_shipping_address, .step__sections, [data-step="contact_information"]'
-          )
-        );
-      })
-      .catch(() => false);
+    const hasCheckoutFields = await page.evaluate(() => {
+      return Boolean(
+        document.querySelector(
+          'input[name="email"], input[name="firstName"], input[name="address1"], #checkout_shipping_address, .step__sections, [data-step="contact_information"]'
+        )
+      );
+    }).catch(() => false);
 
     return hasCheckoutFields;
   }
@@ -271,10 +315,8 @@ export class LiveChallengeHandler {
   }
 }
 
-// Singleton-Export für einfache Nutzung
 export const defaultLiveChallengeHandler = new LiveChallengeHandler();
 
-// Hilfsfunktion für direkten Aufruf
 export async function handleChallenge(page: Page, options: LiveChallengeOptions = {}): Promise<LiveChallengeResult> {
   return defaultLiveChallengeHandler.handleLiveChallenge(page, options);
 }
