@@ -1,4 +1,5 @@
 import { Injectable } from "@angular/core";
+import { COMMERCE_PLATFORMS } from "../../commerce/platforms";
 
 interface BrowserPreviewTask {
   id: string;
@@ -61,7 +62,12 @@ export class ElectronService {
 
   getShops(): Promise<any> {
     if (this.api) return this.api.getShops();
-    return Promise.resolve({ success: true, shops: this.previewShops });
+    return Promise.resolve({
+      success: true,
+      shops: this.previewShops,
+      platforms: COMMERCE_PLATFORMS,
+      executorPlatforms: ["shopify"]
+    });
   }
 
   registerShop(config: unknown): Promise<any> {
@@ -77,7 +83,11 @@ export class ElectronService {
     if (index >= 0) this.previewShops[index] = normalizedShop;
     else this.previewShops.push(normalizedShop);
 
-    return Promise.resolve({ success: true });
+    return Promise.resolve({
+      success: true,
+      shop: normalizedShop,
+      executorReady: normalizedShop.platform === "shopify"
+    });
   }
 
   createTask(config: unknown): Promise<any> {
@@ -199,6 +209,8 @@ export class ElectronService {
       availableWorkers: 0,
       shopCount: this.previewShops.length,
       taskCount: this.previewTasks.length,
+      commercePlatforms: COMMERCE_PLATFORMS,
+      commerceExecutorPlatforms: ["shopify"],
       captchaProvider: "CapMonster",
       captchaApiKeyConfigured: false,
       liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],
