@@ -23,12 +23,14 @@ import {
 import { CommerceTaskExecutorRouter } from "../commerce/task-executor-router";
 import { CommerceProductApiRouter } from "../commerce/product-api/router";
 import { CommerceMonitorService, isCommerceMonitorTask } from "../monitor/commerce-monitor-service";
+import { MonitorAutoCheckoutCoordinator } from "../monitor/auto-checkout-coordinator";
 
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: TaskOrchestrator;
 let browserWorker: BrowserWorkerPoolClient;
 let commerceExecutor: CommerceTaskExecutorRouter;
 let commerceMonitor: CommerceMonitorService;
+let autoCheckoutCoordinator: MonitorAutoCheckoutCoordinator;
 let taskStore: SqliteTaskStore;
 let persistenceCoordinator: TaskPersistenceCoordinator;
 let quitting = false;
@@ -192,7 +194,16 @@ async function createBackend(): Promise<void> {
     productApiRouter,
     taskStore,
     {
-      onEvent: (taskId, event) => broadcastMonitorUpdate({ taskId, event })
+      onEvent: (taskId, event) => {
+        broadcastMonitorUpdate({ taskId, event });
+        void autoCheckoutCoordinator?.handleProductEvent(taskId, event).catch(error => {
+          const task = orchestrator?.getTask(taskId);
+          if (task) {
+            task.lastError = error instanceof Error ? error.message : String(error);
+            broadcastTaskUpdate(task);
+          }
+        });
+      }
     }
   );
 
@@ -206,6 +217,19 @@ async function createBackend(): Promise<void> {
   commerceExecutor.registerMonitorExecutor(commerceMonitor);
 
   orchestrator = new TaskOrchestrator(taskStore, commerceExecutor);
+  autoCheckoutCoordinator = new MonitorAutoCheckoutCoordinator(orchestrator, {
+    getPaymentSession: taskId => paymentSessions.get(taskId),
+    setPaymentSession: (taskId, session) => paymentSessions.set(taskId, session),
+    onTriggered: (parent, child, event) => {
+      broadcastMonitorUpdate({
+        taskId: parent.id,
+        event,
+        autoCheckout: { childTaskId: child.id, status: "triggered" }
+      });
+      broadcastTaskUpdate(parent);
+      broadcastTaskUpdate(child);
+    }
+  });
   persistenceCoordinator = new TaskPersistenceCoordinator(orchestrator, taskStore);
   await orchestrator.initialize();
 
@@ -218,7 +242,7 @@ async function createBackend(): Promise<void> {
   }
 
   const forwardTask = (task: any) => {
-    if (task?.id && [TaskState.SUCCESS, TaskState.CANCELLED].includes(task.state)) {
+    if (task?.id && [TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED].includes(task.state)) {
       paymentSessions.delete(String(task.id));
     }
     mainWindow?.webContents.send("task-status-update", task);
@@ -297,7 +321,12 @@ ipcMain.handle("delete-proxy", (_event, proxyId: string) => {
   const activeTask = orchestrator.getAllTasks().find(task => {
     if ([TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED].includes(task.state)) return false;
     const selection = task.config.data?.["proxySelection"] as { mode?: string; proxyId?: string } | undefined;
-    return selection?.mode === "proxy" && selection.proxyId === id;
+    const action = task.config.data?.["monitorAction"] as {
+      mode?: string;
+      proxySelection?: { mode?: string; proxyId?: string };
+    } | undefined;
+    return (selection?.mode === "proxy" && selection.proxyId === id)
+      || (action?.mode === "auto-checkout" && action.proxySelection?.mode === "proxy" && action.proxySelection.proxyId === id);
   });
   if (activeTask) {
     return { success: false, error: `Proxy ist noch Task ${activeTask.config.name} zugeordnet.` };
