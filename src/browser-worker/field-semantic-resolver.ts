@@ -1,18 +1,14 @@
 import * as http from "http";
 import * as https from "https";
 import type { Locator, Page } from "patchright";
+import {
+  semanticTarget,
+  type AddressContext,
+  type FieldIntent,
+  type SemanticTarget
+} from "./semantic-target";
 
-export type FieldIntent =
-  | "email"
-  | "firstName"
-  | "lastName"
-  | "address1"
-  | "address2"
-  | "city"
-  | "postalCode"
-  | "phone"
-  | "countryCode"
-  | "unknown";
+export type { AddressContext, FieldIntent, SemanticTarget } from "./semantic-target";
 
 export interface FieldDescriptor {
   index: number;
@@ -27,11 +23,18 @@ export interface FieldDescriptor {
   nearbyText: string;
 }
 
+export type FieldResolutionSource = "standard-metadata" | "lexical" | "embedding" | "unknown";
+
 export interface ResolvedField {
   descriptor: FieldDescriptor;
-  intent: FieldIntent;
+  target: SemanticTarget;
   confidence: number;
-  source: "standard-metadata" | "embedding" | "unknown";
+  intentConfidence: number;
+  contextConfidence: number;
+  source: {
+    intent: FieldResolutionSource;
+    context: FieldResolutionSource;
+  };
 }
 
 export interface SemanticEmbeddingProvider {
@@ -42,6 +45,21 @@ interface OllamaEmbedResponse {
   embeddings?: number[][];
 }
 
+interface ResolutionPart<T> {
+  value: T;
+  confidence: number;
+  source: FieldResolutionSource;
+}
+
+interface PendingResolution {
+  field: FieldDescriptor;
+  position: number;
+  key: string;
+  intent: ResolutionPart<FieldIntent>;
+  context: ResolutionPart<AddressContext>;
+  lockIntentUnknown: boolean;
+}
+
 const CONTROL_SELECTOR = [
   'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="password"])',
   "select",
@@ -50,20 +68,30 @@ const CONTROL_SELECTOR = [
 
 const INTENT_PROTOTYPES: Array<{ intent: Exclude<FieldIntent, "unknown">; text: string }> = [
   { intent: "email", text: "contact email address, E-Mail-Adresse für Kontakt und Bestellbestätigung" },
-  { intent: "firstName", text: "person's given name, first name, Vorname der empfangenden Person" },
-  { intent: "lastName", text: "person's family name, surname, Nachname oder Familienname der empfangenden Person" },
-  { intent: "address1", text: "primary street delivery address, Straße und Hausnummer der Lieferadresse" },
+  { intent: "firstName", text: "person's given name, first name, Vorname oder Rufname" },
+  { intent: "lastName", text: "person's family name, surname, last name, Nachname oder Familienname" },
+  { intent: "fullName", text: "complete person's name, full name, vollständiger Name, Name des Empfängers" },
+  { intent: "street", text: "street name without house number, Straße ohne Hausnummer" },
+  { intent: "address1", text: "primary address line, combined street and house number, Straße und Hausnummer, Anschrift" },
+  { intent: "houseNumber", text: "house number, street number, Hausnummer" },
   { intent: "address2", text: "secondary address line, apartment, company, Zusatz zur Anschrift, Adresszusatz" },
-  { intent: "city", text: "delivery city, town or locality, Ort oder Stadt der Lieferadresse" },
-  { intent: "postalCode", text: "postal code, ZIP code, Postleitzahl der Lieferadresse" },
+  { intent: "city", text: "city, town or locality, Ort, Stadt oder Gemeinde" },
+  { intent: "postalCode", text: "postal code, ZIP code, Postleitzahl" },
   { intent: "phone", text: "contact phone or mobile number, Telefonnummer oder Mobilnummer" },
-  { intent: "countryCode", text: "delivery country or country code, Land der Lieferadresse" }
+  { intent: "countryCode", text: "country or country code, Land oder Ländercode" }
+];
+
+const CONTEXT_PROTOTYPES: Array<{ context: Exclude<AddressContext, "unknown">; text: string }> = [
+  { context: "shipping", text: "shipping delivery recipient destination address, Lieferanschrift, Versandadresse, Zustelladresse, Empfänger" },
+  { context: "billing", text: "billing invoice address, Rechnungsanschrift, Rechnungsadresse, Rechnungsempfänger" }
 ];
 
 const AUTOCOMPLETE_INTENTS: Record<string, Exclude<FieldIntent, "unknown">> = {
   "email": "email",
+  "name": "fullName",
   "given-name": "firstName",
   "family-name": "lastName",
+  "street-address": "address1",
   "address-line1": "address1",
   "address-line2": "address2",
   "address-level2": "city",
@@ -75,6 +103,10 @@ const AUTOCOMPLETE_INTENTS: Record<string, Exclude<FieldIntent, "unknown">> = {
 
 function normalize(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function normalizeLower(value: string): string {
+  return normalize(value).toLocaleLowerCase("de-DE");
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -116,6 +148,7 @@ function postJson<T>(endpoint: string, payload: unknown, timeoutMs: number): Pro
     const body = JSON.stringify(payload);
     const client = target.protocol === "https:" ? https : http;
     let settled = false;
+    let hardTimeout: NodeJS.Timeout;
     const finish = (callback: () => void): void => {
       if (settled) return;
       settled = true;
@@ -149,7 +182,7 @@ function postJson<T>(endpoint: string, payload: unknown, timeoutMs: number): Pro
     });
 
     request.on("error", error => finish(() => reject(error)));
-    const hardTimeout = setTimeout(() => {
+    hardTimeout = setTimeout(() => {
       request.destroy(new Error("Local embedding request timed out."));
     }, Math.max(200, timeoutMs));
 
@@ -190,110 +223,235 @@ export class OllamaEmbeddingProvider implements SemanticEmbeddingProvider {
 }
 
 export class FieldSemanticResolver {
-  private prototypeVectors: Array<{ intent: Exclude<FieldIntent, "unknown">; vector: number[] }> | undefined;
-  private readonly cache = new Map<string, { intent: FieldIntent; confidence: number; source: ResolvedField["source"] }>();
+  private intentPrototypeVectors: Array<{ intent: Exclude<FieldIntent, "unknown">; vector: number[] }> | undefined;
+  private contextPrototypeVectors: Array<{ context: Exclude<AddressContext, "unknown">; vector: number[] }> | undefined;
+  private readonly cache = new Map<string, Omit<ResolvedField, "descriptor">>();
 
   constructor(private readonly provider: SemanticEmbeddingProvider = new OllamaEmbeddingProvider()) {}
 
   async resolve(fields: FieldDescriptor[]): Promise<ResolvedField[]> {
     const results: Array<ResolvedField | undefined> = new Array(fields.length);
-    const unresolved: Array<{ field: FieldDescriptor; position: number; key: string }> = [];
+    const pending: PendingResolution[] = [];
 
     fields.forEach((field, position) => {
-      const standard = this.resolveFromStandardMetadata(field);
-      if (standard) {
-        results[position] = { descriptor: field, ...standard };
-        return;
-      }
-
       const key = this.cacheKey(field);
       const cached = this.cache.get(key);
       if (cached) {
         results[position] = { descriptor: field, ...cached };
         return;
       }
-      unresolved.push({ field, position, key });
+
+      const standardIntent = this.resolveIntentFromStandardMetadata(field);
+      const standardContext = this.resolveContextFromAutocomplete(field);
+      const lexicalIntent = standardIntent ?? this.resolveIntentLexically(field);
+      const lexicalContext = standardContext ?? this.resolveContextLexically(field);
+      const lockIntentUnknown = !standardIntent && !lexicalIntent && this.isBareName(field);
+
+      const intent = lexicalIntent ?? { value: "unknown" as FieldIntent, confidence: 0, source: "unknown" as const };
+      const context = lexicalContext ?? { value: "unknown" as AddressContext, confidence: 0, source: "unknown" as const };
+
+      if (intent.value !== "unknown" && context.value !== "unknown") {
+        const resolution = this.toResolution(intent, context);
+        this.cache.set(key, resolution);
+        results[position] = { descriptor: field, ...resolution };
+        return;
+      }
+
+      pending.push({ field, position, key, intent, context, lockIntentUnknown });
     });
 
-    if (unresolved.length) {
+    if (pending.length) {
       try {
-        await this.resolveByEmbedding(unresolved, results);
+        await this.resolveByEmbedding(pending, results);
       } catch {
-        for (const item of unresolved) {
-          const fallback = { intent: "unknown" as FieldIntent, confidence: 0, source: "unknown" as const };
-          this.cache.set(item.key, fallback);
-          results[item.position] = { descriptor: item.field, ...fallback };
+        for (const item of pending) {
+          const resolution = this.toResolution(item.intent, item.context);
+          this.cache.set(item.key, resolution);
+          results[item.position] = { descriptor: item.field, ...resolution };
         }
       }
     }
 
     return results.map((result, index) => result ?? {
       descriptor: fields[index]!,
-      intent: "unknown",
-      confidence: 0,
-      source: "unknown"
+      ...this.toResolution(
+        { value: "unknown", confidence: 0, source: "unknown" },
+        { value: "unknown", confidence: 0, source: "unknown" }
+      )
     });
   }
 
-  private resolveFromStandardMetadata(field: FieldDescriptor): Omit<ResolvedField, "descriptor"> | undefined {
+  private resolveIntentFromStandardMetadata(field: FieldDescriptor): ResolutionPart<FieldIntent> | undefined {
     const tokens = field.autocomplete.toLowerCase().split(/\s+/).filter(Boolean);
     for (const token of tokens) {
       const intent = AUTOCOMPLETE_INTENTS[token];
-      if (intent) return { intent, confidence: 1, source: "standard-metadata" };
+      if (intent) return { value: intent, confidence: 1, source: "standard-metadata" };
     }
     if (field.inputType.toLowerCase() === "email") {
-      return { intent: "email", confidence: 0.99, source: "standard-metadata" };
+      return { value: "email", confidence: 0.99, source: "standard-metadata" };
     }
     if (field.inputType.toLowerCase() === "tel") {
-      return { intent: "phone", confidence: 0.99, source: "standard-metadata" };
+      return { value: "phone", confidence: 0.99, source: "standard-metadata" };
     }
     return undefined;
   }
 
+  private resolveContextFromAutocomplete(field: FieldDescriptor): ResolutionPart<AddressContext> | undefined {
+    const tokens = new Set(field.autocomplete.toLowerCase().split(/\s+/).filter(Boolean));
+    const shipping = tokens.has("shipping");
+    const billing = tokens.has("billing");
+    if (shipping === billing) return undefined;
+    return {
+      value: shipping ? "shipping" : "billing",
+      confidence: 1,
+      source: "standard-metadata"
+    };
+  }
+
+  private resolveIntentLexically(field: FieldDescriptor): ResolutionPart<FieldIntent> | undefined {
+    const text = this.directText(field);
+    const match = (pattern: RegExp, value: Exclude<FieldIntent, "unknown">, confidence = 0.96): ResolutionPart<FieldIntent> | undefined =>
+      pattern.test(text) ? { value, confidence, source: "lexical" } : undefined;
+
+    return match(/\b(e-?mail|emailadresse|mailadresse)\b/i, "email")
+      ?? match(/\b(vorname|rufname|given[ _-]?name|first[ _-]?name)\b/i, "firstName")
+      ?? match(/\b(nachname|familienname|surname|family[ _-]?name|last[ _-]?name)\b/i, "lastName")
+      ?? match(/\b(vollst[aä]ndiger? name|full[ _-]?name|recipient[ _-]?name|name des empf[aä]ngers|empf[aä]ngername)\b/i, "fullName", 0.94)
+      ?? match(/\b(hausnummer|house[ _-]?number|street[ _-]?number)\b/i, "houseNumber")
+      ?? match(/\b(stra(?:ß|ss)e\s*(?:und|&|\+)\s*hausnummer|street\s*(?:and|&|\+)\s*(?:house )?number|street[ _-]?address|anschrift|address[ _-]?line[ _-]?1)\b/i, "address1", 0.95)
+      ?? match(/\b(adresszusatz|address[ _-]?line[ _-]?2|address2|apartment|wohnung|zusatz zur anschrift|company)\b/i, "address2", 0.94)
+      ?? match(/\b(postleitzahl|plz|postal[ _-]?code|zip(?:[ _-]?code)?|zustellcode|postgebiet)\b/i, "postalCode")
+      ?? match(/\b(stadt|wohnort|lieferort|gemeinde|city|town|locality)\b/i, "city")
+      ?? match(/\b(land|l[aä]ndercode|country(?:[ _-]?code|[ _-]?name)?)\b/i, "countryCode", 0.94)
+      ?? match(/\b(telefon(?:nummer)?|mobil(?:nummer)?|rufnummer|phone|mobile|tel)\b/i, "phone")
+      ?? match(/\b(stra(?:ß|ss)e|street|road|avenue)\b/i, "street", 0.92);
+  }
+
+  private resolveContextLexically(field: FieldDescriptor): ResolutionPart<AddressContext> | undefined {
+    const direct = this.contextFromText(this.directText(field), 0.97);
+    if (direct) return direct;
+    return this.contextFromText(normalizeLower(field.nearbyText), 0.86);
+  }
+
+  private contextFromText(text: string, confidence: number): ResolutionPart<AddressContext> | undefined {
+    if (!text) return undefined;
+    const shipping = /\b(shipping|delivery|deliver\w*|liefer\w*|versand\w*|zustell\w*|empf[aä]nger\w*)\b/i.test(text);
+    const billing = /\b(billing|invoice\w*|rechnung\w*|faktur\w*)\b/i.test(text);
+    if (shipping === billing) return undefined;
+    return { value: shipping ? "shipping" : "billing", confidence, source: "lexical" };
+  }
+
+  private isBareName(field: FieldDescriptor): boolean {
+    if (field.autocomplete.trim()) return false;
+    const direct = this.directText(field)
+      .replace(/\b(shipping|billing|liefer\w*|rechnung\w*|versand\w*|zustell\w*)\b/gi, " ")
+      .replace(/[^a-zA-ZäöüÄÖÜß]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return /^(name|ihr name|your name)$/i.test(direct);
+  }
+
   private async resolveByEmbedding(
-    unresolved: Array<{ field: FieldDescriptor; position: number; key: string }>,
+    pending: PendingResolution[],
     results: Array<ResolvedField | undefined>
   ): Promise<void> {
-    const fieldTexts = unresolved.map(item => this.toSemanticText(item.field));
+    const fieldTexts = pending.map(item => this.toSemanticText(item.field));
     let fieldVectors: number[][];
 
-    if (!this.prototypeVectors) {
-      const prototypeTexts = INTENT_PROTOTYPES.map(item => item.text);
-      const allVectors = await this.provider.embed([...prototypeTexts, ...fieldTexts]);
-      this.prototypeVectors = INTENT_PROTOTYPES.map((item, index) => ({
+    if (!this.intentPrototypeVectors || !this.contextPrototypeVectors) {
+      const intentTexts = INTENT_PROTOTYPES.map(item => item.text);
+      const contextTexts = CONTEXT_PROTOTYPES.map(item => item.text);
+      const allVectors = await this.provider.embed([...intentTexts, ...contextTexts, ...fieldTexts]);
+      this.intentPrototypeVectors = INTENT_PROTOTYPES.map((item, index) => ({
         intent: item.intent,
         vector: allVectors[index] ?? []
       }));
-      fieldVectors = allVectors.slice(prototypeTexts.length);
+      const contextOffset = intentTexts.length;
+      this.contextPrototypeVectors = CONTEXT_PROTOTYPES.map((item, index) => ({
+        context: item.context,
+        vector: allVectors[contextOffset + index] ?? []
+      }));
+      fieldVectors = allVectors.slice(intentTexts.length + contextTexts.length);
     } else {
       fieldVectors = await this.provider.embed(fieldTexts);
     }
 
-    unresolved.forEach((item, unresolvedIndex) => {
-      const vector = fieldVectors[unresolvedIndex] ?? [];
-      const ranking = (this.prototypeVectors ?? [])
-        .map(prototype => ({ intent: prototype.intent, score: cosine(vector, prototype.vector) }))
-        .sort((left, right) => right.score - left.score);
+    pending.forEach((item, pendingIndex) => {
+      const vector = fieldVectors[pendingIndex] ?? [];
+      let intent = item.intent;
+      let context = item.context;
 
-      const best = ranking[0];
-      const second = ranking[1];
-      const margin = best ? best.score - (second?.score ?? -1) : 0;
-      const accepted = Boolean(best && best.score >= 0.35 && margin >= 0.015);
-      const resolution = accepted && best
-        ? {
-            intent: best.intent as FieldIntent,
-            confidence: clamp(0.5 + Math.max(0, best.score - 0.35) * 0.65 + margin * 2.5, 0.5, 0.99),
-            source: "embedding" as const
-          }
-        : {
-            intent: "unknown" as FieldIntent,
-            confidence: 0,
-            source: "unknown" as const
-          };
+      if (intent.value === "unknown" && !item.lockIntentUnknown) {
+        const inferred = this.rankIntent(vector);
+        if (inferred) intent = inferred;
+      }
 
+      if (context.value === "unknown") {
+        const inferred = this.rankContext(vector);
+        if (inferred) context = inferred;
+      }
+
+      const resolution = this.toResolution(intent, context);
       this.cache.set(item.key, resolution);
       results[item.position] = { descriptor: item.field, ...resolution };
     });
+  }
+
+  private rankIntent(vector: number[]): ResolutionPart<FieldIntent> | undefined {
+    const ranking = (this.intentPrototypeVectors ?? [])
+      .map(prototype => ({ value: prototype.intent, score: cosine(vector, prototype.vector) }))
+      .sort((left, right) => right.score - left.score);
+    const best = ranking[0];
+    const second = ranking[1];
+    const margin = best ? best.score - (second?.score ?? -1) : 0;
+    if (!best || best.score < 0.38 || margin < 0.02) return undefined;
+    return {
+      value: best.value,
+      confidence: clamp(0.5 + Math.max(0, best.score - 0.38) * 0.65 + margin * 2.2, 0.5, 0.98),
+      source: "embedding"
+    };
+  }
+
+  private rankContext(vector: number[]): ResolutionPart<AddressContext> | undefined {
+    const ranking = (this.contextPrototypeVectors ?? [])
+      .map(prototype => ({ value: prototype.context, score: cosine(vector, prototype.vector) }))
+      .sort((left, right) => right.score - left.score);
+    const best = ranking[0];
+    const second = ranking[1];
+    const margin = best ? best.score - (second?.score ?? -1) : 0;
+    if (!best || best.score < 0.48 || margin < 0.06) return undefined;
+    return {
+      value: best.value,
+      confidence: clamp(0.55 + Math.max(0, best.score - 0.48) * 0.55 + margin * 1.8, 0.55, 0.97),
+      source: "embedding"
+    };
+  }
+
+  private toResolution(
+    intent: ResolutionPart<FieldIntent>,
+    context: ResolutionPart<AddressContext>
+  ): Omit<ResolvedField, "descriptor"> {
+    return {
+      target: semanticTarget(intent.value, context.value),
+      confidence: intent.confidence,
+      intentConfidence: intent.confidence,
+      contextConfidence: context.confidence,
+      source: {
+        intent: intent.source,
+        context: context.source
+      }
+    };
+  }
+
+  private directText(field: FieldDescriptor): string {
+    return normalizeLower([
+      field.label,
+      field.ariaLabel,
+      field.placeholder,
+      field.name,
+      field.id,
+      field.autocomplete
+    ].filter(Boolean).join(" | "));
   }
 
   private toSemanticText(field: FieldDescriptor): string {
