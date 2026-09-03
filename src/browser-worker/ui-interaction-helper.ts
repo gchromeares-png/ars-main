@@ -27,6 +27,8 @@ export interface UiFillOptions {
 
 export interface UiSelectOptions extends UiFillOptions {}
 export interface UiFocusOptions extends UiFillOptions {}
+export interface UiHoverOptions extends UiFillOptions {}
+export interface UiScrollOptions extends UiFillOptions {}
 
 export interface UiInteractionHelper {
   moveTo(target: Locator, options?: UiMoveOptions): Promise<void>;
@@ -35,6 +37,8 @@ export interface UiInteractionHelper {
   fill(target: Locator, value: string, options?: UiFillOptions): Promise<void>;
   select(target: Locator, value: string, options?: UiSelectOptions): Promise<void>;
   focus(target: Locator, options?: UiFocusOptions): Promise<void>;
+  hover(target: Locator, options?: UiHoverOptions): Promise<void>;
+  scrollIntoView(target: Locator, options?: UiScrollOptions): Promise<void>;
 }
 
 /**
@@ -111,6 +115,24 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
       expected: options.expected
     });
     this.assertSuccess("focus", result.success, result.failureReason);
+  }
+
+  async hover(target: Locator, options: UiHoverOptions = {}): Promise<void> {
+    const result = await this.engine.hover(target, {
+      attempts: options.attempts,
+      seed: options.seed,
+      expected: options.expected
+    });
+    this.assertSuccess("hover", result.success, result.failureReason);
+  }
+
+  async scrollIntoView(target: Locator, options: UiScrollOptions = {}): Promise<void> {
+    const result = await this.engine.scrollIntoView(target, {
+      attempts: options.attempts,
+      seed: options.seed,
+      expected: options.expected
+    });
+    this.assertSuccess("scroll", result.success, result.failureReason);
   }
 
   private assertSuccess(action: string, success: boolean, failureReason?: string): void {
