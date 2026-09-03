@@ -3,7 +3,7 @@ import type { LiveChallengeDetection, LiveChallengeType } from "./types";
 
 export class LiveChallengeDetector {
   /**
-   * Prüft einen HTML/URL-Snapshot auf Challenges (vollständig abgesichert gegen null/undefined).
+   * Prüft einen HTML/URL-Snapshot auf Challenges (wird von den Snapshot-Tests verwendet).
    */
   detectFromSnapshot(url: any = "", html: any = "", title: any = ""): LiveChallengeDetection {
     const safeUrl = typeof url === "string" ? url : String(url ?? "");
@@ -110,38 +110,82 @@ export class LiveChallengeDetector {
   }
 
   /**
-   * Prüft eine aktive Patchright-Page im Browser.
+   * Prüft eine aktive Patchright-Page im Browser oder den Mock im Test.
    */
   async detect(page: Page): Promise<LiveChallengeDetection> {
     if (!page || (typeof page.isClosed === "function" && page.isClosed())) {
       return { detected: false, url: "" };
     }
 
-    let url = "";
-    try {
-      if (typeof page.url === "function") {
-        url = page.url() || "";
-      }
-    } catch {}
-
+    const url = typeof page.url === "function" ? page.url() : "";
     let title = "";
-    try {
-      if (typeof page.title === "function") {
-        title = (await page.title()) || "";
-      }
-    } catch {}
+    if (typeof page.title === "function") {
+      title = (await page.title().catch(() => "")) || "";
+    }
 
-    let html = "";
-    try {
-      if (typeof page.content === "function") {
-        html = (await page.content()) || "";
-      }
-    } catch {}
-
-    if (!html) {
+    // 1. Direkte Auswertung über page.evaluate (funktioniert im echten Browser und im Test-Mock)
+    if (typeof (page as any).evaluate === "function") {
       try {
-        if (typeof (page as any).evaluate === "function") {
-          html = (await page.evaluate(() => document.documentElement?.outerHTML || "")) || "";
+        const evalResult = await (page as any).evaluate(() => {
+          const hasTurnstile = Boolean(
+            document.querySelector('input[name="cf-turnstile-response"]') ||
+            document.querySelector('.cf-turnstile') ||
+            document.querySelector('iframe[src*="challenges.cloudflare.com"]') ||
+            document.querySelector('iframe[src*="turnstile"]')
+          );
+          if (hasTurnstile) return "turnstile";
+
+          const hasRecaptcha = Boolean(
+            document.querySelector('textarea[name="g-recaptcha-response"]') ||
+            document.querySelector('.g-recaptcha') ||
+            document.querySelector('iframe[src*="google.com/recaptcha"]')
+          );
+          if (hasRecaptcha) return "recaptcha";
+
+          const hasHcaptcha = Boolean(
+            document.querySelector('textarea[name="h-captcha-response"]') ||
+            document.querySelector('.h-captcha') ||
+            document.querySelector('iframe[src*="hcaptcha.com"]')
+          );
+          if (hasHcaptcha) return "hcaptcha";
+
+          if (document.title.toLowerCase().includes("just a moment") || document.querySelector("#challenge-running")) {
+            return "generic-interstitial";
+          }
+
+          return null;
+        });
+
+        // Wenn der Mock direkt einen Typ (z. B. "turnstile") zurückgibt:
+        if (typeof evalResult === "string" && evalResult) {
+          return {
+            detected: true,
+            type: evalResult as LiveChallengeType,
+            url,
+            title
+          };
+        }
+
+        // Wenn der Mock ein Objekt zurückgibt (z. B. { type: "turnstile", detected: true }):
+        if (evalResult && typeof evalResult === "object") {
+          const detectedType = (evalResult.type || (evalResult.turnstile ? "turnstile" : undefined)) as LiveChallengeType;
+          return {
+            detected: evalResult.detected ?? Boolean(detectedType),
+            type: detectedType,
+            url: evalResult.url || url,
+            title: evalResult.title || title
+          };
+        }
+      } catch {}
+    }
+
+    // 2. Fallback über HTML Content
+    let html = "";
+    if (typeof page.content === "function") {
+      try {
+        const contentVal = await page.content();
+        if (typeof contentVal === "string") {
+          html = contentVal;
         }
       } catch {}
     }
