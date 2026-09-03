@@ -4,7 +4,13 @@ import type { AresProxy } from "../src/proxies/models";
 import type { Task } from "../src/models";
 import { TaskState } from "../src/models";
 
-const shop = { id: "shop-1", name: "Shop", baseUrl: "https://example.test", platform: "shopify" as const };
+const shop = {
+  id: "shop-1",
+  name: "Shop",
+  baseUrl: "https://example.test",
+  platform: "shopify" as const,
+  config: {}
+};
 
 const profile: AresProfile = {
   id: "profile-1",
