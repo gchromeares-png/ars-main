@@ -1,12 +1,12 @@
 <div class="app-shell">
-  <div class="fog fog-a"></div>
-  <div class="fog fog-b"></div>
+  <div class="petal-bg petal-a"></div>
+  <div class="petal-bg petal-b"></div>
 
   <header class="topbar">
     <div class="brand-block">
-      <div class="crest">侍</div>
+      <div class="crest">🌸</div>
       <div>
-        <div class="eyebrow">ARES // SAMURAI CONTROL</div>
+        <div class="eyebrow">ARES // SAKURA CONTROL</div>
         <h1>ARES</h1>
       </div>
     </div>
@@ -14,6 +14,9 @@
     <div class="backend-state">
       <span class="pulse"></span>
       BACKEND ONLINE
+      <span class="key-chip" [class.ready]="system.captchaApiKeyConfigured" [class.missing]="!system.captchaApiKeyConfigured">
+        {{ getCaptchaKeyStatusLabel() }}
+      </span>
     </div>
   </header>
 
@@ -22,34 +25,13 @@
     <div *ngIf="info" class="notice info">{{ info }}</div>
 
     <section class="hero sakura-hero">
-      <div class="moon"></div>
-      <div class="sakura-tree sakura-tree-left" aria-hidden="true">
-        <span class="tree-trunk"></span>
-        <span class="tree-branch branch-one"></span>
-        <span class="tree-branch branch-two"></span>
-        <span class="tree-branch branch-three"></span>
-        <span class="blossom-cloud blossom-a"></span>
-        <span class="blossom-cloud blossom-b"></span>
-        <span class="blossom-cloud blossom-c"></span>
-      </div>
-      <div class="sakura-tree sakura-tree-right" aria-hidden="true">
-        <span class="tree-trunk"></span>
-        <span class="tree-branch branch-one"></span>
-        <span class="tree-branch branch-two"></span>
-        <span class="tree-branch branch-three"></span>
-        <span class="blossom-cloud blossom-a"></span>
-        <span class="blossom-cloud blossom-b"></span>
-        <span class="blossom-cloud blossom-c"></span>
-      </div>
       <div class="petal-field" aria-hidden="true">
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
       </div>
-      <div class="sword sword-left"></div>
-      <div class="sword sword-right"></div>
       <div class="hero-copy">
-        <div class="eyebrow">花見 // ARES AUTOMATION DOJO</div>
-        <h2>静かな力 <span>·</span> Silent precision.</h2>
-        <p>Shop, Profil und Task klar getrennt — jede Mission mit eigener Session.</p>
+        <div class="eyebrow">LIVE DEBUG // CHALLENGE VISIBILITY</div>
+        <h2>Klare Übersicht für Tasks, Sessions und Captcha-Status.</h2>
+        <p>Backend-Funktionen bleiben getrennt — die UI zeigt nur Debug-Status, Key-Status und Task-Fortschritt an.</p>
       </div>
     </section>
 
@@ -66,6 +48,11 @@
         <span>WORKERS</span>
         <strong>{{ system.availableWorkers }}</strong>
       </article>
+      <article class="stat-card captcha-card" [class.ready]="system.captchaApiKeyConfigured" [class.missing]="!system.captchaApiKeyConfigured">
+        <span>CAPTCHA</span>
+        <strong>{{ system.captchaApiKeyConfigured ? "READY" : "KEY FEHLT" }}</strong>
+        <small>{{ system.captchaProvider || "CapMonster" }} · {{ getSupportedChallengeTypes() }}</small>
+      </article>
     </section>
 
     <div class="workspace">
@@ -75,7 +62,7 @@
             <div class="eyebrow">MISSION SETUP</div>
             <h3>Task erstellen</h3>
           </div>
-          <span class="katana-mark">刀</span>
+          <span class="soft-mark">🌸</span>
         </div>
 
         <div class="form-grid">
@@ -127,7 +114,7 @@
             <div class="eyebrow">SHOP REGISTRY</div>
             <h3>Shop verbinden</h3>
           </div>
-          <span class="katana-mark">剣</span>
+          <span class="soft-mark">🌿</span>
         </div>
 
         <label>
@@ -161,14 +148,13 @@
       </aside>
     </div>
 
-
     <section class="panel profile-panel">
       <div class="panel-header">
         <div>
           <div class="eyebrow">PROFILE VAULT</div>
           <h3>Browser-/Checkout-Profil</h3>
         </div>
-        <span class="katana-mark">魂</span>
+        <span class="soft-mark">👤</span>
       </div>
 
       <div class="form-grid profile-grid">
@@ -277,6 +263,7 @@
           <div class="eyebrow">ACTIVE MISSIONS</div>
           <h3>Tasks</h3>
         </div>
+        <span class="soft-mark">🛡️</span>
       </div>
 
       <div class="empty-state" *ngIf="!tasks.length">
@@ -289,6 +276,14 @@
           <small>{{ task.config.shopId || "kein Shop" }}</small>
           <small class="assigned-profile">Profil: {{ getTaskProfileName(task) }}</small>
           <small class="task-error" *ngIf="task.lastError">{{ task.lastError }}</small>
+          <div class="captcha-debug">
+            <span class="captcha-dot" [class.ready]="system.captchaApiKeyConfigured" [class.missing]="!system.captchaApiKeyConfigured"></span>
+            <div>
+              <strong>Captcha Debug</strong>
+              <small>{{ getTaskCaptchaStatus(task) }}</small>
+              <small *ngIf="getTaskChallengeType(task)">Typ: {{ getTaskChallengeType(task) }}</small>
+            </div>
+          </div>
         </div>
 
         <div class="retry-info">
