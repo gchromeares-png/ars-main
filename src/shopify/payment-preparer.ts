@@ -39,7 +39,6 @@ export class ShopifyPaymentPreparer {
     if (selected || session.method === "card") result.selectedMethod = session.method;
 
     if (session.method !== "card") {
-      result.requiresUserAction = true;
       result.note = selected
         ? `${this.label(session.method)} ausgewählt. Externe Anmeldung/Freigabe bleibt manuell.`
         : `${this.label(session.method)} konnte noch nicht eindeutig ausgewählt werden.`;
@@ -63,22 +62,22 @@ export class ShopifyPaymentPreparer {
       'input[autocomplete="cc-number"]',
       'input[name*="cardnumber" i]',
       'input[name*="card_number" i]',
-      'input[name*="number" i]'
+      'input[data-card-field="number"]'
     ], result);
     await this.fillCardField(page, "expiry", card.expiry, [
       'input[autocomplete="cc-exp"]',
       'input[name*="expiry" i]',
       'input[name*="expiration" i]',
-      'input[name*="exp-date" i]'
+      'input[data-card-field="expiry"]'
     ], result);
     await this.fillCardField(page, "securityCode", card.securityCode, [
       'input[autocomplete="cc-csc"]',
-      'input[name*="security" i]',
+      'input[name*="security_code" i]',
       'input[name*="cvv" i]',
-      'input[name*="cvc" i]'
+      'input[name*="cvc" i]',
+      'input[data-card-field="verification_value"]'
     ], result);
 
-    result.requiresUserAction = true;
     result.note = result.missingFields.length
       ? "Kartendaten teilweise vorbereitet. Fehlende Felder müssen manuell ergänzt werden; Bestellung wird nicht abgesendet."
       : "Kartendaten vorbereitet. Letzte Zahlungsfreigabe und Bestellung bleiben manuell.";
@@ -94,7 +93,7 @@ export class ShopifyPaymentPreparer {
 
   private async hasVisibleCardField(page: Page): Promise<boolean> {
     for (const frame of this.frames(page)) {
-      const locator = frame.locator('input[autocomplete="cc-number"], input[name*="cardnumber" i], input[name*="card_number" i]').first();
+      const locator = frame.locator('input[autocomplete="cc-number"], input[name*="cardnumber" i], input[name*="card_number" i], input[data-card-field="number"]').first();
       if (await this.isVisible(locator)) return true;
     }
     return false;
@@ -109,9 +108,9 @@ export class ShopifyPaymentPreparer {
     for (const frame of this.frames(page)) {
       for (const pattern of patterns) {
         const candidates = [
-          frame.getByText(pattern).first(),
           frame.getByRole("radio", { name: pattern }).first(),
-          frame.getByRole("button", { name: pattern }).first()
+          frame.getByRole("button", { name: pattern }).first(),
+          frame.getByText(pattern).first()
         ];
         for (const locator of candidates) {
           if (!await this.isVisible(locator)) continue;
