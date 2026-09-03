@@ -1,8 +1,9 @@
 import { mkdir, readFile, rename, writeFile } from "fs/promises";
 import * as path from "path";
 import initSqlJs, { Database } from "sql.js";
-import { ITaskPersistenceRepository } from "../interfaces";
+import { ITaskPersistenceRepository, StoredProductMonitorEvent } from "../interfaces";
 import { Task, TaskConfig, TaskLogEntry, TaskLogLevel, TaskState } from "../models";
+import type { ProductMonitorEvent, ProductObservation } from "../monitor/models";
 
 const SENSITIVE_KEY = /(api[-_]?key|authorization|cookie|password|secret|token)/i;
 const SENSITIVE_VALUE = /\b(api[-_]?key|authorization|cookie|password|secret|token)\s*[:=]\s*([^\s,;]+)/gi;
@@ -64,6 +65,39 @@ function rowToLog(row: Record<string, unknown>): TaskLogEntry {
   };
 }
 
+function serializeMonitorEvent(event: ProductMonitorEvent): string {
+  return JSON.stringify(sanitizeValue({
+    ...event,
+    observedAt: event.observedAt.toISOString(),
+    current: {
+      ...event.current,
+      observedAt: event.current.observedAt.toISOString()
+    },
+    previous: event.previous
+      ? { ...event.previous, observedAt: event.previous.observedAt.toISOString() }
+      : undefined
+  }));
+}
+
+function reviveObservation(input: any): ProductObservation {
+  return {
+    ...input,
+    observedAt: new Date(input.observedAt)
+  } as ProductObservation;
+}
+
+function rowToMonitorEvent(row: Record<string, unknown>): StoredProductMonitorEvent {
+  const parsed = JSON.parse(asString(row["event_json"])) as any;
+  return {
+    ...parsed,
+    id: asNumber(row["id"]),
+    taskId: asString(row["task_id"]),
+    observedAt: new Date(parsed.observedAt),
+    current: reviveObservation(parsed.current),
+    previous: parsed.previous ? reviveObservation(parsed.previous) : undefined
+  } as StoredProductMonitorEvent;
+}
+
 export class SqliteTaskStore implements ITaskPersistenceRepository {
   private writeQueue: Promise<void> = Promise.resolve();
 
@@ -106,9 +140,7 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
     await this.writeQueue;
     const statement = this.db.prepare(`
       SELECT id, config_json, state, created_at, updated_at, last_error, retries, max_retries
-      FROM tasks
-      WHERE id = ?
-      LIMIT 1
+      FROM tasks WHERE id = ? LIMIT 1
     `, [id]);
 
     try {
@@ -122,8 +154,7 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
     await this.writeQueue;
     const statement = this.db.prepare(`
       SELECT id, config_json, state, created_at, updated_at, last_error, retries, max_retries
-      FROM tasks
-      ORDER BY updated_at DESC
+      FROM tasks ORDER BY updated_at DESC
     `);
 
     const tasks: Task[] = [];
@@ -140,6 +171,7 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
       this.db.run("BEGIN TRANSACTION");
       try {
         this.db.run("DELETE FROM task_logs WHERE task_id = ?", [id]);
+        this.db.run("DELETE FROM product_monitor_events WHERE task_id = ?", [id]);
         this.db.run("DELETE FROM tasks WHERE id = ?", [id]);
         this.db.run("COMMIT");
       } catch (error) {
@@ -158,10 +190,7 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
     const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)));
     const statement = this.db.prepare(`
       SELECT id, task_id, event, state, level, message, created_at
-      FROM task_logs
-      WHERE task_id = ?
-      ORDER BY id DESC
-      LIMIT ?
+      FROM task_logs WHERE task_id = ? ORDER BY id DESC LIMIT ?
     `, [taskId, safeLimit]);
 
     const logs: TaskLogEntry[] = [];
@@ -170,14 +199,44 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
     } finally {
       statement.free();
     }
-
     return logs.reverse();
   }
 
   async deleteLogsByTaskId(taskId: string): Promise<void> {
+    await this.mutate(() => this.db.run("DELETE FROM task_logs WHERE task_id = ?", [taskId]));
+  }
+
+  async recordProductMonitorEvent(taskId: string, event: ProductMonitorEvent): Promise<void> {
     await this.mutate(() => {
-      this.db.run("DELETE FROM task_logs WHERE task_id = ?", [taskId]);
+      this.db.run(`
+        INSERT INTO product_monitor_events (task_id, product_key, change_type, event_json, observed_at)
+        VALUES (?, ?, ?, ?, ?)
+      `, [taskId, event.key, event.type, serializeMonitorEvent(event), event.observedAt.toISOString()]);
     });
+  }
+
+  async findProductMonitorEventsByTaskId(taskId: string, limit = 100): Promise<StoredProductMonitorEvent[]> {
+    await this.writeQueue;
+    const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)));
+    const statement = this.db.prepare(`
+      SELECT id, task_id, event_json
+      FROM product_monitor_events
+      WHERE task_id = ?
+      ORDER BY id DESC
+      LIMIT ?
+    `, [taskId, safeLimit]);
+
+    const events: StoredProductMonitorEvent[] = [];
+    try {
+      while (statement.step()) events.push(rowToMonitorEvent(statement.getAsObject()));
+    } finally {
+      statement.free();
+    }
+    return events.reverse();
+  }
+
+  async deleteProductMonitorEventsByTaskId(taskId: string): Promise<void> {
+    await this.mutate(() => this.db.run("DELETE FROM product_monitor_events WHERE task_id = ?", [taskId]));
   }
 
   async recordTaskEvent(task: Task, entry: TaskLogEntry): Promise<void> {
@@ -225,8 +284,20 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS product_monitor_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL,
+        product_key TEXT NOT NULL,
+        change_type TEXT NOT NULL,
+        event_json TEXT NOT NULL,
+        observed_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_task_logs_task_id_id
         ON task_logs(task_id, id);
+
+      CREATE INDEX IF NOT EXISTS idx_product_monitor_events_task_id_id
+        ON product_monitor_events(task_id, id);
     `);
   }
 
