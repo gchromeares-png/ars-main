@@ -149,7 +149,10 @@ async function createBackend(): Promise<void> {
       return shop?.platform === "shopify" ? shop as ShopifyRuntimeShop : undefined;
     },
     profileId => profileRepository.get(profileId),
-    { profileRoot: path.join(userData, "browser-profiles") }
+    {
+      profileRoot: path.join(userData, "browser-profiles"),
+      onTaskProgress: task => broadcastTaskUpdate(task)
+    }
   );
 
   taskStore = await SqliteTaskStore.open(path.join(userData, "ares.sqlite"));
