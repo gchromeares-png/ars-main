@@ -1,10 +1,12 @@
 import type { ITaskExecutor } from "../interfaces";
 import type { Task } from "../models";
+import { isCommerceMonitorTask } from "../monitor/commerce-monitor-service";
 import type { CommercePlatform, CommerceShop } from "./platforms";
 
 export class CommerceTaskExecutorRouter implements ITaskExecutor {
   private readonly executors = new Map<CommercePlatform, ITaskExecutor>();
   private readonly taskOwners = new Map<string, ITaskExecutor>();
+  private monitorExecutor?: ITaskExecutor;
 
   constructor(private readonly getShop: (shopId: string) => CommerceShop | undefined) {}
 
@@ -12,8 +14,16 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
     this.executors.set(platform, executor);
   }
 
+  registerMonitorExecutor(executor: ITaskExecutor): void {
+    this.monitorExecutor = executor;
+  }
+
   hasExecutor(platform: CommercePlatform): boolean {
     return this.executors.has(platform);
+  }
+
+  hasMonitorExecutor(): boolean {
+    return Boolean(this.monitorExecutor);
   }
 
   listExecutorPlatforms(): CommercePlatform[] {
@@ -33,9 +43,14 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
       return false;
     }
 
-    const executor = this.executors.get(shop.platform);
+    const executor = isCommerceMonitorTask(task)
+      ? this.monitorExecutor
+      : this.executors.get(shop.platform);
+
     if (!executor) {
-      task.lastError = `Für ${shop.platform} ist noch kein Task-Executor registriert. Die Plattform ist bereits im Commerce-/Monitor-Modell vorbereitet.`;
+      task.lastError = isCommerceMonitorTask(task)
+        ? "Für Monitoring ist noch kein CommerceMonitorService registriert."
+        : `Für ${shop.platform} ist noch kein Task-Executor registriert. Die Plattform ist bereits im Commerce-/Monitor-Modell vorbereitet.`;
       return false;
     }
 
@@ -52,7 +67,10 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
   }
 
   async close(): Promise<void> {
-    const uniqueExecutors = [...new Set(this.executors.values())];
+    const uniqueExecutors = [...new Set([
+      ...this.executors.values(),
+      ...(this.monitorExecutor ? [this.monitorExecutor] : [])
+    ])];
     await Promise.allSettled(uniqueExecutors.map(async executor => {
       await executor.close?.();
     }));
