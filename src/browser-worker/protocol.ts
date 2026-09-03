@@ -47,6 +47,12 @@ export interface ExecuteTaskResponse {
   };
 }
 
+export interface TaskProgressResponse {
+  type: "task-progress";
+  taskId: string;
+  dataPatch: Record<string, unknown>;
+}
+
 export interface HealthResponse {
   type: "health-result";
   requestId: string;
@@ -66,4 +72,10 @@ export interface ErrorResponse {
   error: string;
 }
 
-export type BrowserWorkerResponse = ReadyMessage | ExecuteTaskResponse | HealthResponse | AckResponse | ErrorResponse;
+export type BrowserWorkerResponse =
+  | ReadyMessage
+  | ExecuteTaskResponse
+  | TaskProgressResponse
+  | HealthResponse
+  | AckResponse
+  | ErrorResponse;
