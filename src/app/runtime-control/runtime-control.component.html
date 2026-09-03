@@ -27,7 +27,7 @@
       <div class="watchdog-metrics">
         <div><span>Restarts</span><strong>{{ restartCount }}</strong></div>
         <div><span>Worker</span><strong>{{ workers.length }}</strong></div>
-        <div><span>Aktive Tasks</span><strong>{{ workers.reduce ? (workers | json) && '' : '' }}{{ workers.length ? '' : 0 }}</strong></div>
+        <div><span>Aktive Tasks</span><strong>{{ activeWorkerTaskCount }}</strong></div>
       </div>
 
       <div class="worker-list" *ngIf="workers.length">
