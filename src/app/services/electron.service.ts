@@ -13,11 +13,23 @@ interface BrowserPreviewTask {
   lastError?: string;
 }
 
+interface BrowserPreviewLog {
+  id: number;
+  taskId: string;
+  event: string;
+  state?: string;
+  level: "info" | "warn" | "error";
+  message: string;
+  createdAt: string;
+}
+
 @Injectable({ providedIn: "root" })
 export class ElectronService {
   private readonly previewProfiles: any[] = [];
   private readonly previewShops: any[] = [];
   private readonly previewTasks: BrowserPreviewTask[] = [];
+  private readonly previewTaskLogs = new Map<string, BrowserPreviewLog[]>();
+  private previewLogId = 0;
 
   private get api(): any | undefined {
     return (window as any).ares;
@@ -89,6 +101,8 @@ export class ElectronService {
     };
 
     this.previewTasks.push(task);
+    this.recordPreviewLog(task, "taskCreated", "info", "Task erstellt");
+    this.recordPreviewLog(task, "taskStateChanged", "info", "CREATED -> QUEUED");
     return Promise.resolve({ success: true, taskId: task.id, task });
   }
 
@@ -103,6 +117,7 @@ export class ElectronService {
         liveChallengeStatus: "Browser-Vorschau aktiv. Für echte Sessions Electron starten.",
         liveChallengeType: "preview"
       };
+      this.recordPreviewLog(task, "taskStateChanged", "info", "QUEUED -> RUNNING");
     }
     return Promise.resolve({ success: true, task });
   }
@@ -112,12 +127,14 @@ export class ElectronService {
 
     const task = this.previewTasks.find(item => item.id === taskId);
     if (task) {
+      const previous = task.state;
       task.state = "PAUSED";
       task.config.data = {
         ...(task.config.data ?? {}),
         liveChallengeStatus: "Browser-Vorschau pausiert. Fortsetzen setzt den Task zurück in die Queue.",
         liveChallengeType: "preview"
       };
+      this.recordPreviewLog(task, "taskStateChanged", "warn", `${previous} -> PAUSED`);
     }
     return Promise.resolve({ success: true, task });
   }
@@ -133,6 +150,7 @@ export class ElectronService {
         liveChallengeStatus: "Browser-Vorschau fortgesetzt. Echter Task-Resume läuft nur in Electron.",
         liveChallengeType: "preview"
       };
+      this.recordPreviewLog(task, "taskStateChanged", "info", "PAUSED -> QUEUED");
     }
     return Promise.resolve({ success: true, task });
   }
@@ -141,7 +159,11 @@ export class ElectronService {
     if (this.api) return this.api.stopTask(taskId);
 
     const task = this.previewTasks.find(item => item.id === taskId);
-    if (task) task.state = "CANCELLED";
+    if (task) {
+      const previous = task.state;
+      task.state = "CANCELLED";
+      this.recordPreviewLog(task, "taskStateChanged", "warn", `${previous} -> CANCELLED`);
+    }
     return Promise.resolve({ success: true, task });
   }
 
@@ -159,6 +181,14 @@ export class ElectronService {
   getTaskList(): Promise<any> {
     if (this.api) return this.api.getTaskList();
     return Promise.resolve({ success: true, tasks: this.previewTasks });
+  }
+
+  getTaskLogs(taskId: string, limit = 100): Promise<any> {
+    if (this.api) return this.api.getTaskLogs(taskId, limit);
+
+    const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)));
+    const logs = this.previewTaskLogs.get(taskId) ?? [];
+    return Promise.resolve({ success: true, logs: logs.slice(-safeLimit) });
   }
 
   getSystemStatus(): Promise<any> {
@@ -179,6 +209,10 @@ export class ElectronService {
         version: "n/a",
         ok: true
       },
+      persistence: {
+        type: "preview",
+        ready: true
+      },
       browserPreview: true
     });
   }
@@ -196,5 +230,24 @@ export class ElectronService {
     }
 
     return () => undefined;
+  }
+
+  private recordPreviewLog(
+    task: BrowserPreviewTask,
+    event: string,
+    level: BrowserPreviewLog["level"],
+    message: string
+  ): void {
+    const logs = this.previewTaskLogs.get(task.id) ?? [];
+    logs.push({
+      id: ++this.previewLogId,
+      taskId: task.id,
+      event,
+      state: task.state,
+      level,
+      message,
+      createdAt: new Date().toISOString()
+    });
+    this.previewTaskLogs.set(task.id, logs);
   }
 }
