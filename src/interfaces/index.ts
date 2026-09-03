@@ -38,6 +38,11 @@ export interface ITaskLogRepository {
   deleteLogsByTaskId(taskId: string): Promise<void>;
 }
 
+export interface ITaskPersistenceRepository extends ITaskRepository, ITaskLogRepository {
+  recordTaskEvent(task: Task, entry: TaskLogEntry): Promise<void>;
+  close?(): Promise<void>;
+}
+
 export interface IWorker {
   id: string;
   status: "idle" | "busy";
