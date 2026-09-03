@@ -32,6 +32,7 @@ describeBrowserIntegration("browser worker watchdog integration", () => {
         heartbeatTimeoutMs?: number,
         executeTimeoutMs?: number
       ) => {
+        start(): Promise<void>;
         health(): Promise<{ pid?: number; running: boolean; lastHeartbeatAt?: Date }>;
         close(): Promise<void>;
       };
@@ -48,6 +49,7 @@ describeBrowserIntegration("browser worker watchdog integration", () => {
     );
 
     try {
+      await client.start();
       const first = await client.health();
       expect(first.running).toBe(true);
       expect(first.pid).toBeGreaterThan(0);
@@ -65,7 +67,7 @@ describeBrowserIntegration("browser worker watchdog integration", () => {
 
       process.kill(firstPid, "SIGSTOP");
       await waitFor(
-        () => exits.some(message => message.includes("Heartbeat") || message.includes("Timeout")),
+        () => exits.some(message => message.includes("Timeout") || message.includes("Heartbeat")),
         5_000,
         "watchdog recycle"
       );
