@@ -3,6 +3,10 @@ import type { Task } from "../models";
 import { isCommerceMonitorTask } from "../monitor/commerce-monitor-service";
 import type { CommercePlatform, CommerceShop } from "./platforms";
 
+type RuntimeUpdateSource = ITaskExecutor & {
+  onTaskUpdate?: (callback: (task: Task) => void) => () => void;
+};
+
 export class CommerceTaskExecutorRouter implements ITaskExecutor {
   private readonly executors = new Map<CommercePlatform, ITaskExecutor>();
   private readonly taskOwners = new Map<string, ITaskExecutor>();
@@ -91,8 +95,9 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
   }
 
   private attachRuntimeUpdates(executor: ITaskExecutor): void {
-    if (!executor.onTaskUpdate || this.runtimeUnsubscribers.has(executor)) return;
-    const unsubscribe = executor.onTaskUpdate(task => {
+    const runtimeSource = executor as RuntimeUpdateSource;
+    if (!runtimeSource.onTaskUpdate || this.runtimeUnsubscribers.has(executor)) return;
+    const unsubscribe = runtimeSource.onTaskUpdate(task => {
       for (const listener of this.runtimeListeners) listener(task);
     });
     this.runtimeUnsubscribers.set(executor, unsubscribe);
