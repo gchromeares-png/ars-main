@@ -2,7 +2,6 @@ import type { Locator, Page } from "patchright";
 import type { AresProfile } from "../profiles/models";
 import type { UiInteractionHelper } from "./ui-interaction-helper";
 import { SemanticProfileMapper } from "./semantic-profile-mapper";
-import { semanticTarget } from "./semantic-target";
 
 export interface SemanticCheckoutProfilePlan {
   values: SemanticProfileMapper;
@@ -15,19 +14,18 @@ export class SemanticCheckoutProfilePlanner {
   constructor(private readonly interactions: UiInteractionHelper) {}
 
   async prepare(page: Page, profile: AresProfile): Promise<SemanticCheckoutProfilePlan> {
-    const preferred = new SemanticProfileMapper(profile, { billingMode: "prefer-same-as-shipping" });
-
-    // A concrete billing address value means an explicit billing address exists and wins.
-    if (preferred.valueFor(semanticTarget("city", "billing"))) {
-      return { values: preferred, billingMode: "explicit-billing" };
+    if (profile.billingAddress) {
+      return {
+        values: new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }),
+        billingMode: "explicit-billing"
+      };
     }
 
+    const preferred = new SemanticProfileMapper(profile, { billingMode: "prefer-same-as-shipping" });
     if (await this.activateSameAsShipping(page)) {
       return { values: preferred, billingMode: "same-as-shipping" };
     }
 
-    // No usable same-as-shipping control: billing remains a distinct target identity,
-    // but its value source falls back centrally to shipping/default.
     return {
       values: new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }),
       billingMode: "separate-billing-fields"
