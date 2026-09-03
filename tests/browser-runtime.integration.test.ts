@@ -6,7 +6,7 @@ import * as os from "os";
 import * as path from "path";
 import { PatchrightBrowserWorker } from "../src/browser-worker/patchright-browser-worker";
 
-const describeBrowserIntegration = process.env.ARES_RUN_BROWSER_INTEGRATION === "1"
+const describeBrowserIntegration = process.env["ARES_RUN_BROWSER_INTEGRATION"] === "1"
   ? describe
   : describe.skip;
 
@@ -92,23 +92,24 @@ describeBrowserIntegration("real browser runtime integration", () => {
     const output = collectJsonLines(child);
 
     try {
-      const ready = await waitForMessage(output.messages, message => message.type === "ready");
-      expect(Number(ready.pid)).toBeGreaterThan(0);
-      expect(String(ready.nodeVersion)).toMatch(/^\d+\./);
+      const ready = await waitForMessage(output.messages, message => message["type"] === "ready");
+      expect(Number(ready["pid"])).toBeGreaterThan(0);
+      expect(String(ready["nodeVersion"])).toMatch(/^\d+\./);
 
       child.stdin.write(`${JSON.stringify({ type: "health", requestId: "integration-health" })}\n`);
       const health = await waitForMessage(
         output.messages,
-        message => message.type === "health-result" && message.requestId === "integration-health"
+        message => message["type"] === "health-result" && message["requestId"] === "integration-health"
       );
-      expect(health.pid).toBe(ready.pid);
-      expect((health.health as JsonMessage).state).toBe("healthy");
-      expect((health.health as JsonMessage).activeContexts).toBe(0);
+      const healthPayload = health["health"] as JsonMessage;
+      expect(health["pid"]).toBe(ready["pid"]);
+      expect(healthPayload["state"]).toBe("healthy");
+      expect(healthPayload["activeContexts"]).toBe(0);
 
       child.stdin.write(`${JSON.stringify({ type: "shutdown", requestId: "integration-shutdown" })}\n`);
       await waitForMessage(
         output.messages,
-        message => message.type === "ack" && message.requestId === "integration-shutdown"
+        message => message["type"] === "ack" && message["requestId"] === "integration-shutdown"
       );
       await waitForExit(child);
       expect(child.exitCode).toBe(0);
