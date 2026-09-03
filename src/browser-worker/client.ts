@@ -5,6 +5,7 @@ import * as path from "path";
 import type { ITaskExecutor } from "../interfaces";
 import type { Task } from "../models";
 import type { AresProfile } from "../profiles/models";
+import type { AresProxy, ProxySelection } from "../proxies/models";
 import type { ShopifyRuntimeShop } from "./runtime-types";
 import type { BrowserWorkerHealth } from "./types";
 import type { BrowserWorkerRequest, BrowserWorkerResponse } from "./protocol";
@@ -367,6 +368,7 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
   private readonly heartbeatIntervalMs: number;
   private readonly heartbeatTimeoutMs: number;
   private readonly executeTimeoutMs: number;
+  private readonly getProxy: (proxyId: string) => AresProxy | undefined;
 
   constructor(
     private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
@@ -379,8 +381,10 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
       heartbeatTimeoutMs?: number;
       profileRoot?: string;
       onTaskUpdate?: (task: Task) => void;
+      getProxy?: (proxyId: string) => AresProxy | undefined;
     } = {}
   ) {
+    this.getProxy = options.getProxy ?? (() => undefined);
     // @ts-ignore
     const requestedCount = options.processCount ?? Number(process.env.ARES_BROWSER_WORKER_PROCESSES ?? "1");
     const processCount = Number.isFinite(requestedCount)
@@ -437,11 +441,18 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
       return false;
     }
 
+    let effectiveProfile: AresProfile;
+    try {
+      effectiveProfile = this.resolveEffectiveProfile(task, profile);
+    } catch (error) {
+      task.lastError = error instanceof Error ? error.message : String(error);
+      return false;
+    }
+
     const client = this.taskOwners.get(task.id) ?? this.leastLoadedClient();
     this.taskOwners.set(task.id, client);
     try {
-      const success = await client.execute(task, shop, profile);
-      return success;
+      return await client.execute(task, shop, effectiveProfile);
     } catch (error) {
       task.lastError = error instanceof Error ? error.message : String(error);
       return false;
@@ -477,6 +488,48 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     this.taskOwners.clear();
     this.runtimeListeners.clear();
     await Promise.allSettled(this.clients.map(client => client.close()));
+  }
+
+  private resolveEffectiveProfile(task: Task, profile: AresProfile): AresProfile {
+    const data = task.config.data ?? {};
+    const selection = data["proxySelection"] as ProxySelection | undefined;
+    const mode = selection?.mode ?? "profile-default";
+
+    if (mode === "direct") {
+      data["proxyRuntime"] = { mode: "direct" };
+      task.config.data = data;
+      return { ...profile, proxy: undefined };
+    }
+
+    const proxyId = mode === "proxy" ? selection?.proxyId : profile.preferredProxyId;
+    if (mode === "proxy" && !proxyId) {
+      throw new Error("Proxy-Modus gewählt, aber keine Proxy-ID zugeordnet.");
+    }
+
+    if (proxyId) {
+      const proxy = this.getProxy(proxyId);
+      if (!proxy) {
+        throw new Error(`Zugeordneter Proxy ${proxyId} ist nicht mehr vorhanden.`);
+      }
+      data["proxyRuntime"] = { mode, proxyId: proxy.id, proxyName: proxy.name };
+      task.config.data = data;
+      return {
+        ...profile,
+        proxy: {
+          protocol: proxy.protocol,
+          host: proxy.host,
+          port: proxy.port,
+          username: proxy.username,
+          password: proxy.password
+        }
+      };
+    }
+
+    data["proxyRuntime"] = profile.proxy?.host
+      ? { mode: "legacy-profile" }
+      : { mode: "direct" };
+    task.config.data = data;
+    return profile;
   }
 
   private leastLoadedClient(): BrowserWorkerProcessClient {
