@@ -308,6 +308,20 @@
           </button>
 
           <button
+            *ngIf="isPausable(task)"
+            class="btn btn-small btn-warning"
+            (click)="pauseTask(task.id)">
+            Pause
+          </button>
+
+          <button
+            *ngIf="isResumable(task)"
+            class="btn btn-small btn-primary"
+            (click)="resumeTask(task.id)">
+            Fortsetzen
+          </button>
+
+          <button
             *ngIf="isStoppable(task)"
             class="btn btn-small btn-danger"
             (click)="stopTask(task.id)">
