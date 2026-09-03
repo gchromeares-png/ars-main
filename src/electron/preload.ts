@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 const taskStatusListeners = new Map<Function, (_event: Electron.IpcRendererEvent, payload: unknown) => void>();
+const monitorListeners = new Map<Function, (_event: Electron.IpcRendererEvent, payload: unknown) => void>();
 
 const api = {
   getProfiles: () => ipcRenderer.invoke("get-profiles"),
@@ -16,6 +17,7 @@ const api = {
   getTaskStatus: (taskId: string) => ipcRenderer.invoke("get-task-status", taskId),
   getTaskList: () => ipcRenderer.invoke("get-task-list"),
   getTaskLogs: (taskId: string, limit = 100) => ipcRenderer.invoke("get-task-logs", taskId, limit),
+  getProductMonitorEvents: (taskId: string, limit = 100) => ipcRenderer.invoke("get-product-monitor-events", taskId, limit),
   getSystemStatus: () => ipcRenderer.invoke("get-system-status"),
   onTaskStatusUpdate: (callback: (task: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
@@ -26,6 +28,15 @@ const api = {
       taskStatusListeners.delete(callback);
     };
   },
+  onProductMonitorUpdate: (callback: (payload: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+    monitorListeners.set(callback, listener);
+    ipcRenderer.on("product-monitor-update", listener);
+    return () => {
+      ipcRenderer.removeListener("product-monitor-update", listener);
+      monitorListeners.delete(callback);
+    };
+  },
   removeTaskStatusListener: (callback?: (task: unknown) => void) => {
     if (callback && taskStatusListeners.has(callback)) {
       const listener = taskStatusListeners.get(callback)!;
@@ -34,6 +45,16 @@ const api = {
     } else {
       ipcRenderer.removeAllListeners("task-status-update");
       taskStatusListeners.clear();
+    }
+  },
+  removeProductMonitorListener: (callback?: (payload: unknown) => void) => {
+    if (callback && monitorListeners.has(callback)) {
+      const listener = monitorListeners.get(callback)!;
+      ipcRenderer.removeListener("product-monitor-update", listener);
+      monitorListeners.delete(callback);
+    } else {
+      ipcRenderer.removeAllListeners("product-monitor-update");
+      monitorListeners.clear();
     }
   }
 };
