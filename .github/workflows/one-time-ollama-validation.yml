@@ -28,8 +28,13 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Install Patchright Chrome
-        run: npm run browser:install
+      # chromium.launch() without an explicit channel expects Patchright's
+      # managed Chromium/headless-shell. The normal project browser:install
+      # script installs system Chrome instead, which caused the previous run
+      # to fail before Ollama was exercised.
+      - name: Install Patchright managed Chromium
+        timeout-minutes: 5
+        run: npx patchright install chromium
 
       - name: Setup Ollama
         uses: ai-action/setup-ollama@v2
@@ -41,8 +46,11 @@ jobs:
         shell: bash
         run: |
           nohup ollama serve > ollama.log 2>&1 &
-          for i in {1..30}; do
-            if curl -fsS http://127.0.0.1:11434/api/version >/dev/null; then exit 0; fi
+          for i in {1..45}; do
+            if curl -fsS http://127.0.0.1:11434/api/version >/dev/null; then
+              ollama --version
+              exit 0
+            fi
             sleep 1
           done
           cat ollama.log || true
@@ -52,23 +60,39 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Start-Process -FilePath ollama -ArgumentList 'serve' -WindowStyle Hidden
+          $process = Start-Process -FilePath 'ollama' -ArgumentList 'serve' -WindowStyle Hidden -PassThru
           $ready = $false
-          for ($i = 0; $i -lt 30; $i++) {
+          for ($i = 0; $i -lt 45; $i++) {
+            if ($process.HasExited) {
+              throw "Ollama server exited early with code $($process.ExitCode)"
+            }
             try {
-              Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/version' | Out-Null
+              Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/version' -TimeoutSec 2 | Out-Null
               $ready = $true
               break
             } catch {
               Start-Sleep -Seconds 1
             }
           }
-          if (-not $ready) { throw 'Ollama server did not become ready' }
+          if (-not $ready) { throw 'Ollama server did not become ready within 45 seconds' }
+          ollama --version
 
       - name: Pull embedding model
+        timeout-minutes: 5
         run: ollama pull embeddinggemma:300m-qat-q4_0
 
+      - name: Verify Ollama embedding endpoint
+        shell: pwsh
+        run: |
+          $payload = @{ model = 'embeddinggemma:300m-qat-q4_0'; input = @('semantic validation warmup') } | ConvertTo-Json -Compress
+          $response = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/embed' -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 30
+          if (-not $response.embeddings -or $response.embeddings.Count -ne 1) {
+            throw 'Ollama embedding warmup did not return exactly one embedding'
+          }
+          Write-Host "Ollama warmup OK; embedding dimensions: $($response.embeddings[0].Count)"
+
       - name: Run only the isolated real-Ollama test
+        timeout-minutes: 5
         env:
           ARES_FIELD_EMBED_MODEL: embeddinggemma:300m-qat-q4_0
           ARES_FIELD_EMBED_ENDPOINT: http://127.0.0.1:11434/api/embed
