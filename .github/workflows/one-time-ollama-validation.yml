@@ -1,11 +1,7 @@
 name: One-time Ollama semantic validation
 
 on:
-  push:
-    branches:
-      - one-time-ollama-validation
-    paths:
-      - .github/workflows/one-time-ollama-validation.yml
+  workflow_dispatch:
 
 jobs:
   validate:
@@ -32,8 +28,6 @@ jobs:
         timeout-minutes: 5
         run: npx patchright install chromium
 
-      # setup-ollama v2 installs Ollama and starts `ollama serve` itself.
-      # Starting a second server races the existing process/port on Windows.
       - name: Setup Ollama
         uses: ai-action/setup-ollama@v2
         with:
