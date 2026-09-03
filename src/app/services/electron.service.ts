@@ -142,6 +142,13 @@ export class ElectronService {
       captchaProvider: "CapMonster",
       captchaApiKeyConfigured: false,
       liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],
+      electronNodeVersion: undefined,
+      systemNodeRequirement: ">=20",
+      systemNode: {
+        executable: "browser-preview",
+        version: "n/a",
+        ok: true
+      },
       browserPreview: true
     });
   }
