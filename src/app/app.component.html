@@ -304,6 +304,23 @@
               <small *ngIf="getTaskChallengeType(task)">Typ: {{ getTaskChallengeType(task) }}</small>
             </div>
           </div>
+          <div class="captcha-debug waiting-room-debug" *ngIf="$any(task.config.data)?.waitingRoom as waitingRoom">
+            <span
+              class="captcha-dot"
+              [class.ready]="waitingRoom.state === 'waiting' || waitingRoom.state === 'released'"
+              [class.missing]="waitingRoom.state === 'timed-out'">
+            </span>
+            <div>
+              <strong>Waiting Room</strong>
+              <small>{{ (waitingRoom.provider || 'generic') | uppercase }} · {{ waitingRoom.state }}</small>
+              <small *ngIf="waitingRoom.state === 'waiting' && waitingRoom.estimatedWaitSeconds !== undefined">
+                Restzeit: {{ waitingRoom.estimatedWaitSeconds * 1000 | date:'HH:mm:ss':'UTC' }}
+              </small>
+              <small *ngIf="waitingRoom.state === 'waiting'">
+                Maximal {{ waitingRoom.maxWaitMs / 60000 | number:'1.0-0' }} Minuten
+              </small>
+            </div>
+          </div>
         </div>
 
         <div class="retry-info">
