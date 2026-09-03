@@ -80,6 +80,11 @@ function extractQueuePayload(value: unknown): { position?: number; timeToWaitSec
   return { position, timeToWaitSeconds, statusText };
 }
 
+type PageResponseEvents = {
+  on?: (event: "response", listener: (response: Response) => void) => unknown;
+  off?: (event: "response", listener: (response: Response) => void) => unknown;
+};
+
 export class ShopifyQueueWaiter {
   private networkSignal?: NetworkQueueSignal;
   private responseListener?: (response: Response) => void;
@@ -93,14 +98,20 @@ export class ShopifyQueueWaiter {
 
   start(): void {
     if (this.responseListener) return;
+    const events = this.page as unknown as PageResponseEvents;
+    if (typeof events.on !== "function") return;
+
     this.responseListener = response => void this.captureResponse(response);
-    this.page.on("response", this.responseListener);
+    events.on("response", this.responseListener);
   }
 
   stop(): void {
     if (!this.responseListener) return;
-    this.page.off("response", this.responseListener);
+    const listener = this.responseListener;
     this.responseListener = undefined;
+
+    const events = this.page as unknown as PageResponseEvents;
+    if (typeof events.off === "function") events.off("response", listener);
   }
 
   async waitIfQueued(): Promise<QueueWaitResult> {
