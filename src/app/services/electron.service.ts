@@ -107,6 +107,36 @@ export class ElectronService {
     return Promise.resolve({ success: true, task });
   }
 
+  pauseTask(taskId: string): Promise<any> {
+    if (this.api) return this.api.pauseTask(taskId);
+
+    const task = this.previewTasks.find(item => item.id === taskId);
+    if (task) {
+      task.state = "PAUSED";
+      task.config.data = {
+        ...(task.config.data ?? {}),
+        liveChallengeStatus: "Browser-Vorschau pausiert. Fortsetzen setzt den Task zurück in die Queue.",
+        liveChallengeType: "preview"
+      };
+    }
+    return Promise.resolve({ success: true, task });
+  }
+
+  resumeTask(taskId: string): Promise<any> {
+    if (this.api) return this.api.resumeTask(taskId);
+
+    const task = this.previewTasks.find(item => item.id === taskId);
+    if (task) {
+      task.state = "QUEUED";
+      task.config.data = {
+        ...(task.config.data ?? {}),
+        liveChallengeStatus: "Browser-Vorschau fortgesetzt. Echter Task-Resume läuft nur in Electron.",
+        liveChallengeType: "preview"
+      };
+    }
+    return Promise.resolve({ success: true, task });
+  }
+
   stopTask(taskId: string): Promise<any> {
     if (this.api) return this.api.stopTask(taskId);
 
