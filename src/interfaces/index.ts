@@ -1,4 +1,4 @@
-import { Task, TaskConfig } from "../models";
+import { Task, TaskConfig, TaskLogEntry, TaskState } from "../models";
 
 export interface ITaskExecutor {
   execute(task: Task): Promise<boolean>;
@@ -32,6 +32,12 @@ export interface ITaskRepository {
   delete(id: string): Promise<void>;
 }
 
+export interface ITaskLogRepository {
+  appendLog(entry: TaskLogEntry): Promise<void>;
+  findLogsByTaskId(taskId: string, limit?: number): Promise<TaskLogEntry[]>;
+  deleteLogsByTaskId(taskId: string): Promise<void>;
+}
+
 export interface IWorker {
   id: string;
   status: "idle" | "busy";
@@ -52,6 +58,11 @@ export interface TaskEvents {
   taskCompleted: Task;
   taskFailed: Task;
   taskRetrying: Task;
+  taskStateChanged: {
+    task: Task;
+    previousState: TaskState;
+    newState: TaskState;
+  };
   workerAssigned: { taskId: string; workerId: string };
   workerReleased: { taskId: string; workerId: string };
   workerAdded: IWorker;
