@@ -45,7 +45,7 @@ export class SemanticFieldAutofill {
       if (item.target.intent === "unknown") continue;
 
       const locator = fieldLocator(this.page, item.descriptor.index);
-      if (!await locator.isVisible({ timeout: 120 }).catch(() => false)) continue;
+      if (!await this.isInteractive(locator)) continue;
 
       this.rememberTarget(item.target);
       const value = values.valueFor(item.target);
@@ -63,9 +63,9 @@ export class SemanticFieldAutofill {
   async fillLocator(target: SemanticTarget, locator: Locator, value: string): Promise<boolean> {
     const desired = normalizeValue(value);
     if (!desired || target.intent === "unknown") return false;
+    if (!await this.isInteractive(locator)) return false;
     const key = this.rememberTarget(target);
     if (await this.isCompleted(target, desired)) return true;
-    if (!await locator.isVisible({ timeout: 150 }).catch(() => false)) return false;
 
     const current = await this.readValue(locator);
     if (normalizeValue(current) === desired) {
@@ -88,9 +88,9 @@ export class SemanticFieldAutofill {
   async selectLocator(target: SemanticTarget, locator: Locator, value: string): Promise<boolean> {
     const desired = normalizeValue(value);
     if (!desired || target.intent === "unknown") return false;
+    if (!await this.isInteractive(locator)) return false;
     const key = this.rememberTarget(target);
     if (await this.isCompleted(target, desired)) return true;
-    if (!await locator.isVisible({ timeout: 150 }).catch(() => false)) return false;
 
     const current = await this.readValue(locator);
     if (normalizeValue(current).toUpperCase() === desired.toUpperCase()) {
@@ -162,6 +162,11 @@ export class SemanticFieldAutofill {
     const key = targetKey(target);
     this.seenTargets.set(key, { ...target });
     return key;
+  }
+
+  private async isInteractive(locator: Locator): Promise<boolean> {
+    if (!await locator.isVisible({ timeout: 150 }).catch(() => false)) return false;
+    return locator.isEnabled({ timeout: 150 }).catch(() => false);
   }
 
   private async readValue(locator: Locator): Promise<string> {
