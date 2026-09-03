@@ -9,6 +9,8 @@ declare global {
       getShops(): Promise<any>;
       registerShop(config: unknown): Promise<any>;
       createTask(config: unknown): Promise<any>;
+      setPaymentSession(taskId: string, payment: unknown): Promise<any>;
+      clearPaymentSession(taskId: string): Promise<any>;
       startTask(taskId: string): Promise<any>;
       pauseTask(taskId: string): Promise<any>;
       resumeTask(taskId: string): Promise<any>;

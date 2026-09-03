@@ -1,3 +1,5 @@
+import type { StoredPaymentPreference } from "../payments/models";
+
 export interface ProxyConfig {
   protocol?: "http" | "https" | "socks5";
   host?: string;
@@ -33,4 +35,6 @@ export interface AresProfile {
   address: AddressProfile;
   proxy?: ProxyConfig;
   browser?: BrowserProfileConfig;
+  /** Non-sensitive preference only. Card number/CVV are session-only and never stored here. */
+  paymentPreference?: StoredPaymentPreference;
 }

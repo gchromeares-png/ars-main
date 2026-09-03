@@ -2,6 +2,10 @@ import { Component, OnDestroy, OnInit } from "@angular/core";
 import { ElectronService } from "./services/electron.service";
 import { TaskState } from "../models";
 import { COMMERCE_PLATFORMS, CommercePlatform } from "../commerce/platforms";
+import type { CheckoutPaymentSession, PaymentMethod } from "../payments/models";
+
+type AppTab = "dashboard" | "monitor" | "tasks" | "profiles" | "shops";
+type ProfileTab = "identity" | "address" | "browser" | "payment";
 
 interface ProfileView {
   id: string;
@@ -29,6 +33,10 @@ interface ProfileView {
   browser?: {
     headless?: boolean;
     userAgent?: string;
+  };
+  paymentPreference?: {
+    method?: PaymentMethod;
+    label?: string;
   };
 }
 
@@ -82,6 +90,7 @@ interface SystemStatus {
   taskCount: number;
   commercePlatforms?: CommercePlatform[];
   commerceExecutorPlatforms?: CommercePlatform[];
+  commerceMonitorReady?: boolean;
   captchaProvider?: string;
   captchaApiKeyConfigured?: boolean;
   liveChallengeSupport?: string[];
@@ -90,6 +99,7 @@ interface SystemStatus {
   systemNode?: SystemNodeStatus;
   persistence?: PersistenceStatus;
   browserPreview?: boolean;
+  browserWorkerPool?: unknown;
 }
 
 @Component({
@@ -98,9 +108,14 @@ interface SystemStatus {
   styleUrls: ["./app.component.scss"]
 })
 export class AppComponent implements OnInit, OnDestroy {
+  activeTab: AppTab = "dashboard";
+  profileTab: ProfileTab = "identity";
+
   shops: ShopView[] = [];
   profiles: ProfileView[] = [];
   selectedProfileId = "";
+  selectedShopId = "";
+  selectedMonitorShopId = "";
   commercePlatforms: CommercePlatform[] = [...COMMERCE_PLATFORMS];
   executorPlatforms: CommercePlatform[] = ["shopify"];
 
@@ -130,23 +145,10 @@ export class AppComponent implements OnInit, OnDestroy {
     browser: {
       headless: false,
       userAgent: ""
-    }
-  };
-  tasks: TaskView[] = [];
-  taskLogs: Record<string, TaskLogView[]> = {};
-  expandedTaskLogId = "";
-  system: SystemStatus = {
-    availableWorkers: 0,
-    shopCount: 0,
-    taskCount: 0,
-    commercePlatforms: [...COMMERCE_PLATFORMS],
-    commerceExecutorPlatforms: ["shopify"],
-    captchaProvider: "CapMonster",
-    captchaApiKeyConfigured: false,
-    liveChallengeSupport: [],
-    systemNode: {
-      executable: "node",
-      ok: false
+    },
+    paymentPreference: {
+      method: "card",
+      label: ""
     }
   };
 
@@ -157,10 +159,41 @@ export class AppComponent implements OnInit, OnDestroy {
     platform: "shopify"
   };
 
+  tasks: TaskView[] = [];
+  taskLogs: Record<string, TaskLogView[]> = {};
+  expandedTaskLogId = "";
+  system: SystemStatus = {
+    availableWorkers: 0,
+    shopCount: 0,
+    taskCount: 0,
+    commercePlatforms: [...COMMERCE_PLATFORMS],
+    commerceExecutorPlatforms: ["shopify"],
+    commerceMonitorReady: true,
+    captchaProvider: "CapMonster",
+    captchaApiKeyConfigured: false,
+    liveChallengeSupport: [],
+    systemNode: {
+      executable: "node",
+      ok: false
+    }
+  };
+
   taskName = "";
-  selectedShopId = "";
   searchTerm = "";
   headless = false;
+
+  monitorName = "";
+  monitorSearchTerm = "";
+  monitorIntervalSeconds = 30;
+
+  taskPaymentEnabled = false;
+  taskPaymentMethod: PaymentMethod = "card";
+  taskPaymentLabel = "";
+  sessionCardHolderName = "";
+  sessionCardNumber = "";
+  sessionCardExpiry = "";
+  sessionCardSecurityCode = "";
+
   error = "";
   info = "";
 
@@ -176,6 +209,7 @@ export class AppComponent implements OnInit, OnDestroy {
       this.loadSystemStatus()
     ]);
 
+    this.syncPaymentPreference();
     this.unsubscribeStatus = this.electron.onTaskStatusUpdate(() => {
       const expandedTaskLogId = this.expandedTaskLogId;
       void Promise.all([
@@ -190,11 +224,20 @@ export class AppComponent implements OnInit, OnDestroy {
     this.unsubscribeStatus?.();
   }
 
+  setTab(tab: AppTab): void {
+    this.activeTab = tab;
+    this.error = "";
+    this.info = "";
+  }
+
+  setProfileTab(tab: ProfileTab): void {
+    this.profileTab = tab;
+  }
+
   async loadProfiles(): Promise<void> {
     const result = await this.electron.getProfiles();
     if (result.success) {
       this.profiles = result.profiles;
-
       if (!this.selectedProfileId && this.profiles.length > 0) {
         this.selectedProfileId = this.profiles[0].id;
       }
@@ -206,7 +249,6 @@ export class AppComponent implements OnInit, OnDestroy {
     this.info = "";
 
     const profile = this.newProfile;
-
     if (
       !profile.id.trim() ||
       !profile.name.trim() ||
@@ -247,7 +289,11 @@ export class AppComponent implements OnInit, OnDestroy {
             username: profile.proxy.username?.trim() || "",
             password: profile.proxy.password || ""
           }
-        : undefined
+        : undefined,
+      paymentPreference: {
+        method: profile.paymentPreference?.method || "card",
+        label: profile.paymentPreference?.label?.trim() || undefined
+      }
     });
 
     if (!result.success) {
@@ -255,7 +301,7 @@ export class AppComponent implements OnInit, OnDestroy {
       return;
     }
 
-    this.info = "Profil gespeichert.";
+    this.info = "Profil gespeichert. Zahlungspräferenz gespeichert; Kartendaten werden niemals im Profil gespeichert.";
     await this.loadProfiles();
   }
 
@@ -269,17 +315,14 @@ export class AppComponent implements OnInit, OnDestroy {
       if (Array.isArray(result.executorPlatforms)) {
         this.executorPlatforms = result.executorPlatforms;
       }
-      if (!this.selectedShopId && this.shops.length > 0) {
-        this.selectedShopId = this.shops[0].id;
-      }
+      if (!this.selectedShopId && this.shops.length > 0) this.selectedShopId = this.shops[0].id;
+      if (!this.selectedMonitorShopId && this.shops.length > 0) this.selectedMonitorShopId = this.shops[0].id;
     }
   }
 
   async loadTasks(): Promise<void> {
     const result = await this.electron.getTaskList();
-    if (result.success) {
-      this.tasks = result.tasks;
-    }
+    if (result.success) this.tasks = result.tasks;
   }
 
   async loadTaskLogs(taskId: string): Promise<void> {
@@ -296,7 +339,6 @@ export class AppComponent implements OnInit, OnDestroy {
       this.expandedTaskLogId = "";
       return;
     }
-
     this.expandedTaskLogId = taskId;
     await this.loadTaskLogs(taskId);
   }
@@ -321,7 +363,6 @@ export class AppComponent implements OnInit, OnDestroy {
     const id = this.newShop.id.trim();
     const baseUrl = this.newShop.baseUrl.trim();
     const platform = this.newShop.platform;
-
     if (!id || !baseUrl) {
       this.error = "Shop-ID und Shop-URL sind erforderlich.";
       return;
@@ -341,14 +382,43 @@ export class AppComponent implements OnInit, OnDestroy {
     }
 
     this.info = result.executorReady
-      ? `${this.getPlatformLabel(platform)} Shop registriert · Task-Executor bereit.`
-      : `${this.getPlatformLabel(platform)} Shop registriert · Registry/Monitor vorbereitet, eigener Task-Executor folgt.`;
+      ? `${this.getPlatformLabel(platform)} Shop registriert · Browser-Executor bereit.`
+      : `${this.getPlatformLabel(platform)} Shop registriert · Monitor-Adapter kann unabhängig verfügbar sein.`;
     this.newShop = { id: "", name: "", baseUrl: "", platform };
+    await Promise.all([this.loadShops(), this.loadSystemStatus()]);
+  }
 
-    await Promise.all([
-      this.loadShops(),
-      this.loadSystemStatus()
-    ]);
+  async createMonitorTask(): Promise<void> {
+    this.error = "";
+    this.info = "";
+
+    if (!this.monitorName.trim() || !this.selectedMonitorShopId || !this.monitorSearchTerm.trim()) {
+      this.error = "Monitor-Name, Shop und Produkt/Keyword sind erforderlich.";
+      return;
+    }
+
+    const intervalSeconds = Math.max(1, Math.floor(Number(this.monitorIntervalSeconds) || 30));
+    const result = await this.electron.createTask({
+      id: `monitor_${Date.now()}`,
+      name: this.monitorName.trim(),
+      shopId: this.selectedMonitorShopId,
+      data: {
+        productCriteria: {
+          searchTerm: this.monitorSearchTerm.trim()
+        },
+        monitorIntervalMs: intervalSeconds * 1_000
+      }
+    });
+
+    if (!result.success) {
+      this.error = result.error;
+      return;
+    }
+
+    this.info = `Monitor ${result.taskId} erstellt. Unter Tasks auf Start klicken.`;
+    this.monitorName = "";
+    this.monitorSearchTerm = "";
+    await Promise.all([this.loadTasks(), this.loadSystemStatus()]);
   }
 
   async createTask(): Promise<void> {
@@ -360,14 +430,13 @@ export class AppComponent implements OnInit, OnDestroy {
       return;
     }
 
+    const taskId = `task_${Date.now()}`;
     const result = await this.electron.createTask({
-      id: `task_${Date.now()}`,
+      id: taskId,
       name: this.taskName.trim(),
       shopId: this.selectedShopId,
       data: {
-        productCriteria: {
-          searchTerm: this.searchTerm.trim()
-        },
+        searchTerm: this.searchTerm.trim(),
         browserConfig: {
           headless: this.headless
         },
@@ -380,22 +449,55 @@ export class AppComponent implements OnInit, OnDestroy {
       return;
     }
 
-    this.info = `Task ${result.taskId} erstellt.`;
+    if (this.taskPaymentEnabled) {
+      const paymentResult = await this.electron.setPaymentSession(taskId, this.buildPaymentSession());
+      if (!paymentResult.success) {
+        this.error = `Task erstellt, aber Zahlungs-Session konnte nicht gesetzt werden: ${paymentResult.error}`;
+      }
+    }
+
+    this.info = this.taskPaymentEnabled
+      ? `Browser-Task ${result.taskId} erstellt · Zahlungsdaten liegen nur im RAM bis Task-Ende.`
+      : `Browser-Task ${result.taskId} erstellt.`;
     this.taskName = "";
     this.searchTerm = "";
+    this.clearSensitivePaymentInputs();
+    await Promise.all([this.loadTasks(), this.loadSystemStatus()]);
+  }
 
-    await Promise.all([
-      this.loadTasks(),
-      this.loadSystemStatus()
-    ]);
+  syncPaymentPreference(): void {
+    const profile = this.profiles.find(item => item.id === this.selectedProfileId);
+    if (!profile?.paymentPreference?.method) return;
+    this.taskPaymentMethod = profile.paymentPreference.method;
+    this.taskPaymentLabel = profile.paymentPreference.label || "";
+  }
+
+  private buildPaymentSession(): CheckoutPaymentSession {
+    const session: CheckoutPaymentSession = {
+      method: this.taskPaymentMethod,
+      label: this.taskPaymentLabel.trim() || undefined
+    };
+    if (this.taskPaymentMethod === "card") {
+      session.card = {
+        holderName: this.sessionCardHolderName.trim() || undefined,
+        cardNumber: this.sessionCardNumber.trim() || undefined,
+        expiry: this.sessionCardExpiry.trim() || undefined,
+        securityCode: this.sessionCardSecurityCode.trim() || undefined
+      };
+    }
+    return session;
+  }
+
+  private clearSensitivePaymentInputs(): void {
+    this.sessionCardNumber = "";
+    this.sessionCardExpiry = "";
+    this.sessionCardSecurityCode = "";
   }
 
   async startTask(taskId: string): Promise<void> {
     this.error = "";
     const result = await this.electron.startTask(taskId);
-    if (!result.success) {
-      this.error = result.error;
-    }
+    if (!result.success) this.error = result.error;
     await Promise.all([
       this.loadTasks(),
       this.loadSystemStatus(),
@@ -406,9 +508,7 @@ export class AppComponent implements OnInit, OnDestroy {
   async pauseTask(taskId: string): Promise<void> {
     this.error = "";
     const result = await this.electron.pauseTask(taskId);
-    if (!result.success) {
-      this.error = result.error;
-    }
+    if (!result.success) this.error = result.error;
     await Promise.all([
       this.loadTasks(),
       this.loadSystemStatus(),
@@ -419,9 +519,7 @@ export class AppComponent implements OnInit, OnDestroy {
   async resumeTask(taskId: string): Promise<void> {
     this.error = "";
     const result = await this.electron.resumeTask(taskId);
-    if (!result.success) {
-      this.error = result.error;
-    }
+    if (!result.success) this.error = result.error;
     await Promise.all([
       this.loadTasks(),
       this.loadSystemStatus(),
@@ -431,10 +529,9 @@ export class AppComponent implements OnInit, OnDestroy {
 
   async stopTask(taskId: string): Promise<void> {
     this.error = "";
+    await this.electron.clearPaymentSession(taskId);
     const result = await this.electron.stopTask(taskId);
-    if (!result.success) {
-      this.error = result.error;
-    }
+    if (!result.success) this.error = result.error;
     await Promise.all([
       this.loadTasks(),
       this.loadSystemStatus(),
@@ -442,13 +539,24 @@ export class AppComponent implements OnInit, OnDestroy {
     ]);
   }
 
+  isMonitorTask(task: TaskView): boolean {
+    const criteria = task.config.data?.["productCriteria"];
+    return Boolean(criteria && typeof criteria === "object");
+  }
+
+  getTaskKind(task: TaskView): string {
+    return this.isMonitorTask(task) ? "MONITOR" : "BROWSER";
+  }
+
   getTaskProfileName(task: TaskView): string {
+    if (this.isMonitorTask(task)) return "nicht benötigt";
     const profileId = String(task.config.data?.["profileId"] ?? "");
     if (!profileId) return "kein Profil";
     return this.profiles.find(profile => profile.id === profileId)?.name ?? profileId;
   }
 
   getTaskCaptchaStatus(task: TaskView): string {
+    if (this.isMonitorTask(task)) return "Monitor nutzt keinen Browser-Challenge-Flow";
     const data = task.config.data ?? {};
     const value = data["liveChallengeStatus"] ?? data["captchaStatus"] ?? data["challengeStatus"];
     return value ? String(value) : "Kein aktueller Captcha-Status";
@@ -458,6 +566,19 @@ export class AppComponent implements OnInit, OnDestroy {
     const data = task.config.data ?? {};
     const value = data["liveChallengeType"] ?? data["captchaType"] ?? data["challengeType"];
     return value ? String(value) : "";
+  }
+
+  getTaskPaymentStatus(task: TaskView): string {
+    if (this.isMonitorTask(task)) return "";
+    const preparation = task.config.data?.["paymentPreparation"] as Record<string, unknown> | undefined;
+    if (!preparation) return "Zahlungsart wird im Checkout erkannt, sobald sie sichtbar ist.";
+    return String(preparation["note"] ?? "Zahlungsstatus aktualisiert.");
+  }
+
+  getTaskDetectedPaymentMethods(task: TaskView): string {
+    const preparation = task.config.data?.["paymentPreparation"] as Record<string, unknown> | undefined;
+    const methods = preparation?.["detectedMethods"];
+    return Array.isArray(methods) && methods.length ? methods.join(", ") : "";
   }
 
   getCaptchaKeyStatusLabel(): string {
@@ -490,6 +611,17 @@ export class AppComponent implements OnInit, OnDestroy {
     return labels[platform] || platform;
   }
 
+  getPaymentMethodLabel(method?: PaymentMethod): string {
+    const labels: Record<PaymentMethod, string> = {
+      card: "Karte",
+      paypal: "PayPal",
+      "shop-pay": "Shop Pay",
+      klarna: "Klarna",
+      other: "Andere"
+    };
+    return method ? labels[method] : "Nicht gesetzt";
+  }
+
   hasExecutorForShop(shop: ShopView): boolean {
     return this.executorPlatforms.includes(shop.platform);
   }
@@ -501,13 +633,9 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   getSystemNodeDetails(): string {
-    if (this.system.browserPreview) {
-      return "Echter Worker-Check läuft nur in Electron.";
-    }
-
+    if (this.system.browserPreview) return "Echter Worker-Check läuft nur in Electron.";
     const node = this.system.systemNode;
     if (!node) return "System Node konnte nicht geprüft werden.";
-
     const version = node.version || "unbekannt";
     const requirement = this.system.systemNodeRequirement || ">=20";
     const base = `${node.executable} ${version} · benötigt ${requirement}`;
@@ -543,6 +671,7 @@ export class AppComponent implements OnInit, OnDestroy {
       TaskState.QUEUED,
       TaskState.STARTING,
       TaskState.RUNNING,
+      TaskState.WAITING_QUEUE,
       TaskState.PRODUCT_FOUND,
       TaskState.CART,
       TaskState.CHECKOUT,
@@ -558,6 +687,7 @@ export class AppComponent implements OnInit, OnDestroy {
     return [
       TaskState.STARTING,
       TaskState.RUNNING,
+      TaskState.WAITING_QUEUE,
       TaskState.PRODUCT_FOUND,
       TaskState.CART,
       TaskState.CHECKOUT,
