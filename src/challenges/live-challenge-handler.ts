@@ -41,7 +41,7 @@ export class LiveChallengeHandler {
     // =========================================================================
     // 🚀 CAPMONSTER AUTO-SOLVE WEICHE
     // =========================================================================
-    const capmonsterKey = process.env.CAPMONSTER_API_KEY;
+    const capmonsterKey = process.env['CAPMONSTER_API_KEY'];
 
     if (capmonsterKey && (detection.type === 'turnstile' || detection.type === 'recaptcha' || detection.type === 'shopify-checkpoint')) {
       try {
