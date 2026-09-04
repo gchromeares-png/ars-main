@@ -4,27 +4,14 @@ import initSqlJs, { Database } from "sql.js";
 import { ITaskPersistenceRepository, StoredProductMonitorEvent } from "../interfaces";
 import { Task, TaskConfig, TaskLogEntry, TaskLogLevel, TaskState } from "../models";
 import type { ProductMonitorEvent, ProductObservation } from "../monitor/models";
-
-const SENSITIVE_KEY = /(api[-_]?key|authorization|cookie|password|secret|token)/i;
-const SENSITIVE_VALUE = /\b(api[-_]?key|authorization|cookie|password|secret|token)\s*[:=]\s*([^\s,;]+)/gi;
-
-function sanitizeValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(item => sanitizeValue(item));
-  if (!value || typeof value !== "object") return value;
-
-  const result: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-    result[key] = SENSITIVE_KEY.test(key) ? "[REDACTED]" : sanitizeValue(nested);
-  }
-  return result;
-}
-
-function sanitizeMessage(message: string): string {
-  return message.replace(SENSITIVE_VALUE, (_match, label: string) => `${label}=[REDACTED]`);
-}
+import {
+  sanitizePersistedMessage,
+  sanitizePersistedValue,
+  scrubLegacySensitiveData
+} from "./sensitive-data-scrubber";
 
 function serializeConfig(config: TaskConfig): string {
-  return JSON.stringify(sanitizeValue(config));
+  return JSON.stringify(sanitizePersistedValue(config));
 }
 
 function parseConfig(value: unknown): TaskConfig {
@@ -66,7 +53,7 @@ function rowToLog(row: Record<string, unknown>): TaskLogEntry {
 }
 
 function serializeMonitorEvent(event: ProductMonitorEvent): string {
-  return JSON.stringify(sanitizeValue({
+  return JSON.stringify(sanitizePersistedValue({
     ...event,
     observedAt: event.observedAt.toISOString(),
     current: {
@@ -299,6 +286,8 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
       CREATE INDEX IF NOT EXISTS idx_product_monitor_events_task_id_id
         ON product_monitor_events(task_id, id);
     `);
+
+    scrubLegacySensitiveData(this.db);
   }
 
   private upsertTask(task: Task): void {
@@ -319,7 +308,7 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
       task.state,
       task.createdAt.toISOString(),
       task.updatedAt.toISOString(),
-      task.lastError ? sanitizeMessage(task.lastError) : null,
+      task.lastError ? sanitizePersistedMessage(task.lastError) : null,
       task.retries,
       task.maxRetries
     ]);
@@ -334,7 +323,7 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
       entry.event,
       entry.state ?? null,
       entry.level,
-      sanitizeMessage(entry.message),
+      sanitizePersistedMessage(entry.message),
       entry.createdAt.toISOString()
     ]);
   }
