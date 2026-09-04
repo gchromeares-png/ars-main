@@ -20,6 +20,9 @@ declare global {
       pauseTask(taskId: string): Promise<any>;
       resumeTask(taskId: string): Promise<any>;
       stopTask(taskId: string): Promise<any>;
+      updateDiscoveryKeywords(taskId: string, keywords: string[]): Promise<any>;
+      getFinalPurchaseSetting(): Promise<any>;
+      setFinalPurchaseAllowed(allowed: boolean): Promise<any>;
       getTaskStatus(taskId: string): Promise<any>;
       getTaskList(): Promise<any>;
       getTaskLogs(taskId: string, limit?: number): Promise<any>;
