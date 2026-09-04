@@ -14,6 +14,7 @@ import {
 import { resolveProfileUserDataDir } from "../browser-worker/profile-session-manager";
 
 const WIRE_PREFIX = "ARES_SB_MANUAL\t";
+const SELENIUMBASE_PROFILE_DIR = ".ares-seleniumbase-cdp";
 
 interface SeleniumBaseManualSession {
   profileId: string;
@@ -65,7 +66,7 @@ export class SeleniumBaseProfileBrowserController {
     const existing = this.sessions.get(profileId);
     if (existing && existing.child.exitCode == null) return this.status(profileId);
 
-    const userDataDir = resolveProfileUserDataDir(profileId, this.profileRoot);
+    const userDataDir = this.resolveUserDataDir(profileId);
     const workerScript = this.resolveWorkerScript();
     const pythonExecutable = process.env["ARES_PYTHON_EXECUTABLE"]?.trim() || "python";
     const child = spawn(pythonExecutable, [workerScript], {
@@ -189,7 +190,7 @@ export class SeleniumBaseProfileBrowserController {
       profileId: id,
       open,
       pid: open ? session?.child.pid : undefined,
-      userDataDir: resolveProfileUserDataDir(id, this.profileRoot),
+      userDataDir: this.resolveUserDataDir(id),
       startedAt: open ? session?.startedAt : undefined,
       appliedSnapshotId: open ? session?.appliedSnapshotId : undefined
     };
@@ -211,13 +212,18 @@ export class SeleniumBaseProfileBrowserController {
     return session;
   }
 
+  private resolveUserDataDir(profileId: string): string {
+    return path.join(resolveProfileUserDataDir(profileId, this.profileRoot), SELENIUMBASE_PROFILE_DIR);
+  }
+
   private resolveWorkerScript(): string {
     const configured = process.env["ARES_SELENIUMBASE_MANUAL_WORKER"]?.trim();
+    const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath || "";
     const candidates = [
       configured,
       path.join(process.cwd(), "python", "seleniumbase_cdp", "manual_profile_browser.py"),
       path.join(__dirname, "../../python/seleniumbase_cdp/manual_profile_browser.py"),
-      path.join(process.resourcesPath || "", "python", "seleniumbase_cdp", "manual_profile_browser.py")
+      resourcesPath ? path.join(resourcesPath, "python", "seleniumbase_cdp", "manual_profile_browser.py") : undefined
     ].filter((value): value is string => Boolean(value));
 
     const worker = candidates.find(candidate => fs.existsSync(candidate));
