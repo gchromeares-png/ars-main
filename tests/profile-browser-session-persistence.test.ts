@@ -27,8 +27,10 @@ describe("profile-owned browser session persistence", () => {
     expect(electronMain).toContain("profileRoot: browserProfileRoot");
   });
 
-  it("restores the last manual Chrome session instead of intentionally starting blank", () => {
+  it("restores the last Chrome session for both manual and monitor-owned profile contexts", () => {
     expect(manualBrowser).toContain('args: ["--restore-last-session"]');
+    expect(browserWorker).toContain('const RESTORE_LAST_SESSION_ARG = "--restore-last-session"');
+    expect(browserWorker).toContain("if (profileId && !args.includes(RESTORE_LAST_SESSION_ARG)) args.push(RESTORE_LAST_SESSION_ARG)");
   });
 
   it("lets Chromium flush the persistent profile without closing all pages first", () => {
