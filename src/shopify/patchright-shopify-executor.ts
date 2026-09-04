@@ -9,6 +9,7 @@ import { Task } from "../models";
 import { AresProfile } from "../profiles/models";
 import { FieldSemanticResolver, OllamaEmbeddingProvider } from "../browser-worker/field-semantic-resolver";
 import { SemanticFieldAutofill } from "../browser-worker/semantic-field-autofill";
+import { evaluateSemanticCheckoutCompletion } from "../browser-worker/semantic-checkout-completion";
 import { SemanticCheckoutProfilePlanner } from "../browser-worker/semantic-checkout-profile-planner";
 import { semanticTarget, type FieldIntent, type SemanticTarget } from "../browser-worker/semantic-target";
 import { GhostCursorUiInteractionHelper } from "../browser-worker/ui-interaction-helper";
@@ -194,8 +195,15 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
           challenge: challengeResult
         }
       };
-      this.emitTaskUpdate(task);
 
+      if (!checkoutProfile.requiredTargetsSatisfied) {
+        task.lastError = "Checkout-Profil konnte kein vollständiges erforderliches SemanticTarget-Ergebnis herstellen.";
+        this.emitTaskUpdate(task);
+        await this.browserWorker.closeContext(task.id).catch(() => undefined);
+        return false;
+      }
+
+      this.emitTaskUpdate(task);
       return true;
     } catch (error) {
       task.lastError = error instanceof Error ? error.message : String(error);
@@ -298,6 +306,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     missing: SemanticTarget[];
     writeCounts: Record<string, number>;
     billingMode: "explicit-billing" | "same-as-shipping" | "separate-billing-fields";
+    requiredTargetsSatisfied: boolean;
   }> {
     const interactions = new GhostCursorUiInteractionHelper(page);
     const plan = await new SemanticCheckoutProfilePlanner(interactions).prepare(page, profile);
@@ -356,16 +365,16 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       }
 
       const snapshot = await autofill.result(plan.values);
-      const missingRequiredTarget = snapshot.missing.some(target =>
-        target.intent !== "unknown" && requiredIntents.has(target.intent)
-      );
-      if (!missingRequiredTarget) break;
+      const completion = evaluateSemanticCheckoutCompletion(snapshot, requiredIntents);
+      if (completion.complete) break;
     }
 
     const result = await autofill.result(plan.values);
+    const completion = evaluateSemanticCheckoutCompletion(result, requiredIntents);
     return {
       ...result,
-      billingMode: plan.billingMode
+      billingMode: plan.billingMode,
+      requiredTargetsSatisfied: completion.complete
     };
   }
 
