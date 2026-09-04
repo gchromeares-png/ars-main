@@ -172,11 +172,11 @@
       </ng-container>
 
       <ng-container *ngIf="activeTab === 'profiles'">
-        <section class="section-heading"><div><div class="eyebrow">PROFILE VAULT</div><h2>Profiles</h2></div><p>Name, Adresse, Browser-Defaults, Standard-Proxy und Zahlungspräferenz gehören in ein Profil.</p></section>
+        <section class="section-heading"><div><div class="eyebrow">PROFILE VAULT</div><h2>Profiles</h2></div><p>Kontakt, Liefer-/Rechnungsadresse, Browser-Defaults, Standard-Proxy und Zahlungspräferenz gehören in ein Profil.</p></section>
         <section class="panel profile-panel">
           <div class="profile-tabs">
             <button [class.active]="profileTab === 'identity'" (click)="setProfileTab('identity')">Persönlich</button>
-            <button [class.active]="profileTab === 'address'" (click)="setProfileTab('address')">Adresse</button>
+            <button [class.active]="profileTab === 'address'" (click)="setProfileTab('address')">Adressen</button>
             <button [class.active]="profileTab === 'browser'" (click)="setProfileTab('browser')">Browser</button>
             <button [class.active]="profileTab === 'payment'" (click)="setProfileTab('payment')">Zahlung</button>
           </div>
@@ -186,13 +186,40 @@
             <label><span>Vorname</span><input [(ngModel)]="newProfile.contact.firstName"></label><label><span>Nachname</span><input [(ngModel)]="newProfile.contact.lastName"></label>
             <label><span>E-Mail</span><input [(ngModel)]="newProfile.contact.email" type="email"></label><label><span>Telefon</span><input [(ngModel)]="newProfile.contact.phone"></label>
           </div>
-          <div class="form-grid" *ngIf="profileTab === 'address'">
-            <label class="wide"><span>Straße / Hausnummer</span><input [(ngModel)]="newProfile.address.address1"></label><label><span>Adresszusatz</span><input [(ngModel)]="newProfile.address.address2"></label>
-            <label><span>PLZ</span><input [(ngModel)]="newProfile.address.postalCode"></label><label><span>Stadt</span><input [(ngModel)]="newProfile.address.city"></label><label><span>Land</span><input [(ngModel)]="newProfile.address.countryCode" placeholder="DE"></label>
-          </div>
+
+          <ng-container *ngIf="profileTab === 'address'">
+            <div class="panel-header"><div><div class="eyebrow">SHIPPING / DEFAULT</div><h3>Lieferadresse</h3></div></div>
+            <div class="form-grid">
+              <label class="wide"><span>Adresszeile 1</span><input [(ngModel)]="newProfile.shippingAddress.address1" placeholder="z. B. Mönckebergstraße 7"></label>
+              <label><span>Straße (optional strukturiert)</span><input [(ngModel)]="newProfile.shippingAddress.street" placeholder="Mönckebergstraße"></label>
+              <label><span>Hausnummer (optional strukturiert)</span><input [(ngModel)]="newProfile.shippingAddress.houseNumber" placeholder="7"></label>
+              <label><span>Adresszusatz</span><input [(ngModel)]="newProfile.shippingAddress.address2"></label>
+              <label><span>PLZ</span><input [(ngModel)]="newProfile.shippingAddress.postalCode"></label>
+              <label><span>Stadt</span><input [(ngModel)]="newProfile.shippingAddress.city"></label>
+              <label><span>Land</span><input [(ngModel)]="newProfile.shippingAddress.countryCode" placeholder="DE"></label>
+            </div>
+
+            <div class="builder-divider"></div>
+            <label class="switch-row"><input type="checkbox" [(ngModel)]="newProfile.billingSameAsShipping"><span>Rechnungsadresse entspricht Lieferadresse</span></label>
+
+            <ng-container *ngIf="!newProfile.billingSameAsShipping">
+              <div class="panel-header"><div><div class="eyebrow">BILLING</div><h3>Separate Rechnungsadresse</h3></div></div>
+              <div class="form-grid">
+                <label class="wide"><span>Adresszeile 1</span><input [(ngModel)]="newProfile.billingAddress.address1" placeholder="z. B. Alexanderplatz 1"></label>
+                <label><span>Straße (optional strukturiert)</span><input [(ngModel)]="newProfile.billingAddress.street" placeholder="Alexanderplatz"></label>
+                <label><span>Hausnummer (optional strukturiert)</span><input [(ngModel)]="newProfile.billingAddress.houseNumber" placeholder="1"></label>
+                <label><span>Adresszusatz</span><input [(ngModel)]="newProfile.billingAddress.address2"></label>
+                <label><span>PLZ</span><input [(ngModel)]="newProfile.billingAddress.postalCode"></label>
+                <label><span>Stadt</span><input [(ngModel)]="newProfile.billingAddress.city"></label>
+                <label><span>Land</span><input [(ngModel)]="newProfile.billingAddress.countryCode" placeholder="DE"></label>
+              </div>
+            </ng-container>
+          </ng-container>
+
           <div class="form-grid" *ngIf="profileTab === 'browser'">
             <label><span>Standard-Proxy</span><select [(ngModel)]="newProfile.preferredProxyId"><option value="">Direkt / kein Standardproxy</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select><small>Kann pro Auto-Checkout-Task überschrieben werden.</small></label>
             <label class="wide"><span>User-Agent</span><input [(ngModel)]="newProfile.browser!.userAgent" placeholder="optional"></label>
+            <label class="switch-row"><input type="checkbox" [(ngModel)]="newProfile.browser!.kiAutofill"><span>KI AutoFill</span><small>Semantische Feldauflösung aktivieren. Bei Aus bleiben deterministische Shop-Fallbacks verfügbar.</small></label>
           </div>
           <div class="payment-preference" *ngIf="profileTab === 'payment'">
             <div class="form-grid"><label><span>Bevorzugte Zahlungsart</span><select [(ngModel)]="newProfile.paymentPreference!.method"><option value="card">Karte</option><option value="paypal">PayPal</option><option value="shop-pay">Shop Pay</option><option value="klarna">Klarna</option><option value="other">Andere</option></select></label><label><span>Bezeichnung</span><input [(ngModel)]="newProfile.paymentPreference!.label" placeholder="optional"></label></div>
@@ -200,7 +227,7 @@
           </div>
 
           <div class="primary-action-row split"><button class="btn btn-secondary" (click)="resetProfileForm()">Neu / leeren</button><button class="btn btn-primary" (click)="saveProfile()">Profil speichern</button></div>
-          <div class="profile-list" *ngIf="profiles.length"><article class="profile-card" *ngFor="let profile of profiles"><div><strong>{{ profile.name }}</strong><small>{{ profile.contact.firstName }} {{ profile.contact.lastName }} · {{ profile.address.city }}</small><small>Proxy: {{ getProfileProxyName(profile) }} · Zahlung: {{ getPaymentMethodLabel(profile.paymentPreference?.method) }}</small></div><button class="btn btn-small btn-secondary" (click)="editProfile(profile)">Bearbeiten</button></article></div>
+          <div class="profile-list" *ngIf="profiles.length"><article class="profile-card" *ngFor="let profile of profiles"><div><strong>{{ profile.name }}</strong><small>{{ profile.contact.firstName }} {{ profile.contact.lastName }} · Versand: {{ profile.shippingAddress.city }}<ng-container *ngIf="!profile.billingSameAsShipping"> · Rechnung: {{ profile.billingAddress.city }}</ng-container></small><small>Proxy: {{ getProfileProxyName(profile) }} · KI AutoFill: {{ profile.browser?.kiAutofill !== false ? 'AN' : 'AUS' }} · Zahlung: {{ getPaymentMethodLabel(profile.paymentPreference?.method) }}</small></div><button class="btn btn-small btn-secondary" (click)="editProfile(profile)">Bearbeiten</button></article></div>
         </section>
       </ng-container>
 
