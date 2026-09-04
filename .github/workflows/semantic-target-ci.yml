@@ -5,6 +5,7 @@ on:
     branches: [field-intent-address-context]
   workflow_dispatch:
 
+# Branch-only validation for the SemanticTarget architecture before integration.
 jobs:
   semantic-target-validation:
     runs-on: ubuntu-latest
