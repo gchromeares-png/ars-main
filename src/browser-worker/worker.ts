@@ -116,7 +116,7 @@ async function handle(request: BrowserWorkerRequest): Promise<void> {
       }
 
       const success = earlyGate
-        ? await earlyGateExecutor.execute(request.task)
+        ? await earlyGateExecutor.execute(request.task, paymentSession)
         : await shopifyExecutor.execute(request.task);
 
       if (success && !earlyGate) await preparePayment(request, paymentSession);
