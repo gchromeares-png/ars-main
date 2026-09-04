@@ -1,6 +1,6 @@
 import { Component, OnDestroy, OnInit, ViewEncapsulation } from "@angular/core";
 import { TaskState } from "../../models";
-import type { CheckoutPaymentSession, PaymentMethod } from "../../payments/models";
+import type { CheckoutPaymentSession } from "../../payments/models";
 import type { AresProfile } from "../../profiles/models";
 import type { AresProxy, ProxySelection } from "../../proxies/models";
 import { ElectronService } from "../services/electron.service";
@@ -70,12 +70,6 @@ export class DropSetupsComponent implements OnInit, OnDestroy {
   draft: DropSetup = this.emptySetup();
 
   sessionPaymentEnabled = false;
-  sessionPaymentMethod: PaymentMethod = "card";
-  sessionPaymentLabel = "";
-  sessionCardHolderName = "";
-  sessionCardNumber = "";
-  sessionCardExpiry = "";
-  sessionCardSecurityCode = "";
 
   private unsubscribeStatus?: () => void;
 
@@ -112,7 +106,6 @@ export class DropSetupsComponent implements OnInit, OnDestroy {
     this.wizardOpen = false;
     this.wizardStep = 1;
     this.editingSetupId = "";
-    this.clearSensitivePaymentInputs();
   }
 
   previousStep(): void {
@@ -292,7 +285,7 @@ export class DropSetupsComponent implements OnInit, OnDestroy {
         }
 
         if (this.sessionPaymentEnabled) {
-          const payment = await this.electron.setPaymentSession(taskId, this.buildPaymentSession());
+          const payment = await this.electron.setPaymentSession(taskId, this.buildPaymentSession(assignment.profileId));
           if (!payment?.success) {
             failure = payment?.error || `${taskName}: Zahlungs-Session konnte nicht gesetzt werden.`;
             break;
@@ -308,7 +301,6 @@ export class DropSetupsComponent implements OnInit, OnDestroy {
       }
     } finally {
       this.startingSetupId = "";
-      this.clearSensitivePaymentInputs();
       await this.loadTasks();
     }
 
@@ -443,6 +435,20 @@ export class DropSetupsComponent implements OnInit, OnDestroy {
   profileName(profileId: string): string {
     const profile: any = this.profiles.find(item => item.id === profileId);
     return profile?.name || profileId || "Profil fehlt";
+  }
+
+  profilePaymentLabel(profileId: string): string {
+    const profile = this.profiles.find(item => item.id === profileId);
+    const method = profile?.paymentPreference?.method ?? "card";
+    const labels: Record<string, string> = {
+      card: "Karte · verschlüsselter Profile Vault",
+      paypal: "PayPal",
+      "shop-pay": "Shop Pay",
+      klarna: "Klarna",
+      other: "Andere Zahlungsart"
+    };
+    const label = profile?.paymentPreference?.label?.trim();
+    return label ? `${labels[method] ?? method} · ${label}` : (labels[method] ?? method);
   }
 
   profileProxyName(profileId: string): string {
@@ -659,27 +665,12 @@ export class DropSetupsComponent implements OnInit, OnDestroy {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  private buildPaymentSession(): CheckoutPaymentSession {
-    const payment: CheckoutPaymentSession = {
-      method: this.sessionPaymentMethod,
-      label: this.sessionPaymentLabel.trim() || undefined
+  private buildPaymentSession(profileId: string): CheckoutPaymentSession {
+    const profile = this.profiles.find(item => item.id === profileId);
+    return {
+      method: profile?.paymentPreference?.method ?? "card",
+      label: profile?.paymentPreference?.label?.trim() || undefined
     };
-    if (this.sessionPaymentMethod === "card") {
-      payment.card = {
-        holderName: this.sessionCardHolderName.trim() || undefined,
-        cardNumber: this.sessionCardNumber.replace(/\s+/g, "") || undefined,
-        expiry: this.sessionCardExpiry.trim() || undefined,
-        securityCode: this.sessionCardSecurityCode.trim() || undefined
-      };
-    }
-    return payment;
-  }
-
-  private clearSensitivePaymentInputs(): void {
-    this.sessionCardHolderName = "";
-    this.sessionCardNumber = "";
-    this.sessionCardExpiry = "";
-    this.sessionCardSecurityCode = "";
   }
 
   private delay(ms: number): Promise<void> {
