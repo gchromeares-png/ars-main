@@ -294,6 +294,18 @@ export class ElectronService {
     });
   }
 
+  checkCaptchaApiKey(): Promise<any> {
+    if (this.api?.checkCaptchaApiKey) return this.api.checkCaptchaApiKey();
+    return Promise.resolve({
+      success: false,
+      provider: "CapMonster",
+      configured: false,
+      status: "missing",
+      checkedAt: new Date().toISOString(),
+      message: "Browser-Vorschau: echter API-Key-Check läuft nur in Electron."
+    });
+  }
+
   onTaskStatusUpdate(callback: (task: unknown) => void): () => void {
     if (this.api?.onTaskStatusUpdate) {
       const unsub = this.api.onTaskStatusUpdate(callback);

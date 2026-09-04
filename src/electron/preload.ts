@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { checkCapMonsterApiKey } from "./captcha-api-health";
 
 const taskStatusListeners = new Map<Function, (_event: Electron.IpcRendererEvent, payload: unknown) => void>();
 const monitorListeners = new Map<Function, (_event: Electron.IpcRendererEvent, payload: unknown) => void>();
@@ -29,6 +30,7 @@ const api = {
   getTaskLogs: (taskId: string, limit = 100) => ipcRenderer.invoke("get-task-logs", taskId, limit),
   getProductMonitorEvents: (taskId: string, limit = 100) => ipcRenderer.invoke("get-product-monitor-events", taskId, limit),
   getSystemStatus: () => ipcRenderer.invoke("get-system-status"),
+  checkCaptchaApiKey: () => checkCapMonsterApiKey(),
   onTaskStatusUpdate: (callback: (task: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
     taskStatusListeners.set(callback, listener);

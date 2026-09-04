@@ -14,10 +14,20 @@ interface QueueView {
   maxWaitMs?: number;
 }
 
+interface CaptchaApiCheckView {
+  success?: boolean;
+  provider?: string;
+  configured?: boolean;
+  status?: "missing" | "valid" | "invalid" | "unreachable";
+  checkedAt?: string;
+  message?: string;
+  errorCode?: string;
+}
+
 @Component({
   selector: "app-runtime-control",
   templateUrl: "./runtime-control.component.html",
-  styleUrls: ["./runtime-control.component.scss"]
+  styleUrls: ["./runtime-control.component.scss", "./captcha-api-health.component.scss"]
 })
 export class RuntimeControlComponent implements OnInit, OnDestroy {
   @Input() system: any;
@@ -26,6 +36,8 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
   runtimeSystem: any;
   actionMessage = "";
   purchaseChanging = false;
+  captchaApiChecking = false;
+  captchaApiCheck?: CaptchaApiCheckView;
   private refreshTimer?: ReturnType<typeof setInterval>;
 
   constructor(private readonly electron: ElectronService) {}
@@ -61,6 +73,10 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
 
   get finalPurchaseAllowed(): boolean {
     return this.currentSystem?.allowFinalPurchase === true;
+  }
+
+  get captchaApiConfigured(): boolean {
+    return this.currentSystem?.captchaApiKeyConfigured === true;
   }
 
   get healthyWorkerCount(): number {
@@ -135,6 +151,40 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
     const interval = Number(this.watchdog.heartbeatIntervalMs ?? 30_000);
     const timeout = Number(this.watchdog.heartbeatTimeoutMs ?? 10_000);
     return `${Math.round(interval / 1_000)}s Heartbeat · ${Math.round(timeout / 1_000)}s Timeout`;
+  }
+
+  captchaApiCheckLabel(): string {
+    if (this.captchaApiChecking) return "PRÜFT…";
+    if (!this.captchaApiConfigured) return "KEY FEHLT";
+    if (!this.captchaApiCheck) return "NOCH NICHT GETESTET";
+    if (this.captchaApiCheck.status === "valid") return "GÜLTIG";
+    if (this.captchaApiCheck.status === "invalid") return "UNGÜLTIG";
+    if (this.captchaApiCheck.status === "unreachable") return "NICHT ERREICHBAR";
+    return "KEY FEHLT";
+  }
+
+  captchaApiCheckDetails(): string {
+    if (!this.captchaApiConfigured) return "ARES sieht keinen gesetzten CAPMONSTER_API_KEY im Runtime-Environment.";
+    if (!this.captchaApiCheck) return "Key ist gesetzt. Mit TEST wird nur die Gültigkeit geprüft; der Key selbst bleibt verborgen.";
+    const errorCode = this.captchaApiCheck.errorCode ? ` · ${this.captchaApiCheck.errorCode}` : "";
+    return `${this.captchaApiCheck.message || "API-Check abgeschlossen."}${errorCode}`;
+  }
+
+  captchaApiCheckedAt(): string {
+    if (!this.captchaApiCheck?.checkedAt) return "Noch kein Live-Check";
+    const value = new Date(this.captchaApiCheck.checkedAt);
+    return Number.isNaN(value.getTime()) ? "Check abgeschlossen" : `Letzter Check ${value.toLocaleString("de-DE")}`;
+  }
+
+  async checkCaptchaApiKey(): Promise<void> {
+    if (this.captchaApiChecking || !this.captchaApiConfigured) return;
+    this.captchaApiChecking = true;
+    try {
+      this.captchaApiCheck = await this.electron.checkCaptchaApiKey();
+      await this.refreshRuntime();
+    } finally {
+      this.captchaApiChecking = false;
+    }
   }
 
   async setFinalPurchaseAllowed(allowed: boolean): Promise<void> {

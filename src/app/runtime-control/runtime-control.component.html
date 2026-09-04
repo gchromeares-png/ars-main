@@ -128,5 +128,40 @@
     </article>
   </div>
 
+  <article class="runtime-card api-health-card" [class.ready]="captchaApiCheck?.status === 'valid'" [class.problem]="captchaApiCheck && captchaApiCheck.status !== 'valid'">
+    <div class="api-health-copy">
+      <div class="card-title-row">
+        <div>
+          <small>API & DIENSTE</small>
+          <strong>CapMonster API</strong>
+        </div>
+        <span class="api-health-dot" [class.configured]="captchaApiConfigured" [class.valid]="captchaApiCheck?.status === 'valid'"></span>
+      </div>
+      <p>Datenschutz: ARES zeigt niemals den API-Key, keinen Prefix und keinen Hash. Die UI erhält nur Statusdaten.</p>
+    </div>
+
+    <div class="api-health-metrics">
+      <div>
+        <span>API-KEY</span>
+        <strong>{{ captchaApiConfigured ? 'GESETZT' : 'FEHLT' }}</strong>
+        <small>Nur Runtime-Status</small>
+      </div>
+      <div>
+        <span>LIVE-CHECK</span>
+        <strong>{{ captchaApiCheckLabel() }}</strong>
+        <small>{{ captchaApiCheckedAt() }}</small>
+      </div>
+    </div>
+
+    <div class="api-health-actions">
+      <div class="api-check-copy" [class.error]="captchaApiCheck && captchaApiCheck.status !== 'valid'">
+        {{ captchaApiCheckDetails() }}
+      </div>
+      <button type="button" class="runtime-btn api-test" [disabled]="captchaApiChecking || !captchaApiConfigured" (click)="checkCaptchaApiKey()">
+        {{ captchaApiChecking ? 'PRÜFT…' : 'TEST' }}
+      </button>
+    </div>
+  </article>
+
   <div class="action-message" *ngIf="actionMessage">{{ actionMessage }}</div>
 </section>
