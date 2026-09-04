@@ -27,10 +27,10 @@ describe("profile-owned browser session persistence", () => {
     expect(electronMain).toContain("profileRoot: browserProfileRoot");
   });
 
-  it("restores the last Chrome session for both manual and monitor-owned profile contexts", () => {
+  it("keeps tab restore as a manual-browser convenience only", () => {
     expect(manualBrowser).toContain('args: ["--restore-last-session"]');
-    expect(browserWorker).toContain('const RESTORE_LAST_SESSION_ARG = "--restore-last-session"');
-    expect(browserWorker).toContain("if (profileId && !args.includes(RESTORE_LAST_SESSION_ARG)) args.push(RESTORE_LAST_SESSION_ARG)");
+    expect(browserWorker).not.toContain("RESTORE_LAST_SESSION_ARG");
+    expect(browserWorker).not.toContain('"--restore-last-session"');
   });
 
   it("lets Chromium flush the persistent profile without closing all pages first", () => {
