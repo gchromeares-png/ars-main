@@ -25,6 +25,7 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
 
   runtimeSystem: any;
   actionMessage = "";
+  purchaseChanging = false;
   private refreshTimer?: ReturnType<typeof setInterval>;
 
   constructor(private readonly electron: ElectronService) {}
@@ -46,12 +47,20 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
     });
   }
 
+  get checkoutReadyTasks(): any[] {
+    return this.tasks.filter(task => task.state === "CHECKOUT" && this.isEarlyGateChild(task));
+  }
+
   get workers(): any[] {
     return this.currentSystem?.browserWorkerPool?.workers ?? [];
   }
 
   get watchdog(): any {
     return this.currentSystem?.browserWorkerPool?.watchdog ?? {};
+  }
+
+  get finalPurchaseAllowed(): boolean {
+    return this.currentSystem?.allowFinalPurchase === true;
   }
 
   get healthyWorkerCount(): number {
@@ -128,6 +137,25 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
     return `${Math.round(interval / 1_000)}s Heartbeat · ${Math.round(timeout / 1_000)}s Timeout`;
   }
 
+  async setFinalPurchaseAllowed(allowed: boolean): Promise<void> {
+    if (this.purchaseChanging || allowed === this.finalPurchaseAllowed) return;
+    this.purchaseChanging = true;
+    this.actionMessage = "";
+    try {
+      const result = await this.electron.setFinalPurchaseAllowed(allowed);
+      if (!result?.success) {
+        this.actionMessage = result?.error || "Globale Kauf-Freigabe wurde vom Backend abgelehnt.";
+      } else {
+        this.actionMessage = result.allowFinalPurchase
+          ? "Finaler Kauf global freigegeben. Backend-Guard bleibt bis unmittelbar vor Submit aktiv."
+          : "Finaler Kauf global gesperrt. Alle Checkout-Tasks stoppen vor dem Submit.";
+      }
+      await this.refreshRuntime();
+    } finally {
+      this.purchaseChanging = false;
+    }
+  }
+
   async pauseTask(taskId: string): Promise<void> {
     const result = await this.electron.pauseTask(taskId);
     this.actionMessage = result.success
@@ -140,6 +168,11 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
     this.actionMessage = result.success
       ? "Queue-Task gestoppt."
       : result.error || "Task konnte nicht gestoppt werden.";
+  }
+
+  private isEarlyGateChild(task: any): boolean {
+    const trigger = task?.config?.data?.triggerSource;
+    return trigger?.kind === "early-gate" && Boolean(trigger?.parentTaskId);
   }
 
   private get currentSystem(): any {
