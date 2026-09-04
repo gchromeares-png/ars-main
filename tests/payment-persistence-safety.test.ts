@@ -68,7 +68,7 @@ describe("payment persistence safety", () => {
     expect(raw).not.toContain("__paymentSession");
     expect(raw).not.toContain(pan);
     expect(raw).not.toContain(cvc);
-    expect(raw).not.toMatch(/cardNumber|\"cvc\"|cvv|securityCode/i);
+    expect(raw).not.toMatch(/cardNumber|\"pan\"|\"cvc\"|cvv|securityCode/i);
   });
 
   it("scrubs legacy plaintext payment values when an existing database is reopened", async () => {
@@ -124,6 +124,7 @@ describe("payment persistence safety", () => {
         },
         leakedCardNumber: pan,
         cardNumber: pan,
+        pan,
         cvc,
         cvv: cvc,
         securityCode: cvc
@@ -132,15 +133,15 @@ describe("payment persistence safety", () => {
     const now = "2026-09-04T08:00:00.000Z";
     legacyDb.run(
       "INSERT INTO tasks (id, config_json, state, created_at, updated_at, last_error, retries, max_retries) VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
-      ["legacy-payment", legacyConfig, TaskState.RUNNING, now, now, `cardNumber=${pan} cvc=${cvc}`]
+      ["legacy-payment", legacyConfig, TaskState.RUNNING, now, now, `processor rejected ${pan} cvc=${cvc}`]
     );
     legacyDb.run(
       "INSERT INTO task_logs (task_id, event, state, level, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ["legacy-payment", "legacy", TaskState.RUNNING, "error", `securityCode=${cvc} cardNumber=${pan}`, now]
+      ["legacy-payment", "legacy", TaskState.RUNNING, "error", `legacy value ${pan} securityCode=${cvc}`, now]
     );
     legacyDb.run(
       "INSERT INTO product_monitor_events (task_id, product_key, change_type, event_json, observed_at) VALUES (?, ?, ?, ?, ?)",
-      ["legacy-payment", "product", "update", JSON.stringify({ product: "x", cvc, cardNumber: pan }), now]
+      ["legacy-payment", "product", "update", JSON.stringify({ product: "x", pan, cvc, cardNumber: pan }), now]
     );
 
     await writeFile(filePath, Buffer.from(legacyDb.export()));
@@ -151,6 +152,7 @@ describe("payment persistence safety", () => {
     const logs = await store.findLogsByTaskId("legacy-payment");
     expect(restored?.config.data).not.toHaveProperty("__paymentSession");
     expect(restored?.config.data).not.toHaveProperty("cardNumber");
+    expect(restored?.config.data).not.toHaveProperty("pan");
     expect(restored?.config.data).not.toHaveProperty("cvc");
     expect(restored?.config.data).not.toHaveProperty("cvv");
     expect(restored?.config.data).not.toHaveProperty("securityCode");
