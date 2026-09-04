@@ -6,9 +6,15 @@ export interface StoredPaymentPreference {
 }
 
 export interface CardPaymentSession {
-  holderName?: string;
+  /** Canonical AutoFill field names. */
+  cardholderName?: string;
   cardNumber?: string;
+  expiryMonth?: string;
+  expiryYear?: string;
   expiry?: string;
+  cvc?: string;
+  /** Backwards-compatible aliases for older task-session payloads. */
+  holderName?: string;
   securityCode?: string;
 }
 
