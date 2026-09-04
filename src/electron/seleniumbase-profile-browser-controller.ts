@@ -34,6 +34,7 @@ interface SeleniumBaseWireMessage {
   count?: number;
   appliedCookieCount?: number;
   cookies?: ProfileCookieSnapshotCookie[];
+  endpointUrl?: string;
   error?: string;
 }
 
@@ -158,6 +159,25 @@ export class SeleniumBaseProfileBrowserController {
   ): Promise<ProfileCookieSnapshotSummary> {
     const cookies = await this.captureCookies(profileId);
     return saveRegisteredProfileCookieSnapshot(profileId, name, cookies, snapshotId);
+  }
+
+  async getCdpEndpoint(profileId: string): Promise<string> {
+    const id = String(profileId ?? "").trim();
+    const session = this.requireOpenSession(id);
+    const requestId = randomUUID();
+    session.child.stdin.write(`${JSON.stringify({ type: "get-cdp-endpoint", requestId })}\n`);
+    const message = await this.waitForMessage(session.child, requestId, "cdp-endpoint", 8_000);
+    const endpointUrl = String(message.endpointUrl ?? "").trim();
+    if (!endpointUrl) throw new Error("SeleniumBase hat keinen CDP-Endpunkt geliefert.");
+    return endpointUrl;
+  }
+
+  async solveCaptcha(profileId: string): Promise<void> {
+    const id = String(profileId ?? "").trim();
+    const session = this.requireOpenSession(id);
+    const requestId = randomUUID();
+    session.child.stdin.write(`${JSON.stringify({ type: "solve-captcha", requestId })}\n`);
+    await this.waitForMessage(session.child, requestId, "captcha-solved", 30_000);
   }
 
   async close(profileId: string): Promise<SeleniumBaseProfileBrowserStatus> {

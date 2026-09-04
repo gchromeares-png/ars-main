@@ -97,4 +97,14 @@ export class ProfileBrowserService {
     }
     return Promise.resolve({ success: false, error: "Cookie-Snapshots sind nur in Electron verfügbar." });
   }
+
+  attachSeleniumBasePatchright(profileId: string): Promise<any> {
+    if (this.api?.attachSeleniumBasePatchright) return this.api.attachSeleniumBasePatchright(profileId);
+    return Promise.resolve({ success: false, error: "Patchright-Hybrid ist nur in Electron verfügbar." });
+  }
+
+  navigateSeleniumBasePatchright(profileId: string, url: string): Promise<any> {
+    if (this.api?.navigateSeleniumBasePatchright) return this.api.navigateSeleniumBasePatchright(profileId, url);
+    return Promise.resolve({ success: false, error: "Patchright-Hybrid ist nur in Electron verfügbar." });
+  }
 }

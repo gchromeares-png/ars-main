@@ -137,6 +137,26 @@ def _start(command: Dict[str, Any]) -> int:
                     adapter.goto(url)
                     _emit({"type": "navigated", "requestId": next_request_id, "profileId": profile_id})
                     continue
+                if command_type == "get-cdp-endpoint":
+                    _emit(
+                        {
+                            "type": "cdp-endpoint",
+                            "requestId": next_request_id,
+                            "profileId": profile_id,
+                            "endpointUrl": adapter.get_cdp_endpoint(),
+                        }
+                    )
+                    continue
+                if command_type == "solve-captcha":
+                    adapter.solve_captcha()
+                    _emit(
+                        {
+                            "type": "captcha-solved",
+                            "requestId": next_request_id,
+                            "profileId": profile_id,
+                        }
+                    )
+                    continue
                 if command_type == "attach-playwright":
                     details = adapter.attach_stealthy_playwright()
                     _emit(

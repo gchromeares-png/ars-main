@@ -14,6 +14,7 @@ import {
   SeleniumBaseProfileBrowserController,
   type SeleniumBaseProfileBrowserStatus
 } from "./seleniumbase-profile-browser-controller";
+import { SeleniumBasePatchrightBridge } from "./seleniumbase-patchright-bridge";
 
 interface ManualBrowserSession {
   profileId: string;
@@ -49,6 +50,7 @@ interface ManualBrowserWireMessage {
 export class ProfileBrowserController {
   private readonly sessions = new Map<string, ManualBrowserSession>();
   private readonly seleniumBase: SeleniumBaseProfileBrowserController;
+  private readonly seleniumBasePatchright: SeleniumBasePatchrightBridge;
 
   constructor(
     private readonly profileRoot: string,
@@ -58,6 +60,7 @@ export class ProfileBrowserController {
     registerProfilePaymentIpc(userDataRoot);
     registerProfileCookieSnapshotIpc(userDataRoot, this);
     this.seleniumBase = new SeleniumBaseProfileBrowserController(profileRoot, getProxy);
+    this.seleniumBasePatchright = new SeleniumBasePatchrightBridge(this.seleniumBase);
     this.registerSeleniumBaseIpc();
   }
 
@@ -207,6 +210,7 @@ export class ProfileBrowserController {
   }
 
   async closeAll(): Promise<void> {
+    this.seleniumBasePatchright.forgetAll();
     await Promise.allSettled([
       ...[...this.sessions.keys()].map(profileId => this.close(profileId)),
       this.seleniumBase.closeAll()
@@ -224,6 +228,7 @@ export class ProfileBrowserController {
 
     ipcMain.handle("close-seleniumbase-profile-browser", async (_event, profileId: string) => {
       try {
+        this.seleniumBasePatchright.forget(profileId);
         return { success: true, status: await this.seleniumBase.close(profileId) };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -247,6 +252,24 @@ export class ProfileBrowserController {
       try {
         const snapshot = await this.seleniumBase.saveSnapshot(profileId, name, snapshotId);
         return { success: true, snapshot };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle("attach-seleniumbase-patchright", async (_event, profileId: string) => {
+      try {
+        const status = await this.seleniumBasePatchright.attach(profileId);
+        return { success: true, status };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle("navigate-seleniumbase-patchright", async (_event, profileId: string, url: string) => {
+      try {
+        const status = await this.seleniumBasePatchright.navigateAndSolve(profileId, url);
+        return { success: true, status };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
