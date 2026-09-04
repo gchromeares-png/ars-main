@@ -1,18 +1,18 @@
 import { normalizePaymentSessionInput } from "../src/payments/payment-session-normalizer";
 
-describe("payment session IPC compatibility boundary", () => {
-  it("maps profile/UI aliases into the established checkout session fields", () => {
+describe("payment session IPC boundary", () => {
+  it("keeps the established checkout field names and combines split expiry", () => {
     const pan = Array.from({ length: 16 }, () => "4").join("");
-    const cvc = ["1", "2", "3"].join("");
+    const securityCode = ["1", "2", "3"].join("");
 
     const session = normalizePaymentSessionInput({
       method: "card",
       card: {
-        cardholderName: "Profile Holder",
-        cardNumber: pan,
+        holderName: "Profile Holder",
+        cardNumber: ` ${pan.slice(0, 8)} ${pan.slice(8)} `,
         expiryMonth: "12",
         expiryYear: "2030",
-        cvc
+        securityCode
       }
     });
 
@@ -23,25 +23,25 @@ describe("payment session IPC compatibility boundary", () => {
         holderName: "Profile Holder",
         cardNumber: pan,
         expiry: "12/30",
-        securityCode: cvc
+        securityCode
       }
     });
-    expect(session?.card).not.toHaveProperty("cardholderName");
-    expect(session?.card).not.toHaveProperty("cvc");
   });
 
-  it("keeps the existing checkout field names when they are supplied directly", () => {
+  it("does not introduce alternate cardholderName/cvc runtime fields", () => {
     const session = normalizePaymentSessionInput({
       method: "card",
       card: {
         holderName: "Existing Holder",
         securityCode: "987",
-        cardholderName: "UI Alias Holder",
+        cardholderName: "Ignored Alias",
         cvc: "123"
       }
     });
 
     expect(session?.card?.holderName).toBe("Existing Holder");
     expect(session?.card?.securityCode).toBe("987");
+    expect(session?.card).not.toHaveProperty("cardholderName");
+    expect(session?.card).not.toHaveProperty("cvc");
   });
 });
