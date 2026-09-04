@@ -85,6 +85,18 @@ describe("FieldSemanticResolver", () => {
     expect(result[2].target).toEqual({ intent: "fullName", context: "shipping" });
   });
 
+  it("prefers combined address1 over standalone houseNumber while keeping split houseNumber fields", async () => {
+    const resolver = new FieldSemanticResolver(new ConceptEmbeddingProvider());
+
+    const result = await resolver.resolve([
+      field({ index: 0, label: "Zustellanschrift Straße und Hausnummer" }),
+      field({ index: 1, label: "Hausnummer der Lieferanschrift" })
+    ]);
+
+    expect(result[0].target).toEqual({ intent: "address1", context: "shipping" });
+    expect(result[1].target).toEqual({ intent: "houseNumber", context: "shipping" });
+  });
+
   it("does not guess firstName from a bare Name field", async () => {
     const resolver = new FieldSemanticResolver(new ConceptEmbeddingProvider());
     const result = await resolver.resolve([field({ label: "Name" })]);
