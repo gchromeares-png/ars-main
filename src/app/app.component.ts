@@ -3,45 +3,19 @@ import { ElectronService } from "./services/electron.service";
 import { TaskState } from "../models";
 import { COMMERCE_PLATFORMS, CommercePlatform } from "../commerce/platforms";
 import type { CheckoutPaymentSession, PaymentMethod } from "../payments/models";
-import type { AresProxy, ProxyProtocol, ProxySelection } from "../proxies/models";
+import type { AresProxy, ProxySelection } from "../proxies/models";
+import type { AresProfile } from "../profiles/models";
+import {
+  isCompleteCheckoutAddress,
+  toPersistedAresProfile,
+  toProfileV2Draft,
+  type ProfileV2Draft
+} from "../profiles/profile-v2";
 
 type AppTab = "dashboard" | "tasks" | "profiles" | "proxies" | "shops";
 type ProfileTab = "identity" | "address" | "browser" | "payment";
 type TaskCreationMode = "monitor-only" | "auto-checkout";
-
-interface ProfileView {
-  id: string;
-  name: string;
-  contact: {
-    firstName: string;
-    lastName: string;
-    email: string;
-    phone?: string;
-  };
-  address: {
-    address1: string;
-    address2?: string;
-    postalCode: string;
-    city: string;
-    countryCode: string;
-  };
-  proxy?: {
-    protocol?: ProxyProtocol;
-    host?: string;
-    port?: number;
-    username?: string;
-    password?: string;
-  };
-  preferredProxyId?: string;
-  browser?: {
-    headless?: boolean;
-    userAgent?: string;
-  };
-  paymentPreference?: {
-    method?: PaymentMethod;
-    label?: string;
-  };
-}
+type ProfileView = ProfileV2Draft;
 
 interface ShopView {
   id: string;
@@ -235,7 +209,7 @@ export class AppComponent implements OnInit, OnDestroy {
   async loadProfiles(): Promise<void> {
     const result = await this.electron.getProfiles();
     if (!result.success) return;
-    this.profiles = result.profiles;
+    this.profiles = (result.profiles as AresProfile[]).map(profile => toProfileV2Draft(profile));
     if (!this.selectedProfileId && this.profiles.length > 0) this.selectedProfileId = this.profiles[0].id;
   }
 
@@ -260,11 +234,12 @@ export class AppComponent implements OnInit, OnDestroy {
       !profile.contact.firstName.trim() ||
       !profile.contact.lastName.trim() ||
       !profile.contact.email.trim() ||
-      !profile.address.address1.trim() ||
-      !profile.address.postalCode.trim() ||
-      !profile.address.city.trim()
+      !isCompleteCheckoutAddress(profile.shippingAddress) ||
+      (!profile.billingSameAsShipping && !isCompleteCheckoutAddress(profile.billingAddress))
     ) {
-      this.error = "Bitte Profilname, Kontakt und Adresse vollständig ausfüllen.";
+      this.error = profile.billingSameAsShipping
+        ? "Bitte Profilname, Kontakt und Lieferadresse vollständig ausfüllen."
+        : "Bitte Profilname, Kontakt, Lieferadresse und separate Rechnungsadresse vollständig ausfüllen.";
       return;
     }
 
@@ -273,31 +248,8 @@ export class AppComponent implements OnInit, OnDestroy {
       return;
     }
 
-    const result = await this.electron.saveProfile({
-      ...profile,
-      id: profile.id.trim(),
-      name: profile.name.trim(),
-      contact: {
-        ...profile.contact,
-        firstName: profile.contact.firstName.trim(),
-        lastName: profile.contact.lastName.trim(),
-        email: profile.contact.email.trim(),
-        phone: profile.contact.phone?.trim() || ""
-      },
-      address: {
-        ...profile.address,
-        address1: profile.address.address1.trim(),
-        address2: profile.address.address2?.trim() || "",
-        postalCode: profile.address.postalCode.trim(),
-        city: profile.address.city.trim(),
-        countryCode: profile.address.countryCode.trim().toUpperCase() || "DE"
-      },
-      preferredProxyId: profile.preferredProxyId || undefined,
-      paymentPreference: {
-        method: profile.paymentPreference?.method || "card",
-        label: profile.paymentPreference?.label?.trim() || undefined
-      }
-    });
+    const persistedProfile = toPersistedAresProfile(profile);
+    const result = await this.electron.saveProfile(persistedProfile);
 
     if (!result.success) {
       this.error = result.error;
@@ -305,18 +257,12 @@ export class AppComponent implements OnInit, OnDestroy {
     }
 
     this.info = "Profil gespeichert.";
+    this.newProfile = toProfileV2Draft(persistedProfile);
     await this.loadProfiles();
   }
 
   editProfile(profile: ProfileView): void {
-    this.newProfile = {
-      ...profile,
-      contact: { ...profile.contact },
-      address: { ...profile.address },
-      proxy: profile.proxy ? { ...profile.proxy } : undefined,
-      browser: { ...(profile.browser ?? {}) },
-      paymentPreference: { ...(profile.paymentPreference ?? { method: "card" }) }
-    };
+    this.newProfile = toProfileV2Draft(toPersistedAresProfile(profile));
     this.profileTab = "identity";
     this.info = `Profil ${profile.name} geladen.`;
   }
@@ -875,15 +821,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   private emptyProfile(): ProfileView {
-    return {
-      id: "",
-      name: "",
-      contact: { firstName: "", lastName: "", email: "", phone: "" },
-      address: { address1: "", address2: "", postalCode: "", city: "", countryCode: "DE" },
-      preferredProxyId: "",
-      browser: { headless: false, userAgent: "" },
-      paymentPreference: { method: "card", label: "" }
-    };
+    return toProfileV2Draft();
   }
 
   private emptyProxy(): AresProxy {
