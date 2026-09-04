@@ -46,21 +46,21 @@
               "extractLicenses": false,
               "sourceMap": true,
               "namedChunks": true
-            },
-            "defaultConfiguration": "production"
+            }
           },
-          "serve": {
-            "builder": "@angular-devkit/build-angular:dev-server",
-            "configurations": {
-              "production": {
-                "browserTarget": "ares:build:production"
-              },
-              "development": {
-                "browserTarget": "ares:build:development"
-              }
+          "defaultConfiguration": "production"
+        },
+        "serve": {
+          "builder": "@angular-devkit/build-angular:dev-server",
+          "configurations": {
+            "production": {
+              "browserTarget": "ares:build:production"
             },
-            "defaultConfiguration": "development"
-          }
+            "development": {
+              "browserTarget": "ares:build:development"
+            }
+          },
+          "defaultConfiguration": "development"
         }
       }
     }
