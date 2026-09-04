@@ -43,6 +43,23 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function initialQueueStatus(event: PreCheckoutGateEvent): Record<string, unknown> | undefined {
+  if (event.type !== "queue-signal") return undefined;
+  const detectedAt = event.observedAt.toISOString();
+  return {
+    active: true,
+    phase: "waiting",
+    source: "network",
+    detectedAt,
+    updatedAt: detectedAt,
+    elapsedMs: 0,
+    maxWaitMs: 60 * 60_000,
+    ...(typeof event.position === "number" ? { position: event.position } : {}),
+    ...(typeof event.timeToWaitSeconds === "number" ? { timeToWaitSeconds: event.timeToWaitSeconds } : {}),
+    ...(event.statusText ? { statusText: event.statusText } : {})
+  };
+}
+
 export function getMonitorAction(task: Task): MonitorActionConfig {
   const raw = asRecord(task.config.data?.["monitorAction"]);
   if (raw?.["mode"] !== "auto-checkout") return { mode: "monitor-only" };
@@ -154,6 +171,7 @@ export class MonitorAutoCheckoutCoordinator {
     const childTaskId = `${parent.id}__gate_${Date.now()}`;
     const observedAt = event.observedAt.toISOString();
     const flowId = `early-gate:${parent.id}`;
+    const queueStatus = initialQueueStatus(event);
 
     try {
       const childConfig: TaskConfig = {
@@ -175,6 +193,7 @@ export class MonitorAutoCheckoutCoordinator {
             gateSource: event.source,
             observedAt
           },
+          ...(queueStatus ? { queueStatus } : {}),
           postQueueDiscovery: {
             productName: strategy.productName,
             keywords: [...strategy.discoveryKeywords]
