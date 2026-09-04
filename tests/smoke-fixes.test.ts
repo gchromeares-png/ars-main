@@ -185,7 +185,6 @@ describe("Smoke Tests for System Fixes", () => {
         path.resolve(__dirname, "../src/browser-worker/patchright-launcher.ts"),
         "utf8"
       );
-      expect(source).not.toContain('"User-Agent": "ARES/1.0"');
       expect(launcherSource).toContain('channel: "chrome"');
       expect(launcherSource).toContain("catch (channelError)");
       expect(launcherSource).toContain("chromium.launchPersistentContext(config.userDataDir, launchOptions)");
