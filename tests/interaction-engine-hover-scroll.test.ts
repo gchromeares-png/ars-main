@@ -1,6 +1,7 @@
 import type { Locator, Page } from "patchright";
 import { InteractionEngine } from "../src/browser-worker/interaction-engine";
 import type { InteractionTargetState } from "../src/browser-worker/interaction-models";
+import type { PointerDriver } from "../src/browser-worker/pointer-driver";
 import type { InteractionStateObserver } from "../src/browser-worker/state-observer";
 
 function readyState(enabled = true): InteractionTargetState {
@@ -28,16 +29,22 @@ function fakePage(): Page {
   } as unknown as Page;
 }
 
+function pointerDriver(): PointerDriver & { moveTo: jest.Mock; click: jest.Mock } {
+  return {
+    moveTo: jest.fn(async () => undefined),
+    click: jest.fn(async () => undefined)
+  };
+}
+
 describe("InteractionEngine hover and scroll", () => {
-  it("verifies hover outcome after readiness", async () => {
-    const hover = jest.fn(async () => undefined);
+  it("verifies hover outcome after readiness through the pointer driver", async () => {
     const evaluate = jest.fn(async () => true);
     const locator = {
       scrollIntoViewIfNeeded: jest.fn(async () => undefined),
-      hover,
       evaluate
     } as unknown as Locator;
-    const engine = new InteractionEngine(fakePage(), undefined, observer([readyState()]));
+    const pointer = pointerDriver();
+    const engine = new InteractionEngine(fakePage(), undefined, observer([readyState()]), pointer);
 
     const result = await engine.hover(locator, {
       attempts: 1,
@@ -46,7 +53,8 @@ describe("InteractionEngine hover and scroll", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(hover).toHaveBeenCalledTimes(1);
+    expect(pointer.moveTo).toHaveBeenCalledTimes(1);
+    expect(pointer.moveTo).toHaveBeenCalledWith(result.targetPoint);
     expect(evaluate).toHaveBeenCalledTimes(1);
     expect(result.trace[0]).toEqual(expect.objectContaining({
       seed: "hover-menu:1",

@@ -9,8 +9,12 @@ export interface ProxyConfig {
 }
 
 export interface AddressProfile {
+  /** Combined first address line used by existing profiles and shops. */
   address1: string;
   address2?: string;
+  /** Optional structured German-style address parts for shops that split them. */
+  street?: string;
+  houseNumber?: string;
   postalCode: string;
   city: string;
   countryCode: string;
@@ -32,7 +36,12 @@ export interface AresProfile {
   id: string;
   name: string;
   contact: ContactProfile;
+  /** Legacy/default address; remains the shipping default for backwards compatibility. */
   address: AddressProfile;
+  /** Optional explicit shipping address. Falls back to address when absent. */
+  shippingAddress?: AddressProfile;
+  /** Optional explicit billing address. Absence means billing should prefer same-as-shipping. */
+  billingAddress?: AddressProfile;
   /** Legacy inline proxy config. New UI uses preferredProxyId + Proxy Vault. */
   proxy?: ProxyConfig;
   preferredProxyId?: string;

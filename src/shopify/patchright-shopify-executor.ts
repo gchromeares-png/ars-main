@@ -7,7 +7,12 @@ import type { Page } from "patchright";
 import { ITaskExecutor } from "../interfaces";
 import { Task } from "../models";
 import { AresProfile } from "../profiles/models";
-import { BezierCursorService } from "../browser/bezier-cursor-service";
+import { FieldSemanticResolver, OllamaEmbeddingProvider } from "../browser-worker/field-semantic-resolver";
+import { SemanticFieldAutofill } from "../browser-worker/semantic-field-autofill";
+import { evaluateSemanticCheckoutCompletion } from "../browser-worker/semantic-checkout-completion";
+import { SemanticCheckoutProfilePlanner } from "../browser-worker/semantic-checkout-profile-planner";
+import { semanticTarget, type FieldIntent, type SemanticTarget } from "../browser-worker/semantic-target";
+import { GhostCursorUiInteractionHelper } from "../browser-worker/ui-interaction-helper";
 import type { BrowserWorker } from "../browser-worker/browser-worker";
 import { PatchrightBrowserWorker } from "../browser-worker/patchright-browser-worker";
 import type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
@@ -16,6 +21,9 @@ import type { LiveChallengeResult } from "../challenges/types";
 import { ShopifyQueueWaiter } from "./queue-waiter";
 
 export type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
+
+type ConcreteFieldIntent = Exclude<FieldIntent, "unknown">;
+type CheckoutTarget = SemanticTarget & { intent: ConcreteFieldIntent };
 
 interface ShopifyVariant {
   id: number | string;
@@ -55,7 +63,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
   private readonly requestDelayMs = 500;
   private readonly cacheTtlMs = 45_000;
   private readonly maxFallbackPages = 2;
-  private readonly cursor = new BezierCursorService();
+  private readonly fieldResolver = new FieldSemanticResolver(new OllamaEmbeddingProvider());
 
   constructor(
     private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
@@ -187,8 +195,15 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
           challenge: challengeResult
         }
       };
-      this.emitTaskUpdate(task);
 
+      if (!checkoutProfile.requiredTargetsSatisfied) {
+        task.lastError = "Checkout-Profil konnte kein vollständiges erforderliches SemanticTarget-Ergebnis herstellen.";
+        this.emitTaskUpdate(task);
+        await this.browserWorker.closeContext(task.id).catch(() => undefined);
+        return false;
+      }
+
+      this.emitTaskUpdate(task);
       return true;
     } catch (error) {
       task.lastError = error instanceof Error ? error.message : String(error);
@@ -286,73 +301,94 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
   private async fillCheckoutProfile(
     page: Page,
     profile: AresProfile
-  ): Promise<{ filled: string[]; missing: string[] }> {
-    const fields = [
-      { key: "email", value: profile.contact.email, selectors: ['input[name="email"]', 'input[type="email"]', 'input[autocomplete="email"]'] },
-      { key: "firstName", value: profile.contact.firstName, selectors: ['input[name="firstName"]', 'input[name*="first_name" i]', 'input[autocomplete="given-name"]'] },
-      { key: "lastName", value: profile.contact.lastName, selectors: ['input[name="lastName"]', 'input[name*="last_name" i]', 'input[autocomplete="family-name"]'] },
-      { key: "address1", value: profile.address.address1, selectors: ['input[name="address1"]', 'input[name*="address1" i]', 'input[autocomplete="address-line1"]'] },
-      { key: "address2", value: profile.address.address2 || "", selectors: ['input[name="address2"]', 'input[name*="address2" i]', 'input[autocomplete="address-line2"]'] },
-      { key: "city", value: profile.address.city, selectors: ['input[name="city"]', 'input[autocomplete="address-level2"]'] },
-      { key: "postalCode", value: profile.address.postalCode, selectors: ['input[name="postalCode"]', 'input[name*="postal" i]', 'input[name*="zip" i]', 'input[autocomplete="postal-code"]'] },
-      { key: "phone", value: profile.contact.phone || "", selectors: ['input[name="phone"]', 'input[type="tel"]', 'input[autocomplete="tel"]'] }
-    ];
+  ): Promise<{
+    filled: SemanticTarget[];
+    missing: SemanticTarget[];
+    writeCounts: Record<string, number>;
+    billingMode: "explicit-billing" | "same-as-shipping" | "separate-billing-fields";
+    requiredTargetsSatisfied: boolean;
+  }> {
+    const interactions = new GhostCursorUiInteractionHelper(page);
+    const plan = await new SemanticCheckoutProfilePlanner(interactions).prepare(page, profile);
+    const autofill = new SemanticFieldAutofill(page, interactions, this.fieldResolver);
 
-    const required = new Set(["email", "firstName", "lastName", "address1", "city", "postalCode"]);
-    let filled: string[] = [];
-    let missing: string[] = [];
+    // Intent-only configuration is permitted here because it describes the global
+    // classes of fields required by checkout. Concrete completion identity is
+    // derived below from the observed SemanticTargets.
+    const requiredIntents = new Set<ConcreteFieldIntent>([
+      "email",
+      "firstName",
+      "lastName",
+      "address1",
+      "city",
+      "postalCode"
+    ]);
+
+    const requiredTargets = (): SemanticTarget[] => autofill.observedTargets().filter(target =>
+      target.intent !== "unknown" && requiredIntents.has(target.intent as ConcreteFieldIntent)
+    );
+
+    // Compatibility fallback for checkout versions whose fields cannot be resolved
+    // semantically. These are explicit unknown-context targets and receive their
+    // values only from the central profile mapper.
+    const fallbackFields: Array<{ target: CheckoutTarget; selectors: string[]; select?: boolean }> = [
+      { target: semanticTarget("email", "unknown") as CheckoutTarget, selectors: ['input[name="email"]', 'input[type="email"]', 'input[autocomplete="email"]'] },
+      { target: semanticTarget("firstName", "unknown") as CheckoutTarget, selectors: ['input[name="firstName"]', 'input[name*="first_name" i]', 'input[autocomplete="given-name"]'] },
+      { target: semanticTarget("lastName", "unknown") as CheckoutTarget, selectors: ['input[name="lastName"]', 'input[name*="last_name" i]', 'input[autocomplete="family-name"]'] },
+      { target: semanticTarget("address1", "unknown") as CheckoutTarget, selectors: ['input[name="address1"]', 'input[name*="address1" i]', 'input[autocomplete="address-line1"]'] },
+      { target: semanticTarget("address2", "unknown") as CheckoutTarget, selectors: ['input[name="address2"]', 'input[name*="address2" i]', 'input[autocomplete="address-line2"]'] },
+      { target: semanticTarget("city", "unknown") as CheckoutTarget, selectors: ['input[name="city"]', 'input[autocomplete="address-level2"]'] },
+      { target: semanticTarget("postalCode", "unknown") as CheckoutTarget, selectors: ['input[name="postalCode"]', 'input[name*="postal" i]', 'input[name*="zip" i]', 'input[autocomplete="postal-code"]'] },
+      { target: semanticTarget("phone", "unknown") as CheckoutTarget, selectors: ['input[name="phone"]', 'input[type="tel"]', 'input[autocomplete="tel"]'] },
+      { target: semanticTarget("countryCode", "unknown") as CheckoutTarget, selectors: ['select[name="countryCode"]', 'select[name*="country" i]'], select: true }
+    ];
 
     for (let attempt = 0; attempt < 12; attempt++) {
       if (attempt > 0) await this.sleep(700);
       if (attempt === 3 || attempt === 7) {
         await this.liveChallengeHandler.handleLiveChallenge(page, { timeoutMs: 20_000 });
       }
-      filled = [];
-      missing = [];
 
-      for (const field of fields) {
-        if (!field.value) continue;
-        let done = false;
+      await autofill.fillSemantic(plan.values).catch(() => undefined);
 
-        for (const selector of field.selectors) {
+      for (const fallback of fallbackFields) {
+        if (autofill.hasObservedIntent(fallback.target.intent)) continue;
+        const value = plan.values.valueFor(fallback.target);
+        if (!value?.trim()) continue;
+
+        for (const selector of fallback.selectors) {
           const locator = page.locator(selector).first();
           try {
-            if (await locator.isVisible({ timeout: 250 })) {
-              await this.cursor.clickLocator(page, locator);
-              await locator.fill(field.value, { timeout: 1_000 });
-              filled.push(field.key);
-              done = true;
-              break;
-            }
+            const success = fallback.select
+              ? await autofill.selectLocator(fallback.target, locator, value)
+              : await autofill.fillLocator(fallback.target, locator, value);
+            if (success) break;
           } catch {
             // Checkout may still be rendering; try the next selector/attempt.
           }
         }
-
-        if (!done) missing.push(field.key);
       }
 
-      const countryCode = (profile.address.countryCode || "DE").toUpperCase();
-      let countryDone = false;
-      for (const selector of ['select[name="countryCode"]', 'select[name*="country" i]']) {
-        try {
-          const locator = page.locator(selector).first();
-          if (await locator.isVisible({ timeout: 250 })) {
-            await locator.selectOption(countryCode, { timeout: 1_000 });
-            filled.push("countryCode");
-            countryDone = true;
-            break;
-          }
-        } catch {
-          // Some Shopify checkout versions expose country differently.
-        }
-      }
-      if (!countryDone) missing.push("countryCode");
-
-      if ([...required].every(key => filled.includes(key))) break;
+      const snapshot = await autofill.result(plan.values);
+      const completion = evaluateSemanticCheckoutCompletion({
+        filled: snapshot.filled,
+        missing: snapshot.missing,
+        requiredTargets: requiredTargets()
+      });
+      if (completion.complete) break;
     }
 
-    return { filled: [...new Set(filled)], missing: [...new Set(missing)] };
+    const result = await autofill.result(plan.values);
+    const completion = evaluateSemanticCheckoutCompletion({
+      filled: result.filled,
+      missing: result.missing,
+      requiredTargets: requiredTargets()
+    });
+    return {
+      ...result,
+      billingMode: plan.billingMode,
+      requiredTargetsSatisfied: completion.complete
+    };
   }
 
   private async findProduct(baseUrl: string, searchTerm: string, page?: Page): Promise<ShopifyFlowResult> {

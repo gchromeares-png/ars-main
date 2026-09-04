@@ -1,0 +1,79 @@
+name: Semantic Target CI
+
+on:
+  push:
+    branches: [field-intent-address-context]
+  workflow_dispatch:
+
+# Branch-only validation for the SemanticTarget architecture before integration.
+jobs:
+  semantic-target-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install Patchright Chrome
+        run: npm run browser:install -- --with-deps
+
+      - name: Verify architecture boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA="807098fca5e339195ee1209cccb1a6b5da3b5715"
+          if git diff --name-only "$BASE_SHA" HEAD | grep -q '^src/challenges/'; then
+            echo 'src/challenges/* must remain unchanged.' >&2
+            exit 1
+          fi
+          if grep -q 'FieldValueMap' src/shopify/patchright-shopify-executor.ts; then
+            echo 'Shopify executor still contains legacy FieldValueMap target identity.' >&2
+            exit 1
+          fi
+          if grep -Eq 'Set<FieldIntent>|Map<FieldIntent|Record<FieldIntent' src/shopify/patchright-shopify-executor.ts; then
+            echo 'Shopify executor still uses FieldIntent as concrete target identity.' >&2
+            exit 1
+          fi
+          grep -q 'requiredTargets: requiredTargets()' src/shopify/patchright-shopify-executor.ts
+          grep -q 'targetKey' src/browser-worker/semantic-checkout-completion.ts
+
+      - name: Build backend TypeScript
+        run: npm run build:backend
+
+      - name: Build UI
+        run: npm run build:ui
+
+      - name: Run focused SemanticTarget tests
+        env:
+          ARES_RUN_BROWSER_INTEGRATION: "1"
+        run: >-
+          npx jest --runInBand
+          tests/semantic-checkout-completion.test.ts
+          tests/semantic-profile-mapper.test.ts
+          tests/semantic-field-resolver.test.ts
+          tests/semantic-target-context.integration.test.ts
+          tests/semantic-same-as-shipping.integration.test.ts
+          tests/semantic-field-three-session.integration.test.ts
+
+      - name: Run complete Jest suite
+        env:
+          ARES_RUN_BROWSER_INTEGRATION: "1"
+        run: npm test -- --runInBand
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-target-ci-artifacts
+          path: test-artifacts/
+          if-no-files-found: ignore

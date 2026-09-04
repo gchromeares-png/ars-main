@@ -25,6 +25,7 @@ import {
   locatorVisible
 } from "./interaction-policies";
 import type { InteractionOutcomeExpectation, InteractionReadinessPolicy } from "./interaction-policies";
+import type { PointerDriver } from "./pointer-driver";
 import { SeededRandom } from "./seeded-random";
 import { InteractionStateObserver } from "./state-observer";
 
@@ -61,7 +62,8 @@ export class InteractionEngine {
   constructor(
     private readonly page: Page,
     profiles?: Partial<InteractionProfiles>,
-    observer?: InteractionStateObserver
+    observer?: InteractionStateObserver,
+    private readonly pointerDriver?: PointerDriver
   ) {
     this.profiles = mergeProfiles(profiles);
     this.observer = observer ?? new InteractionStateObserver();
@@ -98,11 +100,18 @@ export class InteractionEngine {
 
       const target = this.chooseTargetPoint(lastState.box!, random);
       try {
-        await this.movePointer(target, random);
-        await this.page.mouse.click(target.x, target.y, {
-          button: options.button ?? "left",
-          clickCount: options.clickCount ?? 1
-        });
+        if (this.pointerDriver) {
+          await this.pointerDriver.click(target, {
+            button: options.button ?? "left",
+            clickCount: options.clickCount ?? 1
+          });
+        } else {
+          await this.movePointer(target, random);
+          await this.page.mouse.click(target.x, target.y, {
+            button: options.button ?? "left",
+            clickCount: options.clickCount ?? 1
+          });
+        }
         this.pointer = target;
       } catch (error) {
         failureReason = "action-error";
@@ -146,6 +155,18 @@ export class InteractionEngine {
     return { success: false, attempts, targetState: lastState, failureReason, trace };
   }
 
+  async moveToPoint(target: InteractionPoint, seed: number | string = "ares-pointer-move"): Promise<void> {
+    if (!Number.isFinite(target.x) || !Number.isFinite(target.y)) {
+      throw new TypeError("Pointer coordinates must be finite numbers.");
+    }
+    if (this.pointerDriver) {
+      await this.pointerDriver.moveTo(target);
+    } else {
+      await this.movePointer(target, new SeededRandom(String(seed)));
+    }
+    this.pointer = { ...target };
+  }
+
   async fill(locator: Locator, value: string, options: FillInteractionOptions = {}): Promise<InteractionAttemptResult> {
     return this.runFormAction(
       locator,
@@ -177,13 +198,78 @@ export class InteractionEngine {
   }
 
   async hover(locator: Locator, options: HoverInteractionOptions = {}): Promise<InteractionAttemptResult> {
-    return this.runFormAction(
-      locator,
-      options,
-      "ares-hover",
-      options.expected ?? locatorHovered(locator),
-      () => locator.hover()
-    );
+    const attempts = this.attemptCount(options.attempts);
+    const readinessTimeoutMs = options.readinessTimeoutMs ?? this.profiles.form.readinessTimeoutMs;
+    const verifyTimeoutMs = options.verifyTimeoutMs ?? this.profiles.form.verifyTimeoutMs;
+    const readiness = options.readiness ?? DEFAULT_READINESS_POLICY;
+    const expectation = options.expected ?? locatorHovered(locator);
+    const baseSeed = String(options.seed ?? "ares-hover");
+    const trace: InteractionAttemptTrace[] = [];
+    let lastState: InteractionTargetState = { visible: false, enabled: false, stable: false };
+    let failureReason: InteractionFailureReason = "not-ready";
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const seed = `${baseSeed}:${attempt}`;
+      const random = new SeededRandom(seed);
+      await locator.scrollIntoViewIfNeeded().catch(() => undefined);
+      lastState = await this.observer.waitUntilReady(locator, readinessTimeoutMs);
+
+      if (!await this.isReady(readiness, locator, lastState)) {
+        failureReason = "not-ready";
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          outcomeExpectation: expectation.name,
+          failureReason
+        });
+        continue;
+      }
+
+      const target = this.chooseTargetPoint(lastState.box!, random);
+      try {
+        await this.moveToPoint(target, seed);
+      } catch (error) {
+        failureReason = "action-error";
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          targetPoint: target,
+          outcomeExpectation: expectation.name,
+          failureReason,
+          error: toError(error)
+        });
+        continue;
+      }
+
+      if (await this.waitForOutcome(expectation, verifyTimeoutMs)) {
+        trace.push({
+          attempt,
+          seed,
+          readinessPolicy: readiness.name,
+          targetState: lastState,
+          targetPoint: target,
+          outcomeExpectation: expectation.name
+        });
+        return { success: true, attempts: attempt, targetState: lastState, targetPoint: target, trace };
+      }
+
+      failureReason = "outcome-timeout";
+      trace.push({
+        attempt,
+        seed,
+        readinessPolicy: readiness.name,
+        targetState: lastState,
+        targetPoint: target,
+        outcomeExpectation: expectation.name,
+        failureReason
+      });
+    }
+
+    return { success: false, attempts, targetState: lastState, failureReason, trace };
   }
 
   async scrollIntoView(locator: Locator, options: ScrollInteractionOptions = {}): Promise<InteractionAttemptResult> {
