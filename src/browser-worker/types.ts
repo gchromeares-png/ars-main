@@ -41,6 +41,8 @@ export interface BrowserEnvironmentSnapshot {
   readonly timezone: string;
   readonly hardwareConcurrency: number;
   readonly deviceMemory: number | null;
+  readonly mediaDevicesAvailable?: boolean;
+  readonly peerConnectionAvailable?: boolean;
   readonly screen: {
     readonly width: number;
     readonly height: number;
