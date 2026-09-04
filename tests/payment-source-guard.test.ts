@@ -34,7 +34,7 @@ describe("payment canonical source guard", () => {
     expect(electronMain).toContain("normalizePaymentSessionInput(input)");
   });
 
-  it("does not expose manual card inputs in either task creation surface", () => {
+  it("does not expose manual card inputs or a payment disable switch in task creation surfaces", () => {
     const appHtml = source("src/app/app.component.html");
     const dropHtml = source("src/app/drop-setups/drop-setups.component.html");
 
@@ -43,6 +43,20 @@ describe("payment canonical source guard", () => {
       expect(html).not.toContain("sessionCardNumber");
       expect(html).not.toContain("sessionCardExpiry");
       expect(html).not.toContain("sessionCardSecurityCode");
+      expect(html).not.toContain("taskPaymentEnabled");
+      expect(html).not.toContain("sessionPaymentEnabled");
+      expect(html).not.toContain("manuell im Checkout");
     }
+  });
+
+  it("materializes the current profile payment preference at task start and always propagates it to checkout children", () => {
+    const service = source("src/app/services/electron.service.ts");
+    const coordinator = source("src/monitor/auto-checkout-coordinator.ts");
+
+    expect(service).toContain("await this.ensureProfilePaymentSession(taskId)");
+    expect(service).toContain("profile?.paymentPreference");
+    expect(service).toContain("this.setPaymentSession(taskId");
+    expect(coordinator).not.toMatch(/action\.paymentEnabled\s*\?/);
+    expect(coordinator).toContain("this.options.getPaymentSession?.(parent.id)");
   });
 });
