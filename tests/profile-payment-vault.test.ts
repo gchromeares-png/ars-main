@@ -55,12 +55,12 @@ describe("ProfilePaymentVault", () => {
     expect(onDisk).not.toContain(cvc);
 
     const session = vault.toCheckoutPaymentSession("profile-a", { method: "card" });
-    expect(session.card?.cardholderName).toBe("Test Holder");
+    expect(session.card?.holderName).toBe("Test Holder");
     expect(session.card?.cardNumber).toBe(pan);
-    expect(session.card?.expiryMonth).toBe("07");
-    expect(session.card?.expiryYear).toBe("2030");
     expect(session.card?.expiry).toBe("07/30");
-    expect(session.card?.cvc).toBe(cvc);
+    expect(session.card?.securityCode).toBe(cvc);
+    expect(session.card).not.toHaveProperty("cardholderName");
+    expect(session.card).not.toHaveProperty("cvc");
   });
 
   test("preserves encrypted PAN and CVC when the UI resaves masked values", () => {
@@ -83,8 +83,8 @@ describe("ProfilePaymentVault", () => {
 
     const session = vault.toCheckoutPaymentSession("profile-a", { method: "card" });
     expect(session.card?.cardNumber).toBe(pan);
-    expect(session.card?.cvc).toBe(cvc);
-    expect(session.card?.cardholderName).toBe("Updated Holder");
+    expect(session.card?.securityCode).toBe(cvc);
+    expect(session.card?.holderName).toBe("Updated Holder");
     expect(session.card?.expiry).toBe("08/31");
   });
 
