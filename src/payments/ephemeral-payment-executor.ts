@@ -1,6 +1,8 @@
+import * as path from "path";
 import type { ITaskExecutor } from "../interfaces";
 import type { Task } from "../models";
 import type { CheckoutPaymentSession } from "./models";
+import { ProfilePaymentVault } from "./profile-payment-vault";
 
 type RuntimeUpdateSource = ITaskExecutor & {
   onTaskUpdate?: (callback: (task: Task) => void) => () => void;
@@ -12,6 +14,17 @@ function sanitizedConfig(config: Task["config"]): Task["config"] {
   const data = { ...(config.data ?? {}) };
   delete data[SESSION_KEY];
   return { ...config, data };
+}
+
+function taskProfileId(task: Task): string {
+  const data = task.config.data ?? {};
+  const action = data["monitorAction"] as { profileId?: string } | undefined;
+  return String(data["profileId"] ?? action?.profileId ?? "").trim();
+}
+
+function needsStoredCard(session: CheckoutPaymentSession | undefined): boolean {
+  if (!session || session.method !== "card") return false;
+  return !String(session.card?.cardNumber ?? "").trim();
 }
 
 export class EphemeralPaymentExecutor implements ITaskExecutor {
@@ -39,7 +52,7 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
   }
 
   async execute(task: Task): Promise<boolean> {
-    const session = this.getPaymentSession(task.id);
+    const session = this.resolveProfilePaymentSession(task, this.getPaymentSession(task.id));
     const workerTask: Task = {
       ...task,
       config: {
@@ -82,5 +95,39 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
     this.listeners.clear();
     this.taskRefs.clear();
     await this.delegate.close?.();
+  }
+
+  private resolveProfilePaymentSession(
+    task: Task,
+    session: CheckoutPaymentSession | undefined
+  ): CheckoutPaymentSession | undefined {
+    if (!needsStoredCard(session)) return session;
+
+    const profileId = taskProfileId(task);
+    if (!profileId) return session;
+
+    try {
+      // This wrapper runs in Electron main. Decryption remains out of Angular and
+      // the external browser worker receives plaintext only for this one task.
+      const electron = require("electron") as typeof import("electron");
+      if (!electron.safeStorage?.isEncryptionAvailable?.()) return session;
+      const userDataRoot = electron.app.getPath("userData");
+      const vault = new ProfilePaymentVault(
+        path.join(userDataRoot, "payment-vault.json"),
+        {
+          isEncryptionAvailable: () => electron.safeStorage.isEncryptionAvailable(),
+          encryptString: value => electron.safeStorage.encryptString(value),
+          decryptString: value => electron.safeStorage.decryptString(value)
+        }
+      );
+      return vault.toCheckoutPaymentSession(profileId, {
+        method: session?.method,
+        label: session?.label
+      });
+    } catch {
+      // Keep the original ephemeral session. Payment preparation will report
+      // missing card fields rather than leaking or persisting a fallback secret.
+      return session;
+    }
   }
 }
