@@ -5,7 +5,7 @@ export interface ITaskExecutor {
   execute(task: Task): Promise<boolean>;
   cancelTask?(taskId: string): Promise<void>;
   updateDiscoveryKeywords?(taskId: string, keywords: string[]): Promise<string[]>;
-  finalizePurchase?(taskId: string): Promise<void>;
+  setFinalPurchaseAllowed?(allowed: boolean): Promise<void>;
   close?(): void | Promise<void>;
 }
 
