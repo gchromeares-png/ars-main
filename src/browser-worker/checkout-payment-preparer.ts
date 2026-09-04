@@ -48,28 +48,30 @@ export class CheckoutPaymentPreparer {
 
     const card = session.card;
     if (!card) {
-      result.missingFields = ["cardNumber", "expiry", "cvc"];
+      result.missingFields = ["cardNumber", "expiry", "securityCode"];
       result.note = "Kartenzahlung erkannt/ausgewählt, aber keine Session-Kartendaten vorhanden.";
       return result;
     }
 
-    await this.fillCardField(page, "cardholderName", card.cardholderName, [
+    await this.fillCardField(page, "holderName", card.holderName, [
       'input[autocomplete="cc-name"]',
       'input[name*="cardholder" i]',
       'input[name*="card_name" i]',
       'input[name*="name_on_card" i]'
-    ], result, false);
-
+    ], result);
     await this.fillCardField(page, "cardNumber", card.cardNumber, [
       'input[autocomplete="cc-number"]',
       'input[name*="cardnumber" i]',
       'input[name*="card_number" i]',
       'input[data-card-field="number"]'
     ], result);
-
-    await this.fillExpiry(page, card.expiryMonth, card.expiryYear, card.expiry, result);
-
-    await this.fillCardField(page, "cvc", card.cvc, [
+    await this.fillCardField(page, "expiry", card.expiry, [
+      'input[autocomplete="cc-exp"]',
+      'input[name*="expiry" i]',
+      'input[name*="expiration" i]',
+      'input[data-card-field="expiry"]'
+    ], result);
+    await this.fillCardField(page, "securityCode", card.securityCode, [
       'input[autocomplete="cc-csc"]',
       'input[name*="security_code" i]',
       'input[name*="cvv" i]',
@@ -123,96 +125,30 @@ export class CheckoutPaymentPreparer {
     return false;
   }
 
-  private async fillExpiry(
-    page: Page,
-    expiryMonth: string | undefined,
-    expiryYear: string | undefined,
-    expiry: string | undefined,
-    result: PaymentPreparationResult
-  ): Promise<void> {
-    const combined = expiry?.trim() || (expiryMonth?.trim() && expiryYear?.trim()
-      ? `${expiryMonth.trim().padStart(2, "0")}/${expiryYear.trim().slice(-2)}`
-      : "");
-
-    if (combined) {
-      const filled = await this.tryFillCardField(page, combined, [
-        'input[autocomplete="cc-exp"]',
-        'input[name*="expiry" i]',
-        'input[name*="expiration" i]',
-        'input[data-card-field="expiry"]'
-      ]);
-      if (filled) {
-        result.filledFields.push("expiry");
-        return;
-      }
-    }
-
-    const month = expiryMonth?.trim();
-    const year = expiryYear?.trim();
-    if (!month || !year) {
-      result.missingFields.push("expiry");
-      return;
-    }
-
-    const monthFilled = await this.tryFillCardField(page, month.padStart(2, "0"), [
-      'input[autocomplete="cc-exp-month"]',
-      'select[autocomplete="cc-exp-month"]',
-      'input[name*="exp_month" i]',
-      'select[name*="exp_month" i]',
-      'input[name*="expiry_month" i]',
-      'select[name*="expiry_month" i]'
-    ]);
-    const yearFilled = await this.tryFillCardField(page, year, [
-      'input[autocomplete="cc-exp-year"]',
-      'select[autocomplete="cc-exp-year"]',
-      'input[name*="exp_year" i]',
-      'select[name*="exp_year" i]',
-      'input[name*="expiry_year" i]',
-      'select[name*="expiry_year" i]'
-    ]);
-
-    if (monthFilled) result.filledFields.push("expiryMonth");
-    if (yearFilled) result.filledFields.push("expiryYear");
-    if (!monthFilled || !yearFilled) result.missingFields.push("expiry");
-  }
-
   private async fillCardField(
     page: Page,
     key: string,
     value: string | undefined,
     selectors: string[],
-    result: PaymentPreparationResult,
-    required = true
+    result: PaymentPreparationResult
   ): Promise<void> {
     if (!value?.trim()) {
-      if (required) result.missingFields.push(key);
+      if (key !== "holderName") result.missingFields.push(key);
       return;
     }
 
-    if (await this.tryFillCardField(page, value.trim(), selectors)) {
-      result.filledFields.push(key);
-      return;
-    }
-    if (required) result.missingFields.push(key);
-  }
-
-  private async tryFillCardField(page: Page, value: string, selectors: string[]): Promise<boolean> {
     for (const frame of this.frames(page)) {
       for (const selector of selectors) {
         const locator = frame.locator(selector).first();
         if (!await this.isVisible(locator)) continue;
         try {
-          await locator.fill(value, { timeout: 1_500 });
-          return true;
-        } catch {
-          try {
-            await locator.selectOption(value, { timeout: 1_500 });
-            return true;
-          } catch {}
-        }
+          await locator.fill(value.trim(), { timeout: 1_500 });
+          result.filledFields.push(key);
+          return;
+        } catch {}
       }
     }
-    return false;
+    result.missingFields.push(key);
   }
 
   private frames(page: Page): Frame[] {
