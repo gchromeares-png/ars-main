@@ -63,6 +63,12 @@ function numericValue(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function queueSource(value: unknown): QueueSignalSource {
+  return value === "dom" || value === "network" || value === "url" || value === "combined"
+    ? value
+    : "network";
+}
+
 export function queueLikeUrl(url: string): boolean {
   return /(queue|waiting[-_]?room|queue-?it|incapsula_resource)/i.test(url);
 }
@@ -129,16 +135,29 @@ export class BrowserQueueWaiter {
     const maxWaitMs = clampNumber(this.options.maxWaitMs ?? ONE_HOUR_MS, 1_000, ONE_HOUR_MS);
     const pollIntervalMs = clampNumber(this.options.pollIntervalMs ?? DEFAULT_POLL_MS, 250, 10_000);
     const releaseConfirmations = Math.max(1, Math.floor(this.options.releaseConfirmations ?? 2));
+    const existing = this.task.config.data?.["queueStatus"] as Record<string, unknown> | undefined;
+    const seededActive = existing?.["active"] === true;
     const initial = await this.readSignal();
-    if (!initial.active) return { detected: false, released: false, elapsedMs: 0 };
+    if (!initial.active && !seededActive) return { detected: false, released: false, elapsedMs: 0 };
 
-    const startedAt = Date.now();
-    const detectedAt = new Date(startedAt).toISOString();
+    const seededDetectedMs = Date.parse(String(existing?.["detectedAt"] ?? ""));
+    const startedAt = seededActive && Number.isFinite(seededDetectedMs) ? seededDetectedMs : Date.now();
+    const detectedAt = seededActive && typeof existing?.["detectedAt"] === "string"
+      ? String(existing["detectedAt"])
+      : new Date(startedAt).toISOString();
     let clearCount = 0;
-    let lastSignal = initial;
+    let lastSignal: QueueSignal = initial.active
+      ? initial
+      : {
+          active: true,
+          position: numericValue(existing?.["position"]),
+          timeToWaitSeconds: numericValue(existing?.["timeToWaitSeconds"]),
+          statusText: typeof existing?.["statusText"] === "string" ? String(existing["statusText"]) : undefined,
+          source: queueSource(existing?.["source"])
+        };
 
     while (Date.now() - startedAt < maxWaitMs) {
-      const elapsedMs = Date.now() - startedAt;
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
       const signal = await this.readSignal();
       if (signal.active) {
         clearCount = 0;
@@ -178,7 +197,7 @@ export class BrowserQueueWaiter {
       await this.sleep(pollIntervalMs);
     }
 
-    const elapsedMs = Date.now() - startedAt;
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
     this.publish({
       active: false,
       phase: "timed-out",
