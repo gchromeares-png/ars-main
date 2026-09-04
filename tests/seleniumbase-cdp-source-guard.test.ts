@@ -62,7 +62,8 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     expect(tracker).not.toContain("2captcha.com");
     expect(tracker).not.toContain("solve_captcha");
     expect(tracker).not.toContain("click(");
-    expect(tracker).not.toContain("token");
+    expect(tracker).not.toContain("execute_script(");
+    expect(tracker).not.toContain("set_all_cookies(");
     expect(trackerProbe).toContain('assert updated["changedIndexes"] == [4]');
   });
 
