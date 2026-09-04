@@ -38,6 +38,19 @@ describe("payment source guard", () => {
     expect(electronMain).toContain("normalizePaymentSessionInput(input)");
   });
 
+  it("materializes split vault expiry at exactly one checkout boundary", () => {
+    const vault = source("src/payments/profile-payment-vault.ts");
+    const normalizer = source("src/payments/payment-session-normalizer.ts");
+    const preparer = source("src/browser-worker/checkout-payment-preparer.ts");
+
+    expect((vault.match(/materializeExpiry\(/g) ?? []).length).toBe(2); // declaration + one call
+    expect(vault).toContain("expiry: materializeExpiry(secret.expiryMonth, secret.expiryYear)");
+    expect(normalizer).not.toContain("expiryMonth");
+    expect(normalizer).not.toContain("expiryYear");
+    expect(preparer).not.toContain("expiryMonth");
+    expect(preparer).not.toContain("expiryYear");
+  });
+
   it("does not expose manual card inputs or a payment disable switch in task creation templates", () => {
     const appHtml = source("src/app/app.component.html");
     const dropHtml = source("src/app/drop-setups/drop-setups.component.html");
