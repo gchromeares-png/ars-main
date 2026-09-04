@@ -12,6 +12,7 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
   const preload = read("src/electron/preload.ts");
   const probe = read("python/seleniumbase_cdp/persistence_probe.py");
   const manualProbe = read("python/seleniumbase_cdp/manual_profile_probe.py");
+  const reopenProbe = read("python/seleniumbase_cdp/reopen_profile_probe.py");
 
   it("pins official SeleniumBase with its Playwright integration extra", () => {
     expect(requirements).toContain("seleniumbase[playwright]==4.53.7");
@@ -55,6 +56,17 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     expect(waitIndex).toBeGreaterThanOrEqual(0);
     expect(writeIndex).toBeGreaterThan(waitIndex);
     expect(awaitIndex).toBeGreaterThan(writeIndex);
+  });
+
+  it("restores the previous manual SeleniumBase tab and waits for persistent-profile shutdown", () => {
+    expect(adapter).toContain('kwargs["browser_args"] = ["--restore-last-session"]');
+    expect(adapter).toContain("psutil.Process(chrome_pid).wait(timeout=2.0)");
+    expect(adapter).toContain('time.sleep(1.0 if sys.platform.startswith("win") else 0.2)');
+    expect(manualWorker).toContain("restore_last_session=True");
+    expect(reopenProbe).toContain('RESTORE_PATH = "/restore-target"');
+    expect(reopenProbe).toContain('WorkerClient(profile_dir, "")');
+    expect(reopenProbe).toContain('active.wait("playwright-attached", request_id, 25)');
+    expect(reopenProbe).toContain("for index in range(2)");
   });
 
   it("implements SeleniumBase Stealthy Playwright Mode on the existing context/page only", () => {
