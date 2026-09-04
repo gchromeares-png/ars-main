@@ -26,6 +26,11 @@ import { CommerceMonitorService, isCommerceMonitorTask } from "../monitor/commer
 import { MonitorAutoCheckoutCoordinator } from "../monitor/auto-checkout-coordinator";
 import { PassiveHttpPreCheckoutGate } from "../monitor/pre-checkout-gate";
 import { isEarlyGateChildTask, normalizeDiscoveryKeywords } from "../monitor/early-gate";
+import {
+  isCapMonsterApiKeyConfigured,
+  loadCapMonsterApiKeyFromEnvFiles,
+  testCapMonsterApiKey
+} from "./capmonster-api-key-health";
 
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: TaskOrchestrator;
@@ -596,6 +601,8 @@ ipcMain.handle("get-product-monitor-events", async (_event, taskId: string, limi
   }
 });
 
+ipcMain.handle("test-capmonster-api-key", async () => testCapMonsterApiKey());
+
 ipcMain.handle("get-system-status", async () => {
   const systemNode = readSystemNodeStatus();
 
@@ -612,7 +619,7 @@ ipcMain.handle("get-system-status", async () => {
     earlyGateReady: commerceExecutor.hasEarlyGateExecutor(),
     allowFinalPurchase,
     captchaProvider: "CapMonster",
-    captchaApiKeyConfigured: Boolean(process.env["CAPMONSTER_API_KEY"]?.trim()),
+    captchaApiKeyConfigured: isCapMonsterApiKeyConfigured(),
     liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],
     electronNodeVersion: process.versions.node,
     systemNodeRequirement: ">=20",
@@ -628,6 +635,7 @@ ipcMain.handle("get-system-status", async () => {
 
 app.whenReady().then(async () => {
   try {
+    loadCapMonsterApiKeyFromEnvFiles(app.getAppPath());
     await createBackend();
     mainWindow = createWindow();
     mainWindow.on("closed", () => { mainWindow = null; });
