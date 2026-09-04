@@ -18,6 +18,8 @@ import type {
   BrowserWorkerState
 } from "./types";
 
+const RESTORE_LAST_SESSION_ARG = "--restore-last-session";
+
 export class PatchrightBrowserWorker implements BrowserWorker {
   private readonly contexts = new Map<string, BrowserContextHandle>();
   private readonly pendingCreations = new Set<string>();
@@ -69,8 +71,12 @@ export class PatchrightBrowserWorker implements BrowserWorker {
       lease = acquireBrowserProfileLease(normalizedDir, `worker:${process.pid}:${config.taskId}`);
       this.profileLeases.set(config.taskId, lease);
 
+      const args = [...(config.args ?? [])];
+      if (profileId && !args.includes(RESTORE_LAST_SESSION_ARG)) args.push(RESTORE_LAST_SESSION_ARG);
+
       const handle = await launchBrowserContext({
         ...config,
+        args,
         userDataDir: normalizedDir
       });
       this.contexts.set(config.taskId, handle);
