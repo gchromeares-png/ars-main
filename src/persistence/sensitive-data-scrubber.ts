@@ -1,9 +1,20 @@
 import type { Database } from "sql.js";
 
-const DROP_SENSITIVE_KEY = /^_*payment[-_]?session$|^(card[-_]?number|pan|cvc|cvv|security[-_]?code)$/i;
 const SENSITIVE_KEY = /(api[-_]?key|authorization|cookie|password|secret|token)/i;
 const SENSITIVE_VALUE = /\b(api[-_]?key|authorization|cookie|password|secret|token|card[-_]?number|pan|cvc|cvv|security[-_]?code)\s*[:=]\s*([^\s,;]+)/gi;
-const PAN_LIKE_VALUE = /\b(?:\d[ -]?){12,19}\b/g;
+const PAN_LIKE_VALUE = /\b(?:\d[ -]?){11,18}\d\b/g;
+
+function isDropSensitiveKey(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  return normalized === "paymentsession"
+    || normalized.includes("cardnumber")
+    || normalized.includes("securitycode")
+    || normalized === "pan"
+    || normalized.startsWith("cvc")
+    || normalized.endsWith("cvc")
+    || normalized.startsWith("cvv")
+    || normalized.endsWith("cvv");
+}
 
 export function sanitizePersistedValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(item => sanitizePersistedValue(item));
@@ -11,7 +22,7 @@ export function sanitizePersistedValue(value: unknown): unknown {
 
   const result: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-    if (DROP_SENSITIVE_KEY.test(key)) continue;
+    if (isDropSensitiveKey(key)) continue;
     result[key] = SENSITIVE_KEY.test(key) ? "[REDACTED]" : sanitizePersistedValue(nested);
   }
   return result;
