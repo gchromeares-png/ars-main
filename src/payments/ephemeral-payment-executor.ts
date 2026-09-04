@@ -22,11 +22,6 @@ function taskProfileId(task: Task): string {
   return String(data["profileId"] ?? action?.profileId ?? "").trim();
 }
 
-function needsStoredCard(session: CheckoutPaymentSession | undefined): boolean {
-  if (!session || session.method !== "card") return false;
-  return !String(session.card?.cardNumber ?? "").trim();
-}
-
 export class EphemeralPaymentExecutor implements ITaskExecutor {
   private readonly listeners = new Set<(task: Task) => void>();
   private readonly taskRefs = new Map<string, Task>();
@@ -101,16 +96,23 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
     task: Task,
     session: CheckoutPaymentSession | undefined
   ): CheckoutPaymentSession | undefined {
-    if (!needsStoredCard(session)) return session;
+    if (!session || session.method !== "card") return session;
 
     const profileId = taskProfileId(task);
-    if (!profileId) return session;
+    const profileOnlySession: CheckoutPaymentSession = {
+      method: "card",
+      label: session.label
+    };
+
+    // Profile-backed card data is authoritative. Any card secret that may still
+    // exist in an old/manual task payload is deliberately ignored.
+    if (!profileId) return profileOnlySession;
 
     try {
       // This wrapper runs in Electron main. Decryption remains out of Angular and
       // the external browser worker receives plaintext only for this one task.
       const electron = require("electron") as typeof import("electron");
-      if (!electron.safeStorage?.isEncryptionAvailable?.()) return session;
+      if (!electron.safeStorage?.isEncryptionAvailable?.()) return profileOnlySession;
       const userDataRoot = electron.app.getPath("userData");
       const vault = new ProfilePaymentVault(
         path.join(userDataRoot, "payment-vault.json"),
@@ -121,13 +123,13 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
         }
       );
       return vault.toCheckoutPaymentSession(profileId, {
-        method: session?.method,
-        label: session?.label
+        method: "card",
+        label: session.label
       });
     } catch {
-      // Keep the original ephemeral session. Payment preparation will report
-      // missing card fields rather than leaking or persisting a fallback secret.
-      return session;
+      // Fail closed: no plaintext/manual fallback. Payment preparation will report
+      // missing card fields and leave the checkout waiting for user action.
+      return profileOnlySession;
     }
   }
 }
