@@ -8,9 +8,15 @@ export interface ProfileBrowserStatusView {
   startedAt?: string;
 }
 
+export interface SeleniumBaseProfileBrowserStatusView extends ProfileBrowserStatusView {
+  engine: "seleniumbase-cdp";
+  appliedSnapshotId?: string;
+}
+
 @Injectable({ providedIn: "root" })
 export class ProfileBrowserService {
   private readonly previewOpen = new Set<string>();
+  private readonly seleniumBasePreviewOpen = new Set<string>();
 
   private get api(): Window["ares"] | undefined {
     return typeof window !== "undefined" ? window.ares : undefined;
@@ -40,5 +46,55 @@ export class ProfileBrowserService {
       success: true,
       status: { profileId, open: false }
     });
+  }
+
+  getSeleniumBaseStatus(profileId: string): Promise<any> {
+    if (this.api?.getSeleniumBaseProfileBrowserStatus) return this.api.getSeleniumBaseProfileBrowserStatus(profileId);
+    return Promise.resolve({
+      success: true,
+      status: {
+        engine: "seleniumbase-cdp",
+        profileId,
+        open: this.seleniumBasePreviewOpen.has(profileId)
+      }
+    });
+  }
+
+  openSeleniumBase(profileId: string, startUrl?: string, cookieSnapshotId?: string): Promise<any> {
+    if (this.api?.openSeleniumBaseProfileBrowser) {
+      return this.api.openSeleniumBaseProfileBrowser(profileId, startUrl, cookieSnapshotId);
+    }
+    this.seleniumBasePreviewOpen.add(profileId);
+    return Promise.resolve({
+      success: true,
+      status: {
+        engine: "seleniumbase-cdp",
+        profileId,
+        open: true,
+        appliedSnapshotId: cookieSnapshotId,
+        startedAt: new Date().toISOString()
+      }
+    });
+  }
+
+  closeSeleniumBase(profileId: string): Promise<any> {
+    if (this.api?.closeSeleniumBaseProfileBrowser) return this.api.closeSeleniumBaseProfileBrowser(profileId);
+    this.seleniumBasePreviewOpen.delete(profileId);
+    return Promise.resolve({
+      success: true,
+      status: { engine: "seleniumbase-cdp", profileId, open: false }
+    });
+  }
+
+  applySeleniumBaseSnapshot(profileId: string, snapshotId: string): Promise<any> {
+    if (this.api?.applySeleniumBaseCookieSnapshot) return this.api.applySeleniumBaseCookieSnapshot(profileId, snapshotId);
+    return Promise.resolve({ success: true, snapshotId, count: 0 });
+  }
+
+  saveSeleniumBaseSnapshot(profileId: string, name: string, snapshotId?: string): Promise<any> {
+    if (this.api?.saveSeleniumBaseProfileCookieSnapshot) {
+      return this.api.saveSeleniumBaseProfileCookieSnapshot(profileId, name, snapshotId);
+    }
+    return Promise.resolve({ success: false, error: "Cookie-Snapshots sind nur in Electron verfügbar." });
   }
 }
