@@ -23,6 +23,9 @@ jobs:
       - name: Install SeleniumBase CDP PoC dependency
         run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
 
+      - name: Verify SeleniumBase challenge state tracker
+        run: python python/seleniumbase_cdp/challenge_state_tracker_probe.py
+
       - name: Run isolated SeleniumBase CDP persistence PoC
         run: python python/seleniumbase_cdp/persistence_probe.py
 
