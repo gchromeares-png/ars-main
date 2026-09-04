@@ -1,4 +1,4 @@
-import { createServer, type Socket } from "net";
+import { createServer, Socket } from "net";
 import { mkdtemp, rm } from "fs/promises";
 import * as http from "http";
 import type { AddressInfo } from "net";
@@ -28,9 +28,11 @@ function attachSocksConnection(client: Socket, observedHosts: string[]): void {
   let state: "greeting" | "request" | "tunnel" = "greeting";
   let upstream: Socket | undefined;
 
-  const fail = () => client.destroy();
+  const fail = (): void => {
+    client.destroy();
+  };
 
-  client.on("data", chunk => {
+  client.on("data", (chunk): void => {
     if (state === "tunnel") return;
     buffer = Buffer.concat([buffer, chunk]);
 
@@ -39,14 +41,20 @@ function attachSocksConnection(client: Socket, observedHosts: string[]): void {
       const methodsLength = buffer[1];
       const total = 2 + methodsLength;
       if (buffer.length < total) return;
-      if (buffer[0] !== 0x05) return fail();
+      if (buffer[0] !== 0x05) {
+        fail();
+        return;
+      }
       buffer = buffer.subarray(total);
       client.write(Buffer.from([0x05, 0x00]));
       state = "request";
     }
 
     if (state !== "request" || buffer.length < 4) return;
-    if (buffer[0] !== 0x05 || buffer[1] !== 0x01) return fail();
+    if (buffer[0] !== 0x05 || buffer[1] !== 0x01) {
+      fail();
+      return;
+    }
 
     const atyp = buffer[3];
     let offset = 4;
@@ -63,7 +71,8 @@ function attachSocksConnection(client: Socket, observedHosts: string[]): void {
       host = Array.from(buffer.subarray(offset, offset + 4)).join(".");
       offset += 4;
     } else {
-      return fail();
+      fail();
+      return;
     }
 
     const port = buffer.readUInt16BE(offset);
