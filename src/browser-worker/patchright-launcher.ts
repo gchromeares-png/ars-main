@@ -7,11 +7,9 @@ import { collectBrowserEnvironment, failedBrowserEnvironmentAudit } from "./brow
 import type { BrowserContextConfig, BrowserContextHandle, BrowserProxyConfig } from "./types";
 import { attachLiveChallengePageWatcher } from "../challenges/live-challenge-page-watcher";
 
-// Mullvad's Chromium guidance uses a forced WebRTC IP handling policy with
-// disable_non_proxied_udp so WebRTC cannot silently open a direct UDP path
-// alongside an explicit browser proxy.
-const FORCE_WEBRTC_IP_HANDLING_POLICY = "--force-webrtc-ip-handling-policy";
-const WEBRTC_IP_HANDLING_POLICY = "--webrtc-ip-handling-policy=disable_non_proxied_udp";
+const WEBRTC_PROXY_POLICY = "disable_non_proxied_udp";
+const FORCE_WEBRTC_IP_HANDLING_POLICY_PREFIX = "--force-webrtc-ip-handling-policy=";
+const WEBRTC_IP_HANDLING_POLICY_PREFIX = "--webrtc-ip-handling-policy=";
 const WEBRTC_PERMISSION_CHECK = "--enforce-webrtc-ip-permission-check";
 const DISABLE_ASYNC_DNS = "--disable-async-dns";
 const DISABLE_FEATURES_PREFIX = "--disable-features=";
@@ -68,36 +66,34 @@ function mergeDisabledFeatures(args: string[], required: readonly string[]): str
 }
 
 function strictHostResolverRule(proxy: BrowserProxyConfig): string | undefined {
-  // Explicit proxy bypass rules intentionally permit direct traffic. In that case
-  // do not install a global DNS black-hole rule because it would break the bypass.
   if (proxy.bypass?.trim()) return undefined;
   return `${HOST_RESOLVER_RULES_PREFIX}MAP * ~NOTFOUND , EXCLUDE ${proxy.host.trim()}`;
+}
+
+function webRtcPolicyArg(headless: boolean): string {
+  // Chromium documents the force switch for headless automation and the normal
+  // policy switch for headed Chrome. The policy does NOT disable WebRTC: it keeps
+  // PeerConnection/media APIs available while preventing a parallel direct UDP path.
+  return headless
+    ? `${FORCE_WEBRTC_IP_HANDLING_POLICY_PREFIX}${WEBRTC_PROXY_POLICY}`
+    : `${WEBRTC_IP_HANDLING_POLICY_PREFIX}${WEBRTC_PROXY_POLICY}`;
 }
 
 function buildChromiumArgs(config: BrowserContextConfig): string[] | undefined {
   const args = [...(config.args ?? [])];
   if (!config.proxy) return args.length ? args : undefined;
 
-  // Fail closed for proxied WebRTC: normalize away caller-provided WebRTC policy
-  // variants and install one canonical non-proxied-UDP policy.
   let hardened = args.filter(arg =>
-    arg !== FORCE_WEBRTC_IP_HANDLING_POLICY
-    && !arg.startsWith("--force-webrtc-ip-handling-policy=")
-    && !arg.startsWith("--webrtc-ip-handling-policy=")
+    !arg.startsWith(FORCE_WEBRTC_IP_HANDLING_POLICY_PREFIX)
+    && !arg.startsWith(WEBRTC_IP_HANDLING_POLICY_PREFIX)
     && arg !== "--enable-async-dns"
   );
   if (!hardened.includes(WEBRTC_PERMISSION_CHECK)) hardened.push(WEBRTC_PERMISSION_CHECK);
-  hardened.push(FORCE_WEBRTC_IP_HANDLING_POLICY, WEBRTC_IP_HANDLING_POLICY);
+  hardened.push(webRtcPolicyArg(config.headless === true));
 
-  // Modern Chromium replaced the old dns-prefetch switch with NetworkPrediction.
-  // Disable speculative network prediction, Secure DNS/DoH and the built-in async
-  // DNS client for explicit proxy sessions.
   hardened = mergeDisabledFeatures(hardened, PROXY_DISABLED_FEATURES);
   if (!hardened.includes(DISABLE_ASYNC_DNS)) hardened.push(DISABLE_ASYNC_DNS);
 
-  // With no explicit bypass, block every local hostname resolution except the
-  // proxy endpoint itself. HTTP(S) proxies receive destination hostnames directly;
-  // Chromium SOCKS5 always performs destination name resolution proxy-side.
   const resolverRule = strictHostResolverRule(config.proxy);
   if (resolverRule) {
     hardened = hardened.filter(arg => !arg.startsWith(HOST_RESOLVER_RULES_PREFIX));
@@ -138,7 +134,6 @@ export async function launchBrowserContext(config: BrowserContextConfig): Promis
         ...launchOptions
       });
     } catch (channelError) {
-      // Fallback to default chromium if Google Chrome channel executable is missing
       context = await chromium.launchPersistentContext(config.userDataDir, launchOptions);
     }
 
