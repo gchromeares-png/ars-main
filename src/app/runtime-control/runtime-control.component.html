@@ -54,6 +54,66 @@
     </div>
   </div>
 
+  <div class="runtime-command-bar">
+    <div class="runtime-command-copy">
+      <small>TASK BULK CONTROL</small>
+      <strong>Alle Tasks zentral steuern</strong>
+      <p>Start sendet alle aktuell QUEUED Tasks gleichzeitig. Stop beendet alle laufenden, pausierten und wartenden Tasks.</p>
+    </div>
+    <div class="runtime-command-metrics">
+      <div class="purchase-metric"><span>STARTBEREIT</span><strong>{{ startableTasks.length }}</strong></div>
+      <div class="purchase-metric"><span>STOPPBAR</span><strong>{{ stoppableTasks.length }}</strong></div>
+    </div>
+    <div class="runtime-command-actions">
+      <button type="button" class="runtime-btn start-all" [disabled]="bulkStarting || !startableTasks.length" (click)="startAllTasks()">
+        {{ bulkStarting ? 'START…' : 'ALLE STARTEN' }}
+      </button>
+      <button type="button" class="runtime-btn danger" [disabled]="bulkStopping || !stoppableTasks.length" (click)="stopAllTasks()">
+        {{ bulkStopping ? 'STOP…' : 'ALLE STOPPEN' }}
+      </button>
+    </div>
+  </div>
+
+  <div class="profile-browser-panel">
+    <div class="profile-browser-head">
+      <div>
+        <small>PROFILE BROWSER SESSIONS</small>
+        <strong>Persistente Browser pro ARES-Profil</strong>
+        <p>Cookies, Login und Browserzustand bleiben am Profil. Eine aktive Session belegt ihr Profil exklusiv und kann nicht parallel von einem zweiten Browser genutzt werden.</p>
+      </div>
+      <div class="purchase-metric"><span>OFFEN</span><strong>{{ openProfileBrowserCount }}</strong></div>
+    </div>
+
+    <div class="profile-browser-empty" *ngIf="!profiles.length">Noch keine Profile gespeichert.</div>
+    <div class="profile-browser-list" *ngIf="profiles.length">
+      <div class="profile-browser-row" *ngFor="let profile of profiles" [class.open]="isProfileBrowserOpen(profile.id)">
+        <div class="profile-browser-state"><span class="health-dot" [class.ready]="isProfileBrowserOpen(profile.id)"></span></div>
+        <div class="profile-browser-copy">
+          <strong>{{ profile.name || profile.id }}</strong>
+          <small>{{ profile.id }} · {{ profileBrowserDetails(profile.id) }}</small>
+        </div>
+        <div class="profile-browser-actions">
+          <button
+            type="button"
+            class="runtime-btn start-all"
+            *ngIf="!isProfileBrowserOpen(profile.id)"
+            [disabled]="profileBrowserBusyIds.has(profile.id)"
+            (click)="openProfileBrowser(profile)">
+            {{ profileBrowserBusyIds.has(profile.id) ? 'ÖFFNET…' : 'BROWSER ÖFFNEN' }}
+          </button>
+          <button
+            type="button"
+            class="runtime-btn danger"
+            *ngIf="isProfileBrowserOpen(profile.id)"
+            [disabled]="profileBrowserBusyIds.has(profile.id)"
+            (click)="closeProfileBrowser(profile)">
+            {{ profileBrowserBusyIds.has(profile.id) ? 'SCHLIESST…' : 'BROWSER SCHLIESSEN' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="runtime-grid">
     <article class="runtime-card watchdog-card">
       <div class="card-title-row">
