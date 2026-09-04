@@ -3,7 +3,8 @@ import { targetKey, type SemanticTarget } from "./semantic-target";
 export type SemanticCheckoutBillingMode =
   | "explicit-billing"
   | "same-as-shipping"
-  | "separate-billing-fields";
+  | "separate-billing-fields"
+  | "unknown";
 
 export type SemanticCheckoutTraceResult =
   | "filled"
