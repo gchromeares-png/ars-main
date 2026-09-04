@@ -35,11 +35,11 @@ describe("Shopify payment preparation", () => {
     expect(result.selectedMethod).toBeUndefined();
   });
 
-  it("selects card by radio and fills canonical card autofill fields", async () => {
+  it("selects card by radio and fills the existing checkout card fields", async () => {
     const clicked: string[] = [];
     const filled: Record<string, string> = {};
     const pan = Array.from({ length: 16 }, () => "4").join("");
-    const cvc = ["1", "2", "3"].join("");
+    const securityCode = ["1", "2", "3"].join("");
 
     const mainFrame: any = {
       locator: (selector: string) => {
@@ -57,10 +57,10 @@ describe("Shopify payment preparation", () => {
       locator: (selector: string) => {
         if (selector === "body") return locator({ visible: true, text: "" });
         const mapping: Array<[string, string]> = [
-          ['cc-name', "cardholderName"],
+          ['cc-name', "holderName"],
           ['cc-number', "cardNumber"],
           ['cc-exp', "expiry"],
-          ['cc-csc', "cvc"]
+          ['cc-csc', "securityCode"]
         ];
         const match = mapping.find(([needle]) => selector.includes(needle));
         return match
@@ -74,24 +74,22 @@ describe("Shopify payment preparation", () => {
     const result = await new ShopifyPaymentPreparer().prepare(page, {
       method: "card",
       card: {
-        cardholderName: "Test Holder",
+        holderName: "Test Holder",
         cardNumber: pan,
-        expiryMonth: "12",
-        expiryYear: "2030",
         expiry: "12/30",
-        cvc
+        securityCode
       }
     });
 
     expect(clicked).toEqual(["card-radio"]);
     expect(result.selectedMethod).toBe("card");
     expect(result.missingFields).toEqual([]);
-    expect(result.filledFields).toEqual(expect.arrayContaining(["cardholderName", "cardNumber", "expiry", "cvc"]));
+    expect(result.filledFields).toEqual(expect.arrayContaining(["holderName", "cardNumber", "expiry", "securityCode"]));
     expect(filled).toEqual({
-      cardholderName: "Test Holder",
+      holderName: "Test Holder",
       cardNumber: pan,
       expiry: "12/30",
-      cvc
+      securityCode
     });
     expect(result.requiresUserAction).toBe(true);
   });
