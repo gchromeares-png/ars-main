@@ -69,7 +69,7 @@ export function toProfileV2Draft(profile?: AresProfile): ProfileV2Draft {
       billingAddress: emptyAddressProfile(),
       billingSameAsShipping: true,
       preferredProxyId: "",
-      browser: { headless: false, userAgent: "" },
+      browser: { headless: false, userAgent: "", kiAutofill: true },
       paymentPreference: { method: "card", label: "" }
     };
   }
@@ -81,7 +81,7 @@ export function toProfileV2Draft(profile?: AresProfile): ProfileV2Draft {
     contact: { ...profile.contact },
     proxy: profile.proxy ? { ...profile.proxy } : undefined,
     preferredProxyId: profile.preferredProxyId,
-    browser: { ...(profile.browser ?? {}) },
+    browser: { ...(profile.browser ?? {}), kiAutofill: profile.browser?.kiAutofill !== false },
     paymentPreference: { ...(profile.paymentPreference ?? {}) },
     shippingAddress,
     billingAddress: cloneAddress(profile.billingAddress, shippingAddress),
@@ -114,7 +114,7 @@ export function toPersistedAresProfile(draft: ProfileV2Draft): AresProfile {
     billingAddress: billingAddress ? { ...billingAddress } : undefined,
     proxy: draft.proxy ? { ...draft.proxy } : undefined,
     preferredProxyId: draft.preferredProxyId || undefined,
-    browser: { ...(draft.browser ?? {}) },
+    browser: { ...(draft.browser ?? {}), kiAutofill: draft.browser?.kiAutofill !== false },
     paymentPreference: draft.paymentPreference
       ? {
           method: draft.paymentPreference.method,
