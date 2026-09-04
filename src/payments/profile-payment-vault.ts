@@ -7,7 +7,6 @@ export interface ProfileCardAutofill {
   cardNumber: string;
   expiryMonth: string;
   expiryYear: string;
-  expiry: string;
   securityCode: string;
 }
 
@@ -82,7 +81,7 @@ function normalizeSecurityCode(value: string): string {
   return digits;
 }
 
-function toExpiry(month: string, year: string): string {
+function materializeExpiry(month: string, year: string): string {
   return `${month}/${year.slice(-2)}`;
 }
 
@@ -141,7 +140,6 @@ export class ProfilePaymentVault {
       cardNumber,
       expiryMonth,
       expiryYear,
-      expiry: toExpiry(expiryMonth, expiryYear),
       securityCode
     };
     const updatedAt = new Date().toISOString();
@@ -176,7 +174,7 @@ export class ProfilePaymentVault {
     session.card = {
       holderName: secret.holderName,
       cardNumber: secret.cardNumber,
-      expiry: secret.expiry,
+      expiry: materializeExpiry(secret.expiryMonth, secret.expiryYear),
       securityCode: secret.securityCode
     };
     return session;
@@ -212,7 +210,6 @@ export class ProfilePaymentVault {
       cardNumber: String(parsed.cardNumber),
       expiryMonth: String(parsed.expiryMonth),
       expiryYear: String(parsed.expiryYear),
-      expiry: String(parsed.expiry || toExpiry(String(parsed.expiryMonth), String(parsed.expiryYear))),
       securityCode: String(parsed.securityCode)
     };
   }
