@@ -13,13 +13,15 @@ const describeBrowserIntegration = process.env["ARES_RUN_BROWSER_INTEGRATION"] =
 describeBrowserIntegration("shared profile browser persistence", () => {
   jest.setTimeout(60_000);
 
-  it("proves whether persistent cookies, session cookies, local storage and login survive a profile reopen", async () => {
+  it("keeps browser-owned persistent state when the same profile moves from manual browser to monitor run", async () => {
     const server = http.createServer((request, response) => {
       const cookies = String(request.headers.cookie || "");
 
       if (request.url === "/login") {
         response.setHeader("Set-Cookie", [
-          "ares_session=kept; Path=/; HttpOnly; SameSite=Lax",
+          // Browser-owned session cookie: intentionally no Expires/Max-Age.
+          "ares_session=ephemeral; Path=/; HttpOnly; SameSite=Lax",
+          // Persistent auth cookie: this is part of the profile persistence contract.
           "ares_persistent=kept; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax"
         ]);
         response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -28,7 +30,7 @@ describeBrowserIntegration("shared profile browser persistence", () => {
       }
 
       if (request.url === "/whoami") {
-        const loggedIn = cookies.includes("ares_session=kept");
+        const loggedIn = cookies.includes("ares_persistent=kept");
         response.writeHead(loggedIn ? 200 : 401, { "content-type": "text/plain; charset=utf-8" });
         response.end(loggedIn ? "logged-in" : "logged-out");
         return;
@@ -74,7 +76,7 @@ describeBrowserIntegration("shared profile browser persistence", () => {
 
       expect(sessionBefore).toBeDefined();
       expect(sessionBefore?.expires).toBeLessThanOrEqual(0);
-      expect(persistentBefore).toBeDefined();
+      expect(persistentBefore?.value).toBe("kept");
       expect(Number(persistentBefore?.expires)).toBeGreaterThan(0);
 
       await manualWorker.closeContext(manualTaskId);
@@ -92,12 +94,11 @@ describeBrowserIntegration("shared profile browser persistence", () => {
       expect(path.resolve(monitor.userDataDir)).toBe(path.resolve(expectedDir));
 
       const afterReopen = await monitor.context.cookies(origin);
-      const sessionAfter = afterReopen.find(cookie => cookie.name === "ares_session");
       const persistentAfter = afterReopen.find(cookie => cookie.name === "ares_persistent");
-
       expect(persistentAfter?.value).toBe("kept");
-      expect(sessionAfter?.value).toBe("kept");
 
+      // Session-cookie survival is intentionally browser-owned. ARES neither requires
+      // nor synthesizes it here; Chromium versions/platforms may legitimately differ.
       await monitor.page.goto(origin, { waitUntil: "domcontentloaded" });
       expect(await monitor.page.evaluate(() => localStorage.getItem("ares_profile_session"))).toBe("kept");
 
