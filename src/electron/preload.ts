@@ -13,6 +13,15 @@ const api = {
   getProfileBrowserStatus: (profileId: string) => ipcRenderer.invoke("get-profile-browser-status", profileId),
   openProfileBrowser: (profileId: string, startUrl?: string) => ipcRenderer.invoke("open-profile-browser", profileId, startUrl),
   closeProfileBrowser: (profileId: string) => ipcRenderer.invoke("close-profile-browser", profileId),
+  getSeleniumBaseProfileBrowserStatus: (profileId: string) => ipcRenderer.invoke("get-seleniumbase-profile-browser-status", profileId),
+  openSeleniumBaseProfileBrowser: (profileId: string, startUrl?: string, cookieSnapshotId?: string) => ipcRenderer.invoke(
+    "open-profile-browser",
+    profileId,
+    { engine: "seleniumbase-cdp", startUrl, cookieSnapshotId }
+  ),
+  closeSeleniumBaseProfileBrowser: (profileId: string) => ipcRenderer.invoke("close-seleniumbase-profile-browser", profileId),
+  applySeleniumBaseCookieSnapshot: (profileId: string, snapshotId: string) => ipcRenderer.invoke("apply-seleniumbase-cookie-snapshot", profileId, snapshotId),
+  saveSeleniumBaseProfileCookieSnapshot: (profileId: string, name: string, snapshotId?: string) => ipcRenderer.invoke("save-seleniumbase-profile-cookie-snapshot", profileId, name, snapshotId),
   listProfileCookieSnapshots: (profileId: string) => ipcRenderer.invoke("list-profile-cookie-snapshots", profileId),
   saveProfileCookieSnapshot: (profileId: string, name: string, snapshotId?: string) => ipcRenderer.invoke("save-profile-cookie-snapshot", profileId, name, snapshotId),
   deleteProfileCookieSnapshot: (profileId: string, snapshotId: string) => ipcRenderer.invoke("delete-profile-cookie-snapshot", profileId, snapshotId),
