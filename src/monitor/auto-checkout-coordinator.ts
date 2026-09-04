@@ -2,6 +2,7 @@ import type { Task, TaskConfig } from "../models";
 import type { TaskOrchestrator } from "../orchestrator";
 import type { CheckoutPaymentSession } from "../payments/models";
 import type { ProxySelection } from "../proxies/models";
+import { getMonitorStrategy, setEarlyGateRuntime, type PreCheckoutGateEvent } from "./early-gate";
 import type { ProductMonitorEvent } from "./models";
 
 export interface AutoCheckoutActionConfig {
@@ -33,6 +34,7 @@ export interface AutoCheckoutCoordinatorOptions {
   getPaymentSession?: (taskId: string) => CheckoutPaymentSession | undefined;
   setPaymentSession?: (taskId: string, session: CheckoutPaymentSession) => void;
   onTriggered?: (parent: Task, child: Task, event: ProductMonitorEvent) => void;
+  onGateTriggered?: (parent: Task, child: Task, event: PreCheckoutGateEvent) => void;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -100,6 +102,7 @@ export class MonitorAutoCheckoutCoordinator {
           profileId: action.profileId,
           proxySelection: action.proxySelection ?? { mode: "profile-default" },
           triggerSource: {
+            kind: "product",
             parentTaskId: parent.id,
             eventType: event.type,
             productKey: event.key,
@@ -113,24 +116,13 @@ export class MonitorAutoCheckoutCoordinator {
       };
 
       const child = this.orchestrator.createTask(childConfig);
-
-      const paymentSession = action.paymentEnabled
-        ? this.options.getPaymentSession?.(parent.id)
-        : undefined;
-      if (paymentSession) {
-        this.options.setPaymentSession?.(child.id, {
-          ...paymentSession,
-          card: paymentSession.card ? { ...paymentSession.card } : undefined
-        });
-      }
+      this.copyPaymentSession(parent, child, action);
 
       parent.config.data = {
         ...(parent.config.data ?? {}),
         autoCheckoutRuntime: this.runtimeStatus("triggered", event, triggeredAt, child.id)
       };
 
-      // Stop the one-shot monitor first. This frees its orchestrator slot; the child
-      // starts immediately or is queued until that slot is released.
       this.orchestrator.cancelTask(parent.id);
       void this.orchestrator.startTask(child.id);
       this.options.onTriggered?.(parent, child, event);
@@ -141,6 +133,100 @@ export class MonitorAutoCheckoutCoordinator {
       this.triggeredParents.delete(parent.id);
       return undefined;
     }
+  }
+
+  async handleGateEvent(parentTaskId: string, event: PreCheckoutGateEvent): Promise<Task | undefined> {
+    const parent = this.orchestrator.getTask(parentTaskId);
+    if (!parent || this.triggeredParents.has(parent.id)) return undefined;
+    const strategy = getMonitorStrategy(parent);
+    if (strategy.mode !== "early-gate") return undefined;
+
+    const action = getMonitorAction(parent);
+    if (action.mode !== "auto-checkout" || !action.profileId) {
+      parent.lastError = "Early-Gate benötigt eine Auto-Checkout-Session mit Profil.";
+      return undefined;
+    }
+
+    const runtime = asRecord(parent.config.data?.["earlyGateRuntime"]);
+    if (runtime?.["childTaskId"]) return undefined;
+
+    this.triggeredParents.add(parent.id);
+    const childTaskId = `${parent.id}__gate_${Date.now()}`;
+    const observedAt = event.observedAt.toISOString();
+    const flowId = `early-gate:${parent.id}`;
+
+    try {
+      const childConfig: TaskConfig = {
+        id: childTaskId,
+        name: `${parent.config.name} · Release`,
+        shopId: parent.config.shopId,
+        maxRetries: parent.config.maxRetries,
+        data: {
+          browserConfig: {
+            headless: action.headless ?? false,
+            queueMaxWaitMs: 60 * 60_000
+          },
+          profileId: action.profileId,
+          proxySelection: action.proxySelection ?? { mode: "profile-default" },
+          triggerSource: {
+            kind: "early-gate",
+            parentTaskId: parent.id,
+            gateType: event.type,
+            gateSource: event.source,
+            observedAt
+          },
+          postQueueDiscovery: {
+            productName: strategy.productName,
+            keywords: [...strategy.discoveryKeywords]
+          }
+        }
+      };
+
+      const child = this.orchestrator.createTask(childConfig);
+      setEarlyGateRuntime(parent, {
+        flowId,
+        activeArea: "browser-child",
+        stage: "gate-detected",
+        childTaskId: child.id,
+        gateDetectedAt: observedAt
+      });
+      setEarlyGateRuntime(child, {
+        flowId,
+        activeArea: "browser-child",
+        stage: "browser-child",
+        parentTaskId: parent.id,
+        childTaskId: child.id,
+        productName: strategy.productName,
+        keywords: strategy.discoveryKeywords,
+        gateDetectedAt: observedAt,
+        browserChildStartedAt: new Date().toISOString()
+      });
+      child.config.data = {
+        ...(child.config.data ?? {}),
+        earlyGateRuntime: child.config.data?.["earlyGateRuntime"]
+      };
+      this.copyPaymentSession(parent, child, action);
+
+      this.orchestrator.cancelTask(parent.id);
+      void this.orchestrator.startTask(child.id);
+      this.options.onGateTriggered?.(parent, child, event);
+      return child;
+    } catch (error) {
+      this.triggeredParents.delete(parent.id);
+      parent.lastError = error instanceof Error ? error.message : String(error);
+      return undefined;
+    }
+  }
+
+  private copyPaymentSession(parent: Task, child: Task, action: AutoCheckoutActionConfig): void {
+    const paymentSession = action.paymentEnabled
+      ? this.options.getPaymentSession?.(parent.id)
+      : undefined;
+    if (!paymentSession) return;
+    this.options.setPaymentSession?.(child.id, {
+      ...paymentSession,
+      card: paymentSession.card ? { ...paymentSession.card } : undefined
+    });
   }
 
   private markFailed(parent: Task, event: ProductMonitorEvent, error: string, triggeredAt = new Date().toISOString()): void {
