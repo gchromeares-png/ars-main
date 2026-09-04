@@ -47,7 +47,7 @@
           <div class="hero-copy">
             <div class="eyebrow">MISSION CONTROL</div>
             <h2>Monitoring und Checkout in einem Workflow.</h2>
-            <p>Ein Task beobachtet ein Produkt. Optional startet ARES beim ersten verfügbaren Treffer automatisch genau eine isolierte Checkout-Session — ohne den finalen Bestellbutton zu drücken.</p>
+            <p>ARES kann normal auf Produktverfügbarkeit warten oder über Early Gate früh einen Browser-Child starten. Der finale Kauf ist im Backend nach jedem Start standardmäßig AUS und wird nur global freigegeben.</p>
           </div>
           <div class="hero-badge"><span>RUNTIME</span><strong>{{ system.availableWorkers }} Slots</strong><small>Watchdog + Queue Recovery aktiv</small></div>
         </section>
@@ -55,14 +55,14 @@
         <section class="stats-grid">
           <article class="stat-card"><span>TASKS</span><strong>{{ tasks.length }}</strong><small>gesamt persistiert</small></article>
           <article class="stat-card"><span>MONITOR ONLY</span><strong>{{ monitorOnlyTasks.length }}</strong><small>nur beobachten</small></article>
-          <article class="stat-card"><span>AUTO CHECKOUT</span><strong>{{ autoCheckoutTasks.length }}</strong><small>Trigger bei Verfügbarkeit</small></article>
+          <article class="stat-card"><span>AUTO CHECKOUT</span><strong>{{ autoCheckoutTasks.length }}</strong><small>inkl. Early Gate</small></article>
           <article class="stat-card"><span>CHECKOUT RUNS</span><strong>{{ checkoutRuns.length }}</strong><small>automatisch erzeugt</small></article>
           <article class="stat-card"><span>PROFILE</span><strong>{{ profiles.length }}</strong><small>Checkout-Profile</small></article>
           <article class="stat-card"><span>PROXYS</span><strong>{{ proxies.length }}</strong><small>Proxy Vault</small></article>
         </section>
 
         <section class="quick-actions">
-          <button (click)="setTab('tasks')"><strong>Neuen Task anlegen</strong><small>Monitor oder Auto-Checkout</small></button>
+          <button (click)="setTab('tasks')"><strong>Neuen Task anlegen</strong><small>Produktmonitor oder Early Gate</small></button>
           <button (click)="setTab('profiles')"><strong>Profil verwalten</strong><small>Kontakt, Adresse, Zahlung</small></button>
           <button (click)="setTab('proxies')"><strong>Proxy verwalten</strong><small>Vault + Session-Zuordnung</small></button>
           <button (click)="setTab('shops')"><strong>Shop registrieren</strong><small>Plattform + Basis-URL</small></button>
@@ -74,32 +74,56 @@
       <ng-container *ngIf="activeTab === 'tasks'">
         <section class="section-heading">
           <div><div class="eyebrow">TASK CONTROL</div><h2>Task erstellen</h2></div>
-          <p>Du entscheidest nur, was bei einem Treffer passieren soll. ARES kümmert sich intern um Monitor und — falls gewählt — den separaten Checkout-Run.</p>
+          <p>Normaler Produktmonitor und Early Gate nutzen denselben Monitor-/Coordinator-/Orchestrator-Stack. Angular konfiguriert und visualisiert nur.</p>
         </section>
 
-        <section class="panel task-builder">
-          <div class="panel-header"><div><div class="eyebrow">1 · VERHALTEN</div><h3>Was soll ARES tun?</h3></div></div>
-          <div class="mode-selector">
-            <button type="button" [class.active]="taskMode === 'monitor-only'" (click)="taskMode = 'monitor-only'">
-              <span class="mode-icon">◎</span><strong>Nur überwachen</strong><small>Produktänderungen beobachten und protokollieren. Kein Browser nötig.</small>
+        <app-runtime-control [system]="system" [tasks]="tasks"></app-runtime-control>
+
+        <section class="panel task-builder command-panel">
+          <div class="panel-header"><div><div class="eyebrow">1 · TRIGGER STRATEGY</div><h3>Wie soll ARES starten?</h3></div><span class="security-chip">SAME BACKEND</span></div>
+          <div class="mode-selector strategy-selector">
+            <button type="button" [class.active]="monitorStrategyMode === 'product-monitor'" (click)="setMonitorStrategy('product-monitor')">
+              <span class="mode-icon">◎</span><strong>Normaler Produktmonitor</strong><small>Produktdaten beobachten; optional bei Verfügbarkeit einen Browser-Checkout starten.</small>
             </button>
-            <button type="button" [class.active]="taskMode === 'auto-checkout'" (click)="taskMode = 'auto-checkout'">
-              <span class="mode-icon">⚡</span><strong>Bei Treffer Checkout vorbereiten</strong><small>Bei Verfügbarkeit automatisch eine eigene Browser-Session bis zum vorbereiteten Checkout starten.</small>
+            <button type="button" [class.active]="monitorStrategyMode === 'early-gate'" (click)="setMonitorStrategy('early-gate')">
+              <span class="mode-icon">◈</span><strong>Early Gate</strong><small>Passives Gate-/Queue-Signal erkennen und erst danach genau einen Browser-Child starten.</small>
             </button>
           </div>
 
+          <ng-container *ngIf="monitorStrategyMode === 'product-monitor'">
+            <div class="builder-divider"></div>
+            <div class="panel-header"><div><div class="eyebrow">2 · ACTION</div><h3>Was soll beim Produkt-Treffer passieren?</h3></div></div>
+            <div class="mode-selector">
+              <button type="button" [class.active]="taskMode === 'monitor-only'" (click)="taskMode = 'monitor-only'">
+                <span class="mode-icon">◎</span><strong>Nur überwachen</strong><small>Produktänderungen beobachten und protokollieren. Kein Browser nötig.</small>
+              </button>
+              <button type="button" [class.active]="taskMode === 'auto-checkout'" (click)="taskMode = 'auto-checkout'">
+                <span class="mode-icon">⚡</span><strong>Bei Treffer Checkout vorbereiten</strong><small>Bei Verfügbarkeit genau eine isolierte Browser-Session starten.</small>
+              </button>
+            </div>
+          </ng-container>
+
           <div class="builder-divider"></div>
-          <div class="panel-header"><div><div class="eyebrow">2 · PRODUKT</div><h3>Monitoring konfigurieren</h3></div></div>
+          <div class="panel-header"><div><div class="eyebrow">{{ monitorStrategyMode === 'early-gate' ? '2' : '3' }} · PRODUCT</div><h3>{{ monitorStrategyMode === 'early-gate' ? 'Release Discovery konfigurieren' : 'Monitoring konfigurieren' }}</h3></div></div>
           <div class="form-grid">
-            <label><span>Task-Name</span><input [(ngModel)]="taskName" placeholder="z. B. Pokémon Restock"></label>
+            <label><span>Task-Name</span><input [(ngModel)]="taskName" placeholder="z. B. Pokémon Drop"></label>
             <label><span>Shop</span><select [(ngModel)]="selectedShopId"><option value="">Shop auswählen</option><option *ngFor="let shop of shops; trackBy: trackShop" [value]="shop.id">{{ shop.name }} · {{ getPlatformLabel(shop.platform) }}</option></select></label>
-            <label class="wide"><span>Produkt / Keyword / Produkt-URL</span><input [(ngModel)]="searchTerm" placeholder="z. B. Pokemon 151 Booster Bundle"></label>
+            <label class="wide" *ngIf="monitorStrategyMode === 'product-monitor'"><span>Produkt / Keyword / Produkt-URL</span><input [(ngModel)]="searchTerm" placeholder="z. B. Pokemon 151 Booster Bundle"></label>
+            <label class="wide" *ngIf="monitorStrategyMode === 'early-gate'"><span>Produktname</span><input [(ngModel)]="earlyGateProductName" placeholder="z. B. Pokémon Center Elite Trainer Box"></label>
             <label><span>Prüfintervall in Sekunden</span><input [(ngModel)]="taskIntervalSeconds" type="number" min="1" step="1"></label>
           </div>
 
-          <ng-container *ngIf="taskMode === 'auto-checkout'">
+          <div class="keyword-builder" *ngIf="monitorStrategyMode === 'early-gate'">
+            <div class="keyword-builder-head"><div><strong>Discovery-Keywords</strong><small>Mehrere Begriffe. Während POST_QUEUE_DISCOVERY später live änderbar.</small></div><span class="count-chip">{{ discoveryKeywords.length }}</span></div>
+            <div class="keyword-chips" *ngIf="discoveryKeywords.length">
+              <span class="keyword-chip" *ngFor="let keyword of discoveryKeywords">{{ keyword }}<button type="button" (click)="removeDiscoveryKeyword(keyword)" aria-label="Keyword entfernen">×</button></span>
+            </div>
+            <div class="keyword-input-row"><input [(ngModel)]="newDiscoveryKeyword" (keyup.enter)="addDiscoveryKeyword()" placeholder="Keyword hinzufügen"><button type="button" class="btn btn-small btn-secondary" (click)="addDiscoveryKeyword()">Hinzufügen</button></div>
+          </div>
+
+          <ng-container *ngIf="taskNeedsCheckoutSession">
             <div class="builder-divider"></div>
-            <div class="panel-header"><div><div class="eyebrow">3 · CHECKOUT SESSION</div><h3>Profil & Session-Zuordnung</h3></div><span class="security-chip">ONE-SHOT</span></div>
+            <div class="panel-header"><div><div class="eyebrow">{{ monitorStrategyMode === 'early-gate' ? '3' : '4' }} · CHECKOUT SESSION</div><h3>Profil & Session-Zuordnung</h3></div><span class="security-chip">ONE CHILD</span></div>
             <div class="form-grid">
               <label><span>Profil</span><select [(ngModel)]="selectedProfileId" (ngModelChange)="syncProfileDefaults()"><option value="">Profil auswählen</option><option *ngFor="let profile of profiles" [value]="profile.id">{{ profile.name }} — {{ profile.contact.firstName }} {{ profile.contact.lastName }}</option></select><small *ngIf="!profiles.length">Unter Profiles zuerst ein Profil speichern.</small></label>
               <label><span>Proxy-Zuordnung</span><select [(ngModel)]="taskProxyMode"><option value="profile-default">Profilstandard verwenden</option><option value="direct">Direkt / kein Proxy</option><option value="proxy">Bestimmten Proxy verwenden</option></select></label>
@@ -111,12 +135,12 @@
             <div class="assignment-preview">
               <div><span>Profil</span><strong>{{ selectedProfileId || 'nicht gewählt' }}</strong></div>
               <div><span>Proxy</span><strong>{{ taskProxyMode === 'direct' ? 'Direkt' : taskProxyMode === 'proxy' ? (selectedTaskProxyId ? getProxyName(selectedTaskProxyId) : 'Proxy fehlt') : 'Profilstandard' }}</strong></div>
-              <div><span>Session</span><strong>einzigartig pro Checkout-Run</strong></div>
-              <div><span>Finaler Kauf</span><strong>manuell</strong></div>
+              <div><span>Session</span><strong>genau ein Browser-Child</strong></div>
+              <div><span>Finaler Kauf</span><strong>{{ system.allowFinalPurchase ? 'GLOBAL AN' : 'GLOBAL AUS' }}</strong></div>
             </div>
 
             <div class="payment-session" *ngIf="taskPaymentEnabled">
-              <div class="payment-session-head"><div><strong>Session-Zahlung</strong><small>Nur RAM · wird beim Treffer an den erzeugten Checkout-Run kopiert und danach verworfen.</small></div><span class="security-chip">NICHT PERSISTIERT</span></div>
+              <div class="payment-session-head"><div><strong>Session-Zahlung</strong><small>Nur RAM · wird beim Trigger an den erzeugten Browser-Child kopiert und danach verworfen.</small></div><span class="security-chip">NICHT PERSISTIERT</span></div>
               <div class="form-grid">
                 <label><span>Zahlungsart</span><select [(ngModel)]="taskPaymentMethod"><option value="card">Karte</option><option value="paypal">PayPal</option><option value="shop-pay">Shop Pay</option><option value="klarna">Klarna</option><option value="other">Andere</option></select></label>
                 <label><span>Bezeichnung / bevorzugter Text</span><input [(ngModel)]="taskPaymentLabel" placeholder="optional, z. B. PayPal"></label>
@@ -127,26 +151,50 @@
                 <label><span>Ablaufdatum</span><input [(ngModel)]="sessionCardExpiry" placeholder="MM/YY" autocomplete="off"></label>
                 <label><span>CVV / CVC</span><input [(ngModel)]="sessionCardSecurityCode" type="password" inputmode="numeric" autocomplete="off"></label>
               </div>
-              <p class="security-note">ARES darf Zahlungsart und sichtbare Felder vorbereiten. Externe Freigaben, 3-D-Secure und der finale Bezahlen/Bestellen-Button bleiben manuell.</p>
+              <p class="security-note">ARES darf Zahlungsart und sichtbare Felder vorbereiten. Der finale Submit ist zusätzlich durch den globalen Backend-Guard geschützt; nach jedem App-Start ist er AUS.</p>
             </div>
           </ng-container>
 
-          <div class="primary-action-row"><button class="btn btn-primary" (click)="createTask()">{{ taskMode === 'auto-checkout' ? 'Auto-Checkout-Task erstellen' : 'Monitoring-Task erstellen' }}</button></div>
+          <div class="primary-action-row"><button class="btn btn-primary" (click)="createTask()">{{ monitorStrategyMode === 'early-gate' ? 'Early-Gate-Task erstellen' : taskMode === 'auto-checkout' ? 'Auto-Checkout-Task erstellen' : 'Monitoring-Task erstellen' }}</button></div>
         </section>
 
         <section class="panel task-panel">
-          <div class="panel-header"><div><div class="eyebrow">TASK HISTORY</div><h3>Tasks & Checkout-Runs</h3></div><span class="count-chip">{{ tasks.length }}</span></div>
+          <div class="panel-header"><div><div class="eyebrow">TASK HISTORY</div><h3>Tasks & Browser-Children</h3></div><span class="count-chip">{{ tasks.length }}</span></div>
           <div class="empty-state" *ngIf="!tasks.length">Noch keine Tasks vorhanden.</div>
 
-          <article class="task-row" *ngFor="let task of tasks; trackBy: trackTask">
+          <article class="task-row" *ngFor="let task of tasks; trackBy: trackTask" [class.early-gate-row]="isEarlyGateFlowTask(task)">
             <div class="task-name-block">
               <div class="task-title-line"><span class="kind-chip" [class.monitor]="isMonitorTask(task)">{{ getTaskKind(task) }}</span><strong>{{ task.config.name }}</strong></div>
               <small>{{ task.config.shopId || 'kein Shop' }} · Profil: {{ getTaskProfileName(task) }}</small>
               <small>Proxy: {{ getTaskProxyStatus(task) }}</small>
-              <small *ngIf="getTaskParentId(task)">Ausgelöst von: {{ getTaskParentId(task) }}</small>
+              <small *ngIf="isEarlyGateFlowTask(task)">Aktiver Bereich: <strong>{{ getActiveArea(task) }}</strong></small>
+              <small *ngIf="getTaskParentId(task)">Parent-Monitor: {{ getTaskParentId(task) }}</small>
+              <small *ngIf="getTaskChildId(task)">Browser-Child: {{ getTaskChildId(task) }}</small>
               <small class="task-error" *ngIf="task.lastError">{{ task.lastError }}</small>
 
               <div class="runtime-detail automation-detail" *ngIf="isAutoCheckoutTask(task)"><strong>Automation</strong><span>{{ getTaskAutomationStatus(task) }}</span></div>
+
+              <div class="early-gate-runtime" *ngIf="isEarlyGateFlowTask(task)">
+                <div class="flow-timeline" aria-label="Early-Gate-Flow">
+                  <div class="flow-step" *ngFor="let step of earlyGateFlowSteps" [class.done]="getFlowStepState(task, step.key) === 'done'" [class.active]="getFlowStepState(task, step.key) === 'active'">
+                    <span class="flow-dot"></span><small>{{ step.label }}</small>
+                  </div>
+                </div>
+
+                <div class="queue-inline" *ngIf="task.state === 'WAITING_QUEUE'">
+                  <div><span>POS</span><strong>{{ getTaskQueuePosition(task) }}</strong></div>
+                  <div><span>TTW</span><strong>{{ getTaskQueueWait(task) }}</strong></div>
+                </div>
+
+                <div class="live-keywords" *ngIf="isEarlyGateChildTask(task)">
+                  <div class="keyword-builder-head"><div><strong>Aktive Discovery-Keywords</strong><small>{{ isLiveKeywordEditable(task) ? 'Live editierbar · Backend bestätigt den aktiven Satz.' : 'Aktueller Backend-Stand' }}</small></div><span class="count-chip">{{ getActiveDiscoveryKeywords(task).length }}</span></div>
+                  <div class="keyword-chips" *ngIf="getActiveDiscoveryKeywords(task).length">
+                    <span class="keyword-chip" *ngFor="let keyword of getActiveDiscoveryKeywords(task)">{{ keyword }}<button type="button" *ngIf="isLiveKeywordEditable(task)" (click)="removeLiveDiscoveryKeyword(task, keyword)" aria-label="Aktives Keyword entfernen">×</button></span>
+                  </div>
+                  <div class="keyword-input-row" *ngIf="isLiveKeywordEditable(task)"><input [(ngModel)]="liveKeywordDrafts[task.id]" (keyup.enter)="addLiveDiscoveryKeyword(task)" placeholder="Keyword während Release hinzufügen"><button type="button" class="btn btn-small btn-secondary" (click)="addLiveDiscoveryKeyword(task)">Übernehmen</button></div>
+                </div>
+              </div>
+
               <div class="runtime-detail" *ngIf="!isMonitorTask(task)"><strong>Challenge</strong><span>{{ getTaskCaptchaStatus(task) }}</span><small *ngIf="getTaskChallengeType(task)">Typ: {{ getTaskChallengeType(task) }}</small></div>
               <div class="runtime-detail payment-detail" *ngIf="!isMonitorOnlyTask(task)"><strong>Zahlung</strong><span>{{ getTaskPaymentStatus(task) }}</span><small *ngIf="getTaskDetectedPaymentMethods(task)">Erkannt: {{ getTaskDetectedPaymentMethods(task) }}</small></div>
             </div>
@@ -291,11 +339,11 @@
       </ng-container>
 
       <ng-container *ngIf="activeTab === 'shops'">
-        <section class="section-heading"><div><div class="eyebrow">SHOP REGISTRY</div><h2>Shops</h2></div><p>Plattform und Basis-URL einmal registrieren. Monitoring nutzt die Commerce-API; Auto-Checkout zusätzlich den passenden Browser-Executor.</p></section>
+        <section class="section-heading"><div><div class="eyebrow">SHOP REGISTRY</div><h2>Shops</h2></div><p>Plattform und Basis-URL einmal registrieren. Monitoring nutzt die Commerce-API; Early Gate bleibt passiv und Browser-Handoff läuft über den bestehenden Coordinator.</p></section>
         <section class="panel shops-panel">
           <div class="form-grid"><label><span>Shop-ID</span><input [(ngModel)]="newShop.id" placeholder="mein-shop"></label><label><span>Name</span><input [(ngModel)]="newShop.name" placeholder="Mein Shop"></label><label><span>Plattform</span><select [(ngModel)]="newShop.platform"><option *ngFor="let platform of commercePlatforms" [ngValue]="platform">{{ getPlatformLabel(platform) }}</option></select></label><label><span>Shop-URL</span><input [(ngModel)]="newShop.baseUrl" placeholder="https://dein-shop.de"></label></div>
           <div class="primary-action-row"><button class="btn btn-primary" (click)="registerShop()">Shop registrieren</button></div>
-          <div class="shop-grid" *ngIf="shops.length"><article class="shop-card" *ngFor="let shop of shops; trackBy: trackShop"><div><strong>{{ shop.name }}</strong><small>{{ shop.baseUrl }}</small><small>{{ hasExecutorForShop(shop) ? 'Monitoring + Browser-Checkout' : 'Monitoring / Registry' }}</small></div><span class="platform-pill">{{ getPlatformLabel(shop.platform) }}</span></article></div>
+          <div class="shop-grid" *ngIf="shops.length"><article class="shop-card" *ngFor="let shop of shops; trackBy: trackShop"><div><strong>{{ shop.name }}</strong><small>{{ shop.baseUrl }}</small><small>{{ hasExecutorForShop(shop) ? 'Monitoring + Browser-Checkout' : system.earlyGateReady ? 'Monitoring + Early Gate' : 'Monitoring / Registry' }}</small></div><span class="platform-pill">{{ getPlatformLabel(shop.platform) }}</span></article></div>
         </section>
       </ng-container>
     </main>
