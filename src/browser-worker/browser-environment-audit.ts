@@ -57,6 +57,20 @@ export function classifyBrowserEnvironment(
     });
   }
 
+  if (snapshot.peerConnectionAvailable === false) {
+    issues.push({
+      code: "webrtc-peerconnection-unavailable",
+      message: "RTCPeerConnection ist nicht verfügbar; WebRTC wäre funktional deaktiviert."
+    });
+  }
+
+  if (snapshot.mediaDevicesAvailable === false) {
+    issues.push({
+      code: "media-devices-unavailable",
+      message: "navigator.mediaDevices ist nicht verfügbar."
+    });
+  }
+
   if (!snapshot.webglRenderer) {
     issues.push({
       code: "webgl-unavailable",
@@ -104,6 +118,8 @@ export function failedBrowserEnvironmentAudit(error: unknown): BrowserEnvironmen
       timezone: "",
       hardwareConcurrency: 0,
       deviceMemory: null,
+      mediaDevicesAvailable: false,
+      peerConnectionAvailable: false,
       screen: {
         width: 0,
         height: 0,
@@ -153,6 +169,8 @@ export async function collectBrowserEnvironment(page: Page): Promise<BrowserEnvi
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
       hardwareConcurrency: navigator.hardwareConcurrency || 0,
       deviceMemory: typeof nav.deviceMemory === "number" ? nav.deviceMemory : null,
+      mediaDevicesAvailable: Boolean(navigator.mediaDevices),
+      peerConnectionAvailable: typeof RTCPeerConnection === "function",
       screen: {
         width: screen.width,
         height: screen.height,
