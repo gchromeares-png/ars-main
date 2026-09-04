@@ -92,7 +92,8 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
       const page = handle.page;
       task.config.data = {
         ...(task.config.data ?? {}),
-        browserSession: { type: "patchright-chromium", isolatedPerTask: true, userDataDir }
+        browserSession: { type: "patchright-chromium", isolatedPerTask: true, userDataDir },
+        browserEnvironment: handle.environmentAudit
       };
       setEarlyGateRuntime(task, { activeArea: "browser-child", stage: "browser-child" });
       this.emit(task);

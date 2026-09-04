@@ -3,6 +3,7 @@ import * as path from "path";
 import { chromium } from "patchright";
 import type { BrowserContext, Page } from "patchright";
 import { BrowserLaunchError } from "./errors";
+import { collectBrowserEnvironment, failedBrowserEnvironmentAudit } from "./browser-environment-audit";
 import type { BrowserContextConfig, BrowserContextHandle, BrowserProxyConfig } from "./types";
 import { attachLiveChallengePageWatcher } from "../challenges/live-challenge-page-watcher";
 
@@ -137,6 +138,7 @@ export async function launchBrowserContext(config: BrowserContextConfig): Promis
     context.setDefaultNavigationTimeout(config.navigationTimeoutMs ?? 30_000);
 
     const page = await initialPage(context);
+    const environmentAudit = await collectBrowserEnvironment(page).catch(error => failedBrowserEnvironmentAudit(error));
 
     // Existing challenge watcher remains unchanged.
     attachLiveChallengePageWatcher(page);
@@ -146,7 +148,8 @@ export async function launchBrowserContext(config: BrowserContextConfig): Promis
       context,
       page,
       createdAt: new Date(),
-      userDataDir: config.userDataDir
+      userDataDir: config.userDataDir,
+      environmentAudit
     };
   } catch (error) {
     if (context) {
