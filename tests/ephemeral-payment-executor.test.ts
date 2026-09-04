@@ -78,7 +78,7 @@ describe("EphemeralPaymentExecutor", () => {
     expect((original.config.data as any).paymentPreparation).toBeDefined();
   });
 
-  it("loads canonical card fields from the profile vault only for the delegated worker task", async () => {
+  it("loads card secrets from the profile vault only for the delegated worker task", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "ares-ephemeral-card-"));
     const vaultPath = path.join(root, "payment-vault.json");
     const pan = Array.from({ length: 16 }, () => "4").join("");
@@ -105,12 +105,10 @@ describe("EphemeralPaymentExecutor", () => {
           delegatedSnapshot = JSON.stringify(task.config.data);
           const session = (task.config.data as any).__paymentSession;
           expect(session.card).toEqual({
-            cardholderName: "Vault Holder",
+            holderName: "Vault Holder",
             cardNumber: pan,
-            expiryMonth: "12",
-            expiryYear: "2030",
             expiry: "12/30",
-            cvc
+            securityCode: cvc
           });
 
           runtimeListener?.({
@@ -121,7 +119,7 @@ describe("EphemeralPaymentExecutor", () => {
                 ...(task.config.data ?? {}),
                 paymentPreparation: {
                   selectedMethod: "card",
-                  filledFields: ["cardholderName", "cardNumber", "expiry", "cvc"],
+                  filledFields: ["holderName", "cardNumber", "expiry", "securityCode"],
                   missingFields: [],
                   requiresUserAction: true
                 }
@@ -152,10 +150,10 @@ describe("EphemeralPaymentExecutor", () => {
         () => ({
           method: "card",
           card: {
-            cardholderName: "Ignored Manual Holder",
+            holderName: "Ignored Manual Holder",
             cardNumber: Array.from({ length: 16 }, () => "5").join(""),
             expiry: "01/29",
-            cvc: "999"
+            securityCode: "999"
           }
         }),
         (profileId, preference) => vault.toCheckoutPaymentSession(profileId, preference)
