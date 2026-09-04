@@ -15,7 +15,9 @@ import {
 type AppTab = "dashboard" | "tasks" | "profiles" | "proxies" | "shops";
 type ProfileTab = "identity" | "address" | "browser" | "payment";
 type TaskCreationMode = "monitor-only" | "auto-checkout";
+type MonitorStrategyMode = "product-monitor" | "early-gate";
 type ProfileView = ProfileV2Draft;
+type FlowStepKey = "monitoring" | "gate-detected" | "waiting-queue" | "released" | "post-queue-discovery" | "product-found" | "cart" | "checkout";
 
 interface ShopView {
   id: string;
@@ -70,6 +72,8 @@ interface SystemStatus {
   commercePlatforms?: CommercePlatform[];
   commerceExecutorPlatforms?: CommercePlatform[];
   commerceMonitorReady?: boolean;
+  earlyGateReady?: boolean;
+  allowFinalPurchase?: boolean;
   captchaProvider?: string;
   captchaApiKeyConfigured?: boolean;
   liveChallengeSupport?: string[];
@@ -119,15 +123,32 @@ export class AppComponent implements OnInit, OnDestroy {
     commercePlatforms: [...COMMERCE_PLATFORMS],
     commerceExecutorPlatforms: ["shopify"],
     commerceMonitorReady: true,
+    earlyGateReady: false,
+    allowFinalPurchase: false,
     captchaProvider: "CapMonster",
     captchaApiKeyConfigured: false,
     liveChallengeSupport: [],
     systemNode: { executable: "node", ok: false }
   };
 
+  monitorStrategyMode: MonitorStrategyMode = "product-monitor";
   taskMode: TaskCreationMode = "monitor-only";
   taskName = "";
   searchTerm = "";
+  earlyGateProductName = "";
+  discoveryKeywords: string[] = [];
+  newDiscoveryKeyword = "";
+  readonly liveKeywordDrafts: Record<string, string> = {};
+  readonly earlyGateFlowSteps: Array<{ key: FlowStepKey; label: string }> = [
+    { key: "monitoring", label: "MONITORING" },
+    { key: "gate-detected", label: "GATE DETECTED" },
+    { key: "waiting-queue", label: "WAITING_QUEUE" },
+    { key: "released", label: "RELEASED" },
+    { key: "post-queue-discovery", label: "POST_QUEUE_DISCOVERY" },
+    { key: "product-found", label: "PRODUCT_FOUND" },
+    { key: "cart", label: "CART" },
+    { key: "checkout", label: "CHECKOUT" }
+  ];
   taskIntervalSeconds = 30;
   headless = false;
   taskProxyMode: ProxySelection["mode"] = "profile-default";
@@ -185,6 +206,11 @@ export class AppComponent implements OnInit, OnDestroy {
     this.profileTab = tab;
   }
 
+  setMonitorStrategy(mode: MonitorStrategyMode): void {
+    this.monitorStrategyMode = mode;
+    if (mode === "early-gate") this.taskMode = "auto-checkout";
+  }
+
   get monitorOnlyTasks(): TaskView[] {
     return this.tasks.filter(task => this.isMonitorOnlyTask(task));
   }
@@ -201,9 +227,27 @@ export class AppComponent implements OnInit, OnDestroy {
     return this.tasks.filter(task => ![TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED].includes(task.state)).length;
   }
 
+  get taskNeedsCheckoutSession(): boolean {
+    return this.monitorStrategyMode === "early-gate" || this.taskMode === "auto-checkout";
+  }
+
   get selectedShopSupportsCheckout(): boolean {
+    if (this.monitorStrategyMode === "early-gate") return Boolean(this.system.earlyGateReady);
     const shop = this.shops.find(item => item.id === this.selectedShopId);
     return Boolean(shop && this.hasExecutorForShop(shop));
+  }
+
+  addDiscoveryKeyword(): void {
+    const value = this.newDiscoveryKeyword.trim().replace(/\s+/g, " ");
+    if (!value) return;
+    if (!this.discoveryKeywords.some(item => item.toLocaleLowerCase("de-DE") === value.toLocaleLowerCase("de-DE"))) {
+      this.discoveryKeywords = [...this.discoveryKeywords, value.slice(0, 160)];
+    }
+    this.newDiscoveryKeyword = "";
+  }
+
+  removeDiscoveryKeyword(keyword: string): void {
+    this.discoveryKeywords = this.discoveryKeywords.filter(item => item !== keyword);
   }
 
   async loadProfiles(): Promise<void> {
@@ -402,6 +446,7 @@ export class AppComponent implements OnInit, OnDestroy {
     this.shops = result.shops;
     if (Array.isArray(result.platforms) && result.platforms.length) this.commercePlatforms = result.platforms;
     if (Array.isArray(result.executorPlatforms)) this.executorPlatforms = result.executorPlatforms;
+    if (typeof result.earlyGateReady === "boolean") this.system.earlyGateReady = result.earlyGateReady;
     if (!this.selectedShopId && this.shops.length > 0) this.selectedShopId = this.shops[0].id;
   }
 
@@ -458,7 +503,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
     this.info = result.executorReady
       ? `${this.getPlatformLabel(platform)} Shop registriert · Monitoring + Checkout-Executor bereit.`
-      : `${this.getPlatformLabel(platform)} Shop registriert · Monitoring verfügbar, Auto-Checkout benötigt einen Browser-Executor.`;
+      : `${this.getPlatformLabel(platform)} Shop registriert · Monitoring verfügbar${result.earlyGateReady ? " · Early Gate bereit" : ""}.`;
     this.newShop = { id: "", name: "", baseUrl: "", platform };
     await Promise.all([this.loadShops(), this.loadSystemStatus()]);
   }
@@ -466,19 +511,31 @@ export class AppComponent implements OnInit, OnDestroy {
   async createTask(): Promise<void> {
     this.error = "";
     this.info = "";
+    const earlyGate = this.monitorStrategyMode === "early-gate";
+    const needsCheckout = earlyGate || this.taskMode === "auto-checkout";
 
-    if (!this.taskName.trim() || !this.selectedShopId || !this.searchTerm.trim()) {
-      this.error = "Task-Name, Shop und Produkt/Keyword sind erforderlich.";
+    if (!this.taskName.trim() || !this.selectedShopId) {
+      this.error = "Task-Name und Shop sind erforderlich.";
+      return;
+    }
+    if (earlyGate && !this.earlyGateProductName.trim()) {
+      this.error = "Für Early Gate ist ein Produktname erforderlich.";
+      return;
+    }
+    if (!earlyGate && !this.searchTerm.trim()) {
+      this.error = "Für den normalen Produktmonitor ist ein Produkt/Keyword erforderlich.";
       return;
     }
 
-    if (this.taskMode === "auto-checkout") {
+    if (needsCheckout) {
       if (!this.selectedProfileId) {
-        this.error = "Für Auto-Checkout ist ein Profil erforderlich.";
+        this.error = "Für den Browser-Checkout ist ein Profil erforderlich.";
         return;
       }
       if (!this.selectedShopSupportsCheckout) {
-        this.error = "Für diesen Shop ist kein Browser-Checkout-Executor verfügbar.";
+        this.error = earlyGate
+          ? "Der Early-Gate-Browser-Executor ist nicht verfügbar."
+          : "Für diesen Shop ist kein Browser-Checkout-Executor verfügbar.";
         return;
       }
       if (this.taskProxyMode === "proxy" && !this.selectedTaskProxyId) {
@@ -487,14 +544,15 @@ export class AppComponent implements OnInit, OnDestroy {
       }
     }
 
-    const taskId = `${this.taskMode === "auto-checkout" ? "auto" : "monitor"}_${Date.now()}`;
+    const prefix = earlyGate ? "gate" : this.taskMode === "auto-checkout" ? "auto" : "monitor";
+    const taskId = `${prefix}_${Date.now()}`;
     const intervalSeconds = Math.max(1, Math.floor(Number(this.taskIntervalSeconds) || 30));
     const proxySelection: ProxySelection = {
       mode: this.taskProxyMode,
       ...(this.taskProxyMode === "proxy" ? { proxyId: this.selectedTaskProxyId } : {})
     };
 
-    const monitorAction = this.taskMode === "auto-checkout"
+    const monitorAction = needsCheckout
       ? {
           mode: "auto-checkout",
           profileId: this.selectedProfileId,
@@ -504,15 +562,24 @@ export class AppComponent implements OnInit, OnDestroy {
         }
       : { mode: "monitor-only" };
 
+    const data: Record<string, unknown> = {
+      monitorIntervalMs: intervalSeconds * 1_000,
+      monitorAction,
+      monitorStrategy: earlyGate
+        ? {
+            mode: "early-gate",
+            productName: this.earlyGateProductName.trim(),
+            discoveryKeywords: [...this.discoveryKeywords]
+          }
+        : { mode: "product-monitor" }
+    };
+    if (!earlyGate) data["productCriteria"] = { searchTerm: this.searchTerm.trim() };
+
     const result = await this.electron.createTask({
       id: taskId,
       name: this.taskName.trim(),
       shopId: this.selectedShopId,
-      data: {
-        productCriteria: { searchTerm: this.searchTerm.trim() },
-        monitorIntervalMs: intervalSeconds * 1_000,
-        monitorAction
-      }
+      data
     });
 
     if (!result.success) {
@@ -520,7 +587,7 @@ export class AppComponent implements OnInit, OnDestroy {
       return;
     }
 
-    if (this.taskMode === "auto-checkout" && this.taskPaymentEnabled) {
+    if (needsCheckout && this.taskPaymentEnabled) {
       const paymentResult = await this.electron.setPaymentSession(taskId, this.buildPaymentSession());
       if (!paymentResult.success) {
         this.error = `Task erstellt, aber Zahlungs-Session konnte nicht gesetzt werden: ${paymentResult.error}`;
@@ -528,11 +595,16 @@ export class AppComponent implements OnInit, OnDestroy {
       }
     }
 
-    this.info = this.taskMode === "auto-checkout"
-      ? `Auto-Checkout-Task ${result.taskId} erstellt. Bei Verfügbarkeit startet ARES genau eine isolierte Checkout-Session.`
-      : `Monitoring-Task ${result.taskId} erstellt.`;
+    this.info = earlyGate
+      ? `Early-Gate-Task ${result.taskId} erstellt. ARES startet den Browser erst beim passiven Gate-Signal.`
+      : this.taskMode === "auto-checkout"
+        ? `Auto-Checkout-Task ${result.taskId} erstellt. Bei Verfügbarkeit startet ARES genau eine isolierte Checkout-Session.`
+        : `Monitoring-Task ${result.taskId} erstellt.`;
     this.taskName = "";
     this.searchTerm = "";
+    this.earlyGateProductName = "";
+    this.discoveryKeywords = [];
+    this.newDiscoveryKeyword = "";
     this.clearSensitivePaymentInputs();
     await Promise.all([this.loadTasks(), this.loadSystemStatus()]);
   }
@@ -578,8 +650,24 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   isMonitorTask(task: TaskView): boolean {
-    const criteria = task.config.data?.["productCriteria"];
-    return Boolean(criteria && typeof criteria === "object");
+    const data = task.config.data ?? {};
+    const criteria = data["productCriteria"];
+    const strategy = data["monitorStrategy"] as Record<string, unknown> | undefined;
+    return Boolean((criteria && typeof criteria === "object") || strategy?.["mode"] === "early-gate");
+  }
+
+  isEarlyGateMonitorTask(task: TaskView): boolean {
+    const strategy = task.config.data?.["monitorStrategy"] as Record<string, unknown> | undefined;
+    return this.isMonitorTask(task) && strategy?.["mode"] === "early-gate";
+  }
+
+  isEarlyGateChildTask(task: TaskView): boolean {
+    const trigger = task.config.data?.["triggerSource"] as Record<string, unknown> | undefined;
+    return trigger?.["kind"] === "early-gate" && Boolean(trigger?.["parentTaskId"]);
+  }
+
+  isEarlyGateFlowTask(task: TaskView): boolean {
+    return this.isEarlyGateMonitorTask(task) || this.isEarlyGateChildTask(task);
   }
 
   isAutoCheckoutTask(task: TaskView): boolean {
@@ -597,6 +685,8 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   getTaskKind(task: TaskView): string {
+    if (this.isEarlyGateMonitorTask(task)) return "EARLY GATE";
+    if (this.isEarlyGateChildTask(task)) return "GATE CHILD";
     if (this.isAutoCheckoutTask(task)) return "AUTO CHECKOUT";
     if (this.isMonitorOnlyTask(task)) return "MONITOR";
     if (this.isCheckoutChildTask(task)) return "CHECKOUT RUN";
@@ -637,6 +727,12 @@ export class AppComponent implements OnInit, OnDestroy {
 
   getTaskAutomationStatus(task: TaskView): string {
     if (!this.isAutoCheckoutTask(task)) return "";
+    if (this.isEarlyGateMonitorTask(task)) {
+      const runtime = this.getEarlyGateRuntime(task);
+      if (!runtime) return "MONITORING · wartet auf passives Gate-Signal";
+      if (runtime["childTaskId"]) return `Gate erkannt · Browser-Child ${String(runtime["childTaskId"])}`;
+      return String(runtime["stage"] ?? "monitoring").toUpperCase().replace(/-/g, "_");
+    }
     const runtime = task.config.data?.["autoCheckoutRuntime"] as Record<string, unknown> | undefined;
     if (!runtime) return "Wartet auf verfügbares Produkt";
     if (runtime["status"] === "failed") return `Trigger fehlgeschlagen: ${String(runtime["error"] ?? "unbekannt")}`;
@@ -647,6 +743,69 @@ export class AppComponent implements OnInit, OnDestroy {
   getTaskParentId(task: TaskView): string {
     const trigger = task.config.data?.["triggerSource"] as Record<string, unknown> | undefined;
     return trigger?.["parentTaskId"] ? String(trigger["parentTaskId"]) : "";
+  }
+
+  getTaskChildId(task: TaskView): string {
+    const runtime = this.getEarlyGateRuntime(task);
+    if (runtime?.["childTaskId"]) return String(runtime["childTaskId"]);
+    const auto = task.config.data?.["autoCheckoutRuntime"] as Record<string, unknown> | undefined;
+    return auto?.["childTaskId"] ? String(auto["childTaskId"]) : "";
+  }
+
+  getActiveArea(task: TaskView): string {
+    if (this.isEarlyGateChildTask(task)) return "Browser-Child";
+    const runtime = this.getEarlyGateRuntime(task);
+    const area = String(runtime?.["activeArea"] ?? "");
+    if (area === "gate") return "Gate";
+    if (area === "browser-child") return "Browser-Child";
+    if (area === "monitor") return "Monitor";
+    return this.isMonitorTask(task) ? "Monitor" : "Browser-Child";
+  }
+
+  getActiveDiscoveryKeywords(task: TaskView): string[] {
+    const postQueue = task.config.data?.["postQueueDiscovery"] as Record<string, unknown> | undefined;
+    const runtime = this.getEarlyGateRuntime(task);
+    const raw = postQueue?.["keywords"] ?? runtime?.["keywords"];
+    return Array.isArray(raw) ? raw.map(value => String(value)).filter(Boolean) : [];
+  }
+
+  isLiveKeywordEditable(task: TaskView): boolean {
+    return this.isEarlyGateChildTask(task) && task.state === TaskState.POST_QUEUE_DISCOVERY;
+  }
+
+  async addLiveDiscoveryKeyword(task: TaskView): Promise<void> {
+    const value = String(this.liveKeywordDrafts[task.id] ?? "").trim().replace(/\s+/g, " ");
+    if (!value) return;
+    const current = this.getActiveDiscoveryKeywords(task);
+    const exists = current.some(item => item.toLocaleLowerCase("de-DE") === value.toLocaleLowerCase("de-DE"));
+    this.liveKeywordDrafts[task.id] = "";
+    if (exists) return;
+    await this.updateLiveKeywords(task, [...current, value]);
+  }
+
+  async removeLiveDiscoveryKeyword(task: TaskView, keyword: string): Promise<void> {
+    await this.updateLiveKeywords(task, this.getActiveDiscoveryKeywords(task).filter(item => item !== keyword));
+  }
+
+  getFlowStepState(task: TaskView, key: FlowStepKey): "done" | "active" | "pending" {
+    if (!this.isEarlyGateFlowTask(task)) return "pending";
+    if (this.isFlowStepActive(task, key)) return "active";
+    return this.isFlowStepDone(task, key) ? "done" : "pending";
+  }
+
+  getTaskQueuePosition(task: TaskView): string {
+    const queue = task.config.data?.["queueStatus"] as Record<string, unknown> | undefined;
+    const position = Number(queue?.["position"]);
+    return Number.isFinite(position) ? Math.max(0, Math.floor(position)).toLocaleString("de-DE") : "–";
+  }
+
+  getTaskQueueWait(task: TaskView): string {
+    const queue = task.config.data?.["queueStatus"] as Record<string, unknown> | undefined;
+    const seconds = Number(queue?.["timeToWaitSeconds"]);
+    if (!Number.isFinite(seconds)) return "–";
+    if (seconds >= 3600) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+    if (seconds >= 60) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+    return `${Math.max(0, Math.floor(seconds))}s`;
   }
 
   getTaskCaptchaStatus(task: TaskView): string {
@@ -666,10 +825,10 @@ export class AppComponent implements OnInit, OnDestroy {
     if (this.isMonitorOnlyTask(task)) return "";
     if (this.isAutoCheckoutTask(task)) {
       const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
-      return action?.["paymentEnabled"] ? "Session-Payment wird beim Treffer an den Checkout-Run übergeben." : "Payment bleibt manuell.";
+      return action?.["paymentEnabled"] ? "Session-Payment wird beim Trigger an den Browser-Child übergeben." : "Payment bleibt manuell.";
     }
     const preparation = task.config.data?.["paymentPreparation"] as Record<string, unknown> | undefined;
-    if (!preparation) return "Wird im Checkout erkannt, sobald sichtbar.";
+    if (!preparation) return this.isEarlyGateChildTask(task) ? "Checkout-Session aktiv; Zahlungsstatus folgt dem realen Checkout-DOM." : "Wird im Checkout erkannt, sobald sichtbar.";
     return String(preparation["note"] ?? "Zahlungsstatus aktualisiert.");
   }
 
@@ -767,7 +926,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
   isPausable(task: TaskView): boolean {
     return [TaskState.QUEUED, TaskState.STARTING, TaskState.RUNNING, TaskState.WAITING_QUEUE,
-      TaskState.PRODUCT_FOUND, TaskState.CART, TaskState.CHECKOUT, TaskState.RETRYING].includes(task.state);
+      TaskState.POST_QUEUE_DISCOVERY, TaskState.PRODUCT_FOUND, TaskState.CART, TaskState.CHECKOUT, TaskState.RETRYING].includes(task.state);
   }
 
   isResumable(task: TaskView): boolean {
@@ -775,13 +934,64 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   isStoppable(task: TaskView): boolean {
-    return [TaskState.STARTING, TaskState.RUNNING, TaskState.WAITING_QUEUE, TaskState.PRODUCT_FOUND,
+    return [TaskState.STARTING, TaskState.RUNNING, TaskState.WAITING_QUEUE, TaskState.POST_QUEUE_DISCOVERY, TaskState.PRODUCT_FOUND,
       TaskState.CART, TaskState.CHECKOUT, TaskState.RETRYING, TaskState.PAUSED].includes(task.state);
   }
 
   trackTask(_index: number, task: TaskView): string { return task.id; }
   trackShop(_index: number, shop: ShopView): string { return shop.id; }
   trackProxy(_index: number, proxy: AresProxy): string { return proxy.id; }
+
+  private getEarlyGateRuntime(task: TaskView): Record<string, unknown> | undefined {
+    const value = task.config.data?.["earlyGateRuntime"];
+    return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+  }
+
+  private async updateLiveKeywords(task: TaskView, keywords: string[]): Promise<void> {
+    this.error = "";
+    const result = await this.electron.updateDiscoveryKeywords(task.id, keywords);
+    if (!result.success) {
+      this.error = result.error || "Discovery-Keywords konnten nicht aktualisiert werden.";
+      return;
+    }
+    const postQueue = task.config.data?.["postQueueDiscovery"] as Record<string, unknown> | undefined;
+    task.config.data = {
+      ...(task.config.data ?? {}),
+      postQueueDiscovery: {
+        ...(postQueue ?? {}),
+        keywords: result.keywords,
+        updatedAt: new Date().toISOString()
+      }
+    };
+    this.info = `Aktive Discovery-Keywords aktualisiert: ${result.keywords.length}`;
+  }
+
+  private isFlowStepActive(task: TaskView, key: FlowStepKey): boolean {
+    const runtime = this.getEarlyGateRuntime(task);
+    if (key === "monitoring") return this.isEarlyGateMonitorTask(task) && !runtime?.["gateDetectedAt"] && task.state === TaskState.RUNNING;
+    if (key === "gate-detected") return this.isEarlyGateMonitorTask(task) && Boolean(runtime?.["gateDetectedAt"]) && !runtime?.["browserChildStartedAt"];
+    if (key === "waiting-queue") return task.state === TaskState.WAITING_QUEUE;
+    if (key === "released") return false;
+    if (key === "post-queue-discovery") return task.state === TaskState.POST_QUEUE_DISCOVERY;
+    if (key === "product-found") return task.state === TaskState.PRODUCT_FOUND;
+    if (key === "cart") return task.state === TaskState.CART;
+    if (key === "checkout") return task.state === TaskState.CHECKOUT;
+    return false;
+  }
+
+  private isFlowStepDone(task: TaskView, key: FlowStepKey): boolean {
+    const runtime = this.getEarlyGateRuntime(task);
+    const queue = task.config.data?.["queueStatus"] as Record<string, unknown> | undefined;
+    if (key === "monitoring") return Boolean(runtime?.["monitoringAt"] || runtime?.["gateDetectedAt"]);
+    if (key === "gate-detected") return Boolean(runtime?.["gateDetectedAt"]);
+    if (key === "waiting-queue") return Boolean(runtime?.["queueEnteredAt"] || queue?.["detectedAt"]);
+    if (key === "released") return Boolean(runtime?.["queueReleasedAt"] || queue?.["phase"] === "released");
+    if (key === "post-queue-discovery") return Boolean(runtime?.["postQueueDiscoveryAt"] || [TaskState.PRODUCT_FOUND, TaskState.CART, TaskState.CHECKOUT, TaskState.SUCCESS].includes(task.state));
+    if (key === "product-found") return Boolean(runtime?.["productFoundAt"] || [TaskState.CART, TaskState.CHECKOUT, TaskState.SUCCESS].includes(task.state));
+    if (key === "cart") return Boolean(runtime?.["cartAt"] || [TaskState.CHECKOUT, TaskState.SUCCESS].includes(task.state));
+    if (key === "checkout") return Boolean(runtime?.["checkoutAt"] || task.state === TaskState.SUCCESS);
+    return false;
+  }
 
   private proxySelectionLabel(selection: ProxySelection | undefined, profileId: string): string {
     if (selection?.mode === "direct") return "Direktverbindung";
