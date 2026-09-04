@@ -5,6 +5,8 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
   const read = (relative: string) => fs.readFileSync(path.resolve(__dirname, "..", relative), "utf8");
   const requirements = read("requirements-seleniumbase-cdp.txt");
   const adapter = read("python/seleniumbase_cdp/seleniumbase_adapter.py");
+  const tracker = read("python/seleniumbase_cdp/challenge_state_tracker.py");
+  const trackerProbe = read("python/seleniumbase_cdp/challenge_state_tracker_probe.py");
   const worker = read("python/seleniumbase_cdp/worker.py");
   const manualWorker = read("python/seleniumbase_cdp/manual_profile_browser.py");
   const manualController = read("src/electron/seleniumbase-profile-browser-controller.ts");
@@ -39,14 +41,30 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     }
   });
 
-  it("keeps the manual SeleniumBase test path SeleniumBase-owned end to end", () => {
+  it("keeps the manual SeleniumBase path state-based instead of using a fixed captcha delay", () => {
     expect(adapter).toContain("self._sb.goto(url)");
-    expect(adapter).toContain("self._sb.sleep(2)");
+    expect(adapter).toContain("self._challenge_tracker.wait_for_stable_challenge()");
     expect(adapter).toContain("self._sb.solve_captcha()");
+    expect(adapter).not.toContain("self._sb.sleep(2)");
+    expect(adapter).toContain("self._challenge_tracker.poll()");
     expect(manualWorker).toContain("adapter.goto(start_url)");
     expect(manualWorker).toContain("adapter.goto(url)");
     expect(manualController.toLowerCase()).not.toContain("patchright");
     expect(manualController).not.toContain("connectOverCDP");
+  });
+
+  it("tracks challenge iframe/grid state without URL hardcoding or solver behavior", () => {
+    expect(tracker).toContain("class ChallengeStateTracker");
+    expect(tracker).toContain('find_elements("iframe")');
+    expect(tracker).toContain('frame.query_selector_all("img")');
+    expect(tracker).toContain('"changedIndexes"');
+    expect(tracker).toContain('_GRID_SIZES = {9: (3, 3), 16: (4, 4)}');
+    expect(tracker).not.toContain("2captcha.com");
+    expect(tracker).not.toContain("solve_captcha");
+    expect(tracker).not.toContain("click(");
+    expect(tracker).not.toContain("execute_script(");
+    expect(tracker).not.toContain("set_all_cookies(");
+    expect(trackerProbe).toContain('assert updated["changedIndexes"] == [4]');
   });
 
   it("sends the SeleniumBase start payload after installing the ready listener", () => {
@@ -81,7 +99,7 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
   });
 
   it("keeps the SeleniumBase worker isolated from Patchright and ARES protected cores", () => {
-    for (const source of [adapter, worker, manualWorker, manualController]) {
+    for (const source of [adapter, tracker, worker, manualWorker, manualController]) {
       expect(source.toLowerCase()).not.toContain("patchright");
       expect(source).not.toContain("src/challenges");
       expect(source).not.toContain("field-semantic-resolver");

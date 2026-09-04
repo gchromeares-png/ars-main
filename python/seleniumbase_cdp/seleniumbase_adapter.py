@@ -9,6 +9,8 @@ import mycdp
 import psutil
 from seleniumbase import sb_cdp
 
+from challenge_state_tracker import ChallengeStateTracker
+
 
 class SeleniumBaseCdpAdapter:
     """Single ARES boundary around SeleniumBase Pure CDP / MyCDP.
@@ -40,6 +42,7 @@ class SeleniumBaseCdpAdapter:
             kwargs["agent"] = user_agent
 
         self._sb = sb_cdp.Chrome(**kwargs)
+        self._challenge_tracker = ChallengeStateTracker(self._sb)
         self._closed = False
         self._playwright = None
         self._playwright_browser = None
@@ -60,8 +63,15 @@ class SeleniumBaseCdpAdapter:
 
     def goto(self, url: str) -> None:
         self._sb.goto(url)
-        self._sb.sleep(2)
+        # No fixed post-navigation sleep. If a challenge structure is already
+        # present, observe it until the visible state settles; pages without a
+        # challenge return immediately.
+        self._challenge_tracker.wait_for_stable_challenge()
         self._sb.solve_captcha()
+
+    def challenge_state(self) -> Dict[str, Any]:
+        """Return the latest structure-only challenge observation."""
+        return self._challenge_tracker.poll()
 
     def execute_script(self, script: str) -> Any:
         return self._sb.execute_script(script)
@@ -135,10 +145,21 @@ class SeleniumBaseCdpAdapter:
         checker = getattr(driver, "is_running", None)
         if callable(checker):
             try:
-                return checker() is not False
+                running = checker() is not False
             except Exception:
                 return False
-        return True
+        else:
+            running = True
+
+        # manual_profile_browser calls is_running() continuously. Polling here
+        # therefore tracks reloads, manual navigation, iframe appearance, and
+        # dynamic grid generations without changing the protected solver core.
+        if running:
+            try:
+                self._challenge_tracker.poll()
+            except Exception:
+                pass
+        return running
 
     def quit(self) -> None:
         if self._closed:
