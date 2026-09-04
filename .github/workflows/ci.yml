@@ -2,7 +2,7 @@ name: ARES CI
 
 on:
   push:
-    branches: [main, work/payment-contract-cleanup]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
