@@ -25,9 +25,8 @@ function combinedExpiry(card: Record<string, unknown>): string | undefined {
 }
 
 /**
- * Compatibility boundary for renderer/profile payloads.
- * The established checkout runtime contract remains holderName/securityCode.
- * UI/vault aliases such as cardholderName/cvc are translated only here.
+ * Renderer/IPC input validation for the established checkout payment contract.
+ * The same holderName/cardNumber/expiry/securityCode field names are used after this boundary.
  */
 export function normalizePaymentSessionInput(input: unknown): CheckoutPaymentSession | undefined {
   if (!input || typeof input !== "object") return undefined;
@@ -47,10 +46,10 @@ export function normalizePaymentSessionInput(input: unknown): CheckoutPaymentSes
   const card = rawCard as Record<string, unknown>;
 
   session.card = {
-    holderName: text(card["holderName"], 120) ?? text(card["cardholderName"], 120),
+    holderName: text(card["holderName"], 120),
     cardNumber: compactDigits(card["cardNumber"], 24),
     expiry: combinedExpiry(card),
-    securityCode: text(card["securityCode"], 8) ?? text(card["cvc"], 8) ?? text(card["cvv"], 8)
+    securityCode: text(card["securityCode"], 8)
   };
 
   return session;
