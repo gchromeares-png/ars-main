@@ -25,6 +25,27 @@ describe("ARES browser core migration", () => {
     expect(launcher).toContain("proxy: toProxy(config.proxy)");
   });
 
+  it("hardens proxied browser contexts against non-proxied WebRTC routes", () => {
+    expect(launcher).toContain("--enforce-webrtc-ip-permission-check");
+    expect(launcher).toContain("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+    expect(launcher).toContain("if (!config.proxy) return args.length ? args : undefined");
+  });
+
+  it("hardens proxied browser contexts against direct DNS paths", () => {
+    expect(launcher).toContain("--disable-async-dns");
+    expect(launcher).toContain("DnsOverHttps");
+    expect(launcher).toContain("NetworkPrediction");
+    expect(launcher).toContain("--host-resolver-rules=");
+    expect(launcher).toContain("MAP * ~NOTFOUND , EXCLUDE");
+    expect(launcher).not.toContain("--dns-prefetch-disable");
+  });
+
+  it("never removes Chromium singleton profile locks blindly", () => {
+    expect(launcher).not.toContain("clearStaleChromeLocks");
+    expect(launcher).not.toContain('rm(path.join(userDataDir');
+    expect(launcher).toContain("Never unlink Chromium Singleton* files blindly");
+  });
+
   it("routes normal UI actions through the global stateful InteractionEngine", () => {
     expect(cursor).toContain('import { InteractionEngine } from "./interaction-engine"');
     expect(cursor).not.toContain('from "ghost-cursor"');
