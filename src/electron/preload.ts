@@ -29,6 +29,7 @@ const api = {
   getTaskLogs: (taskId: string, limit = 100) => ipcRenderer.invoke("get-task-logs", taskId, limit),
   getProductMonitorEvents: (taskId: string, limit = 100) => ipcRenderer.invoke("get-product-monitor-events", taskId, limit),
   getSystemStatus: () => ipcRenderer.invoke("get-system-status"),
+  testCapmonsterApiKey: () => ipcRenderer.invoke("test-capmonster-api-key"),
   onTaskStatusUpdate: (callback: (task: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
     taskStatusListeners.set(callback, listener);
