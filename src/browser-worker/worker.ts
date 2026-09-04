@@ -39,14 +39,37 @@ const profiles = new Map<string, AresProfile>();
 const browserCore = new PatchrightBrowserWorker();
 const paymentPreparer = new ShopifyPaymentPreparer();
 const pokemonCenterJourney = new PokemonCenterReleaseJourney();
-const emitTaskUpdate = (task: any) => send({
-  type: "task-update",
-  taskId: task.id,
-  taskPatch: {
-    config: task.config,
-    lastError: task.lastError
-  }
-});
+
+function stampProfileOwnedBrowserSession(task: any): void {
+  const handle = browserCore.getContext(task.id);
+  const profileId = browserCore.getBoundProfileId(task.id);
+  if (!handle || !profileId) return;
+
+  const current = task.config?.data?.["browserSession"] as Record<string, unknown> | undefined;
+  task.config.data = {
+    ...(task.config.data ?? {}),
+    browserSession: {
+      ...(current ?? {}),
+      type: "patchright-chromium",
+      profileId,
+      isolatedPerTask: false,
+      isolatedPerProfile: true,
+      userDataDir: handle.userDataDir
+    }
+  };
+}
+
+const emitTaskUpdate = (task: any) => {
+  stampProfileOwnedBrowserSession(task);
+  send({
+    type: "task-update",
+    taskId: task.id,
+    taskPatch: {
+      config: task.config,
+      lastError: task.lastError
+    }
+  });
+};
 
 const shopifyExecutor = new PatchrightShopifyTaskExecutor(
   shopId => {
@@ -109,6 +132,7 @@ async function handle(request: BrowserWorkerRequest): Promise<void> {
       const paymentSession = takePaymentSession(request);
       shops.set(request.shop.id, request.shop);
       profiles.set(request.profile.id, request.profile);
+      browserCore.bindTaskProfile(request.task.id, request.profile.id);
 
       const earlyGate = isEarlyGateChildTask(request.task);
       if (!earlyGate && !isShopifyRuntimeShop(request.shop)) {
@@ -120,6 +144,7 @@ async function handle(request: BrowserWorkerRequest): Promise<void> {
         : await shopifyExecutor.execute(request.task);
 
       if (success && !earlyGate) await preparePayment(request, paymentSession);
+      stampProfileOwnedBrowserSession(request.task);
       request.task.config.data = {
         ...(request.task.config.data ?? {}),
         browserWorker: {
