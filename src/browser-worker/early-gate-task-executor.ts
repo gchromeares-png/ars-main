@@ -6,7 +6,6 @@ import type { Task } from "../models";
 import type { CommerceShop } from "../commerce/platforms";
 import type { AresProfile } from "../profiles/models";
 import type { BrowserWorker } from "./browser-worker";
-import { PatchrightBrowserWorker } from "./patchright-browser-worker";
 import { BrowserQueueWaiter } from "./queue-waiter";
 import { normalizeDiscoveryKeywords, setEarlyGateRuntime } from "../monitor/early-gate";
 import type { ReleaseJourney } from "../commerce/release-discovery/release-journey";
@@ -19,12 +18,13 @@ interface ActiveDiscoverySession {
 
 export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
   private readonly active = new Map<string, ActiveDiscoverySession>();
+  private allowFinalPurchase = false;
 
   constructor(
     private readonly getShop: (shopId: string) => CommerceShop | undefined,
     private readonly getProfile: (profileId: string) => AresProfile | undefined,
     private readonly resolveJourney: (shop: CommerceShop) => ReleaseJourney | undefined,
-    private readonly browserWorker: BrowserWorker = new PatchrightBrowserWorker(),
+    private readonly browserWorker: BrowserWorker,
     private readonly onTaskUpdate: (task: Task) => void = () => undefined
   ) {}
 
@@ -145,6 +145,24 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
 
       await journey.openCheckout(page, shop);
       this.markStage(task, "checkout", { checkoutAt: new Date().toISOString() });
+      this.publishFinalPurchaseStatus(task, "blocked");
+
+      while (!session.controller.signal.aborted) {
+        if (!this.allowFinalPurchase) {
+          await this.delay(250, session.controller.signal);
+          continue;
+        }
+
+        // The global permission is checked again inside submitOrder immediately before click.
+        const submitted = await journey.submitOrder(page, shop, () => this.allowFinalPurchase);
+        if (submitted) {
+          this.publishFinalPurchaseStatus(task, "submitted");
+          return true;
+        }
+
+        this.publishFinalPurchaseStatus(task, this.allowFinalPurchase ? "not-ready" : "blocked");
+        await this.delay(1_000, session.controller.signal);
+      }
       return true;
     } catch (error) {
       if (session.controller.signal.aborted) return true;
@@ -157,12 +175,21 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
     }
   }
 
-  updateDiscoveryKeywords(taskId: string, keywords: unknown): string[] {
+  async updateDiscoveryKeywords(taskId: string, keywords: string[]): Promise<string[]> {
     const session = this.active.get(taskId);
     if (!session) throw new Error(`Laufender Early-Gate-Browser-Child ${taskId} wurde nicht gefunden.`);
     session.keywords = normalizeDiscoveryKeywords(keywords);
     this.publishKeywords(session);
     return [...session.keywords];
+  }
+
+  async setFinalPurchaseAllowed(allowed: boolean): Promise<void> {
+    this.allowFinalPurchase = allowed === true;
+    for (const session of this.active.values()) {
+      if (session.task.config.data?.["earlyGateFlow"] && this.flowStage(session.task) === "checkout") {
+        this.publishFinalPurchaseStatus(session.task, this.allowFinalPurchase ? "armed" : "blocked");
+      }
+    }
   }
 
   async cancelTask(taskId: string): Promise<void> {
@@ -172,9 +199,10 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
   }
 
   async closeAll(): Promise<void> {
+    const taskIds = [...this.active.keys()];
     for (const session of this.active.values()) session.controller.abort();
     this.active.clear();
-    if (this.browserWorker instanceof PatchrightBrowserWorker) await this.browserWorker.shutdown();
+    await Promise.allSettled(taskIds.map(taskId => this.browserWorker.closeContext(taskId)));
   }
 
   private publishKeywords(session: ActiveDiscoverySession): void {
@@ -191,6 +219,20 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
     this.emit(session.task);
   }
 
+  private publishFinalPurchaseStatus(task: Task, status: "blocked" | "armed" | "not-ready" | "submitted"): void {
+    const now = new Date().toISOString();
+    task.config.data = {
+      ...(task.config.data ?? {}),
+      finalPurchaseRuntime: {
+        allowFinalPurchase: this.allowFinalPurchase,
+        status,
+        updatedAt: now,
+        ...(status === "submitted" ? { submittedAt: now } : {})
+      }
+    };
+    this.emit(task);
+  }
+
   private markStage(task: Task, stage: "post-queue-discovery" | "product-found" | "cart" | "checkout", timestamps: Record<string, string>): void {
     task.config.data = {
       ...(task.config.data ?? {}),
@@ -198,6 +240,11 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
     };
     setEarlyGateRuntime(task, { activeArea: "browser-child", stage, ...timestamps });
     this.emit(task);
+  }
+
+  private flowStage(task: Task): string {
+    const flow = task.config.data?.["earlyGateFlow"] as Record<string, unknown> | undefined;
+    return String(flow?.["stage"] ?? "");
   }
 
   private emit(task: Task): void {
