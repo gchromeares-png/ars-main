@@ -26,6 +26,8 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
   runtimeSystem: any;
   actionMessage = "";
   purchaseChanging = false;
+  apiKeyTesting = false;
+  apiKeyCheck: any;
   private refreshTimer?: ReturnType<typeof setInterval>;
 
   constructor(private readonly electron: ElectronService) {}
@@ -61,6 +63,17 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
 
   get finalPurchaseAllowed(): boolean {
     return this.currentSystem?.allowFinalPurchase === true;
+  }
+
+  get apiKeyConfigured(): boolean {
+    return this.currentSystem?.captchaApiKeyConfigured === true;
+  }
+
+  get apiKeyCheckLabel(): string {
+    if (!this.apiKeyCheck) return "NOCH NICHT GETESTET";
+    if (this.apiKeyCheck.valid === true) return "GÜLTIG";
+    if (this.apiKeyCheck.valid === false) return "UNGÜLTIG";
+    return "CHECK FEHLER";
   }
 
   get healthyWorkerCount(): number {
@@ -135,6 +148,26 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
     const interval = Number(this.watchdog.heartbeatIntervalMs ?? 30_000);
     const timeout = Number(this.watchdog.heartbeatTimeoutMs ?? 10_000);
     return `${Math.round(interval / 1_000)}s Heartbeat · ${Math.round(timeout / 1_000)}s Timeout`;
+  }
+
+  async testCapmonsterApiKey(): Promise<void> {
+    if (this.apiKeyTesting) return;
+    this.apiKeyTesting = true;
+    this.actionMessage = "";
+    try {
+      const result = await this.electron.testCapmonsterApiKey();
+      this.apiKeyCheck = result;
+      if (result?.valid === true) {
+        this.actionMessage = "CapMonster API-Key ist gültig.";
+      } else if (result?.valid === false) {
+        this.actionMessage = `CapMonster API-Key wurde abgelehnt${result.errorCode ? ` · ${result.errorCode}` : ""}.`;
+      } else {
+        this.actionMessage = result?.error || "CapMonster API-Key konnte nicht geprüft werden.";
+      }
+      await this.refreshRuntime();
+    } finally {
+      this.apiKeyTesting = false;
+    }
   }
 
   async setFinalPurchaseAllowed(allowed: boolean): Promise<void> {
