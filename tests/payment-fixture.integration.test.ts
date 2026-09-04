@@ -30,7 +30,7 @@ describeBrowser("local payment fixture", () => {
     await context.close();
   });
 
-  it("fills cardholderName, cardNumber, expiry and cvc without any order submission", async () => {
+  it("fills holderName, cardNumber, expiry and securityCode without any order submission", async () => {
     const fixture = fs.readFileSync(
       path.resolve(__dirname, "fixtures/checkout/synthetic/payment-card.html"),
       "utf8"
@@ -38,25 +38,23 @@ describeBrowser("local payment fixture", () => {
     await page.setContent(fixture, { waitUntil: "domcontentloaded" });
 
     const pan = Array.from({ length: 16 }, () => "4").join("");
-    const cvc = ["1", "2", "3"].join("");
+    const securityCode = ["1", "2", "3"].join("");
 
     const result = await new CheckoutPaymentPreparer().prepare(page, {
       method: "card",
       card: {
-        cardholderName: "Fixture Holder",
+        holderName: "Fixture Holder",
         cardNumber: pan,
-        expiryMonth: "12",
-        expiryYear: "2030",
         expiry: "12/30",
-        cvc
+        securityCode
       }
     });
 
     expect(await page.locator("#cardholder").inputValue()).toBe("Fixture Holder");
     expect(await page.locator("#card-number").inputValue()).toBe(pan);
     expect(await page.locator("#expiry").inputValue()).toBe("12/30");
-    expect(await page.locator("#cvc").inputValue()).toBe(cvc);
-    expect(result.filledFields).toEqual(expect.arrayContaining(["cardholderName", "cardNumber", "expiry", "cvc"]));
+    expect(await page.locator("#cvc").inputValue()).toBe(securityCode);
+    expect(result.filledFields).toEqual(expect.arrayContaining(["holderName", "cardNumber", "expiry", "securityCode"]));
     expect(result.missingFields).toEqual([]);
     expect(result.requiresUserAction).toBe(true);
 
