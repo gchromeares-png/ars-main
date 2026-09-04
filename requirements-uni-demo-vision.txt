@@ -1,0 +1,4 @@
+torch==2.8.0
+torchvision==0.23.0
+Pillow==11.3.0
+requests==2.32.5
