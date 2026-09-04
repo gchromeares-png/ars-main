@@ -1,5 +1,9 @@
 import type { Locator, Page } from "patchright";
 import type { AresProfile } from "../profiles/models";
+import {
+  SemanticCheckoutTraceRecorder,
+  type SemanticCheckoutBillingMode
+} from "./semantic-checkout-observability";
 import type { SemanticTarget } from "./semantic-target";
 import type { SemanticFieldValueSource } from "./semantic-target-values";
 import type { UiInteractionHelper } from "./ui-interaction-helper";
@@ -8,11 +12,13 @@ import { SemanticProfileMapper } from "./semantic-profile-mapper";
 export interface PlannedSemanticProfileValues extends SemanticFieldValueSource {
   /** Feature policy from the selected profile. Missing/legacy profiles default to enabled. */
   readonly semanticAutofillEnabled: boolean;
+  /** PII-safe per-checkout trace recorder shared with SemanticFieldAutofill. */
+  readonly semanticCheckoutTrace: SemanticCheckoutTraceRecorder;
 }
 
 export interface SemanticCheckoutProfilePlan {
   values: PlannedSemanticProfileValues;
-  billingMode: "explicit-billing" | "same-as-shipping" | "separate-billing-fields";
+  billingMode: SemanticCheckoutBillingMode;
 }
 
 class PlannedProfileValues implements PlannedSemanticProfileValues {
@@ -20,7 +26,8 @@ class PlannedProfileValues implements PlannedSemanticProfileValues {
 
   constructor(
     private readonly mapper: SemanticProfileMapper,
-    profile: AresProfile
+    profile: AresProfile,
+    readonly semanticCheckoutTrace: SemanticCheckoutTraceRecorder
   ) {
     this.semanticAutofillEnabled = profile.browser?.kiAutofill !== false;
   }
@@ -37,25 +44,35 @@ export class SemanticCheckoutProfilePlanner {
 
   async prepare(page: Page, profile: AresProfile): Promise<SemanticCheckoutProfilePlan> {
     if (profile.billingAddress) {
-      return {
-        values: this.values(new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }), profile),
-        billingMode: "explicit-billing"
-      };
+      return this.plan(
+        new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }),
+        profile,
+        "explicit-billing"
+      );
     }
 
     const preferred = new SemanticProfileMapper(profile, { billingMode: "prefer-same-as-shipping" });
     if (await this.activateSameAsShipping(page)) {
-      return { values: this.values(preferred, profile), billingMode: "same-as-shipping" };
+      return this.plan(preferred, profile, "same-as-shipping");
     }
 
-    return {
-      values: this.values(new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }), profile),
-      billingMode: "separate-billing-fields"
-    };
+    return this.plan(
+      new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }),
+      profile,
+      "separate-billing-fields"
+    );
   }
 
-  private values(mapper: SemanticProfileMapper, profile: AresProfile): PlannedSemanticProfileValues {
-    return new PlannedProfileValues(mapper, profile);
+  private plan(
+    mapper: SemanticProfileMapper,
+    profile: AresProfile,
+    billingMode: SemanticCheckoutBillingMode
+  ): SemanticCheckoutProfilePlan {
+    const semanticCheckoutTrace = new SemanticCheckoutTraceRecorder(billingMode);
+    return {
+      values: new PlannedProfileValues(mapper, profile, semanticCheckoutTrace),
+      billingMode
+    };
   }
 
   private async activateSameAsShipping(page: Page): Promise<boolean> {
