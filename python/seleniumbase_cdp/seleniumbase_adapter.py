@@ -26,7 +26,6 @@ class SeleniumBaseCdpAdapter:
         headless: bool,
         proxy: str | None = None,
         user_agent: str | None = None,
-        restore_last_session: bool = False,
     ) -> None:
         self.profile_dir = Path(profile_dir).expanduser().resolve()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -35,8 +34,6 @@ class SeleniumBaseCdpAdapter:
             "user_data_dir": str(self.profile_dir),
             "headless": bool(headless),
         }
-        if restore_last_session:
-            kwargs["browser_args"] = ["--restore-last-session"]
         if proxy:
             kwargs["proxy"] = proxy
         if user_agent:
