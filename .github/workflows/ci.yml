@@ -26,6 +26,9 @@ jobs:
       - name: Run isolated SeleniumBase CDP persistence PoC
         run: python python/seleniumbase_cdp/persistence_probe.py
 
+      - name: Run SeleniumBase manual process and cookie bridge PoC
+        run: python python/seleniumbase_cdp/manual_profile_probe.py
+
   build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
