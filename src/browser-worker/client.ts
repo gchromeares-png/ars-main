@@ -7,6 +7,7 @@ import type { Task } from "../models";
 import type { AresProfile } from "../profiles/models";
 import type { AresProxy, ProxySelection } from "../proxies/models";
 import type { ProfileCookieSnapshotCookie } from "../cookies/profile-cookie-snapshot-vault";
+import { readRegisteredProfileCookieSnapshot } from "../cookies/profile-cookie-snapshot-registry";
 import type { RuntimeShop } from "./runtime-types";
 import type { BrowserWorkerHealth } from "./types";
 import type { BrowserWorkerRequest, BrowserWorkerResponse } from "./protocol";
@@ -363,7 +364,7 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     } = {}
   ) {
     this.getProxy = options.getProxy ?? (() => undefined);
-    this.getCookieSnapshot = options.getCookieSnapshot ?? (() => undefined);
+    this.getCookieSnapshot = options.getCookieSnapshot ?? readRegisteredProfileCookieSnapshot;
     // @ts-ignore
     const requestedCount = options.processCount ?? Number(process.env.ARES_BROWSER_WORKER_PROCESSES ?? "1");
     const processCount = Number.isFinite(requestedCount) ? Math.min(4, Math.max(1, Math.floor(requestedCount))) : 1;
