@@ -62,6 +62,7 @@ def _start(command: Dict[str, Any]) -> int:
         headless=False,
         proxy=_proxy_value(command),
         user_agent=user_agent,
+        restore_last_session=True,
     )
     closed = False
     try:
