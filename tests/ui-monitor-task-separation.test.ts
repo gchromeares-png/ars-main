@@ -30,7 +30,7 @@ describe("ARES unified task control UX", () => {
     expect(html).toContain("<span>Shops</span>");
     expect(html).not.toContain("setTab('monitor')");
     expect(html).toContain(">Persönlich</button>");
-    expect(html).toContain(">Adresse</button>");
+    expect(html).toContain(">Adressen</button>");
     expect(html).toContain(">Browser</button>");
     expect(html).toContain(">Zahlung</button>");
   });
