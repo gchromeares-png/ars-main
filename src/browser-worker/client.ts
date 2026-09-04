@@ -37,6 +37,16 @@ export interface BrowserWorkerPoolHealth {
   };
 }
 
+function boundedMs(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}
+
+function isEarlyGateExecution(task: Task): boolean {
+  const trigger = task.config.data?.["triggerSource"] as Record<string, unknown> | undefined;
+  return trigger?.["kind"] === "early-gate";
+}
+
 export class BrowserWorkerProcessClient {
   private child?: ChildProcessWithoutNullStreams;
   private ready?: Promise<void>;
@@ -91,7 +101,7 @@ export class BrowserWorkerProcessClient {
         task,
         shop,
         profile
-      }, this.executeTimeoutMs);
+      }, this.executeTimeoutFor(task));
       if (response.type !== "execute-result") {
         throw new Error(`Unerwartete Browser-Worker-Antwort: ${response.type}`);
       }
@@ -181,6 +191,26 @@ export class BrowserWorkerProcessClient {
     } catch {
       if (!child.killed) child.kill("SIGKILL");
     }
+  }
+
+  private executeTimeoutFor(task: Task): number {
+    if (!isEarlyGateExecution(task)) return this.executeTimeoutMs;
+
+    const data = task.config.data ?? {};
+    const browserConfig = data["browserConfig"] as Record<string, unknown> | undefined;
+    const queueMs = boundedMs(
+      browserConfig?.["queueMaxWaitMs"] ?? data["queueMaxWaitMs"],
+      60 * 60_000,
+      1_000,
+      60 * 60_000
+    );
+    const discoveryMs = boundedMs(data["discoveryMaxMs"], 45 * 60_000, 60_000, 60 * 60_000);
+    const checkoutPreparationMs = boundedMs(data["checkoutPreparationMaxMs"], 10 * 60_000, 30_000, 30 * 60_000);
+    const safetyMarginMs = 10 * 60_000;
+
+    // Early Gate legitimately spans queue + post-queue discovery + checkout preparation.
+    // A fixed 65-minute RPC timeout would otherwise recycle a healthy worker mid-release.
+    return Math.max(this.executeTimeoutMs, queueMs + discoveryMs + checkoutPreparationMs + safetyMarginMs);
   }
 
   private async ensureReady(): Promise<void> {
@@ -369,7 +399,7 @@ export class BrowserWorkerProcessClient {
       pending.reject(error);
     }
     this.pending.clear();
-    if (shouldNotify) this.onExit(this, error);
+    if (shouldNotify) this.onExit(client, error);
     this.closing = false;
   }
 }
