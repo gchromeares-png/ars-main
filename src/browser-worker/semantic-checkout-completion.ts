@@ -1,7 +1,11 @@
-import type { SemanticAutofillResult } from "./semantic-field-autofill";
 import type { FieldIntent, SemanticTarget } from "./semantic-target";
 
 export type RequiredFieldIntent = Exclude<FieldIntent, "unknown">;
+
+export interface SemanticCompletionState {
+  filled: SemanticTarget[];
+  missing: SemanticTarget[];
+}
 
 export interface SemanticCheckoutCompletion {
   complete: boolean;
@@ -10,12 +14,12 @@ export interface SemanticCheckoutCompletion {
 }
 
 /**
- * A checkout profile is only considered sufficiently filled when at least one
- * required semantic target was actually completed and no observed required
- * target is still missing. Context remains part of every concrete target.
+ * Pure evaluation of an already-normalized semantic state. DOM visibility,
+ * same-as-shipping handling, profile mapping and shop-specific decisions must
+ * have happened before this function is called.
  */
 export function evaluateSemanticCheckoutCompletion(
-  result: Pick<SemanticAutofillResult, "filled" | "missing">,
+  result: SemanticCompletionState,
   requiredIntents: ReadonlySet<RequiredFieldIntent>
 ): SemanticCheckoutCompletion {
   const isRequired = (target: SemanticTarget): target is SemanticTarget & { intent: RequiredFieldIntent } =>
