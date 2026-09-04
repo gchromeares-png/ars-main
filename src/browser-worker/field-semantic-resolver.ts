@@ -313,18 +313,39 @@ export class FieldSemanticResolver {
     const match = (pattern: RegExp, value: Exclude<FieldIntent, "unknown">, confidence = 0.96): ResolutionPart<FieldIntent> | undefined =>
       pattern.test(text) ? { value, confidence, source: "lexical" } : undefined;
 
+    // Specific multi-word address semantics must win before generic single-token
+    // house-number semantics. A combined street + number field is address1 even
+    // though the literal word "Hausnummer" is present.
+    const combinedAddress = match(
+      /\b(?:stra(?:ß|ss)e|street)\s*(?:und|and|&|\/|\+)\s*(?:haus\s*(?:nummer|-?nr\.?|nr\.?)|hausnr\.?|(?:house\s*)?number|nr\.?)\b/i,
+      "address1",
+      0.98
+    );
+    if (combinedAddress) return combinedAddress;
+
     return match(/\b(e-?mail|emailadresse|mailadresse)\b/i, "email")
       ?? match(/\b(vorname|rufname|given[ _-]?name|first[ _-]?name)\b/i, "firstName")
       ?? match(/\b(nachname|familienname|surname|family[ _-]?name|last[ _-]?name)\b/i, "lastName")
       ?? match(/\b(vollst[aä]ndiger? name|full[ _-]?name|recipient[ _-]?name|name des empf[aä]ngers|empf[aä]ngername)\b/i, "fullName", 0.94)
-      ?? match(/\b(stra(?:ß|ss)e\s*(?:und|&|\+)\s*hausnummer|street\s*(?:and|&|\+)\s*(?:house )?number|street[ _-]?address|anschrift|address[ _-]?line[ _-]?1)\b/i, "address1", 0.95)
-      ?? match(/\b(hausnummer|house[ _-]?number|street[ _-]?number)\b/i, "houseNumber")
+      ?? match(/\b(street[ _-]?address|anschrift|address[ _-]?line[ _-]?1)\b/i, "address1", 0.95)
+      ?? match(/\b(haus\s*(?:nummer|-?nr\.?)|hausnr\.?|house[ _-]?number|street[ _-]?number)\b/i, "houseNumber")
+      ?? (this.hasStrongBareNumberContext(field) && /\bnr\.?\b/i.test(text)
+        ? { value: "houseNumber", confidence: 0.9, source: "lexical" as const }
+        : undefined)
       ?? match(/\b(adresszusatz|address[ _-]?line[ _-]?2|address2|apartment|wohnung|zusatz zur anschrift|company)\b/i, "address2", 0.94)
       ?? match(/\b(postleitzahl|plz|postal[ _-]?code|zip(?:[ _-]?code)?|zustellcode|postgebiet)\b/i, "postalCode")
       ?? match(/\b(stadt|wohnort|lieferort|gemeinde|city|town|locality)\b/i, "city")
       ?? match(/\b(land|l[aä]ndercode|country(?:[ _-]?code|[ _-]?name)?)\b/i, "countryCode", 0.94)
       ?? match(/\b(telefon(?:nummer)?|mobil(?:nummer)?|rufnummer|phone|mobile|tel)\b/i, "phone")
       ?? match(/\b(stra(?:ß|ss)e|street|road|avenue)\b/i, "street", 0.92);
+  }
+
+  private hasStrongBareNumberContext(field: FieldDescriptor): boolean {
+    const metadata = normalizeLower([field.name, field.id, field.autocomplete, field.placeholder, field.ariaLabel].filter(Boolean).join(" "));
+    if (/\b(house|street)[ _-]?(?:number|no|nr)\b|\bhaus(?:nummer|-?nr|nr)\b/i.test(metadata)) return true;
+
+    const nearby = normalizeLower(field.nearbyText);
+    return /\b(hausnummer|haus\s*-?\s*nr\.?|hausnr\.?|house[ _-]?number|street[ _-]?number)\b/i.test(nearby);
   }
 
   private resolveContextLexically(field: FieldDescriptor): ResolutionPart<AddressContext> | undefined {
