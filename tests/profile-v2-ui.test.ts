@@ -9,7 +9,7 @@ describe("Profile V2 UI wiring", () => {
   it("normalizes persisted legacy profiles into the V2 editor", () => {
     expect(component).toContain("toProfileV2Draft(profile)");
     expect(component).toContain("toPersistedAresProfile(profile)");
-    expect(profileV2).toContain("profile.shippingAddress ?? profile.address");
+    expect(profileV2).toContain("cloneAddress(profile.shippingAddress, profile.address)");
     expect(profileV2).toContain("address: { ...shippingAddress }");
   });
 
