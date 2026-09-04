@@ -171,7 +171,12 @@ export class ProfilePaymentVault {
     if (!entry) throw new Error("Für dieses Profil sind keine verschlüsselten Kartendaten gespeichert.");
     this.assertEncryptionAvailable();
     const secret = this.decrypt(entry);
-    session.card = { ...secret };
+    session.card = {
+      holderName: secret.cardholderName,
+      cardNumber: secret.cardNumber,
+      expiry: secret.expiry,
+      securityCode: secret.cvc
+    };
     return session;
   }
 
