@@ -23,6 +23,11 @@ function normalizeValue(value: string): string {
   return value.trim();
 }
 
+function semanticAutofillEnabled(values: SemanticFieldValueSource): boolean {
+  const policy = values as SemanticFieldValueSource & { semanticAutofillEnabled?: boolean };
+  return policy.semanticAutofillEnabled !== false;
+}
+
 export class SemanticFieldAutofill {
   private readonly completedTargets = new Map<SemanticTargetKey, Locator>();
   private readonly writeCounts = new Map<SemanticTargetKey, number>();
@@ -35,6 +40,10 @@ export class SemanticFieldAutofill {
   ) {}
 
   async fillSemantic(values: SemanticFieldValueSource): Promise<void> {
+    // A disabled KI AutoFill policy intentionally skips semantic DOM resolution.
+    // Shop compatibility fallbacks may still fill deterministic known selectors.
+    if (!semanticAutofillEnabled(values)) return;
+
     const descriptors = await collectFieldDescriptors(this.page);
     const resolved = await this.resolver.resolve(descriptors);
     const ranked = resolved

@@ -30,6 +30,8 @@ export interface ContactProfile {
 export interface BrowserProfileConfig {
   headless?: boolean;
   userAgent?: string;
+  /** Enables semantic/KI field resolution. Missing means enabled for backwards compatibility. */
+  kiAutofill?: boolean;
 }
 
 export interface AresProfile {
