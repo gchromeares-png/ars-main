@@ -2,12 +2,11 @@ import type { ITaskExecutor } from "../interfaces";
 import type { Task, TaskLogEntry } from "../models";
 import type { CommerceShop } from "../commerce/platforms";
 import type { CommerceProductApiRouter } from "../commerce/product-api/router";
-import type {
-  ProductCriteria,
-  ProductMonitorEvent
-} from "./models";
+import type { ProductCriteria, ProductMonitorEvent } from "./models";
 import { ProductMatcher } from "./product-matcher";
 import { ProductMonitor } from "./product-monitor";
+import { getMonitorStrategy, setEarlyGateRuntime, type PreCheckoutGateEvent } from "./early-gate";
+import type { PreCheckoutGate } from "./pre-checkout-gate";
 
 export interface ProductMonitorEventRepository {
   recordProductMonitorEvent(taskId: string, event: ProductMonitorEvent): Promise<void>;
@@ -19,7 +18,9 @@ export interface CommerceMonitorServiceOptions {
   defaultIntervalMs?: number;
   minimumIntervalMs?: number;
   searchLimit?: number;
+  preCheckoutGate?: PreCheckoutGate;
   onEvent?: (taskId: string, event: ProductMonitorEvent) => void;
+  onGateEvent?: (taskId: string, event: PreCheckoutGateEvent) => void;
 }
 
 interface ActiveMonitorRun {
@@ -50,7 +51,7 @@ export function getTaskProductCriteria(task: Task): ProductCriteria | undefined 
 }
 
 export function isCommerceMonitorTask(task: Task): boolean {
-  return Boolean(asRecord(task.config.data?.["productCriteria"]));
+  return Boolean(asRecord(task.config.data?.["productCriteria"])) || getMonitorStrategy(task).mode === "early-gate";
 }
 
 function isRelevantChange(event: ProductMonitorEvent): boolean {
@@ -59,7 +60,6 @@ function isRelevantChange(event: ProductMonitorEvent): boolean {
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
-
   return new Promise(resolve => {
     const timer = setTimeout(done, ms);
     function done(): void {
@@ -84,6 +84,8 @@ export class CommerceMonitorService implements ITaskExecutor {
   private readonly matcher = new ProductMatcher();
   private readonly monitors = new Map<string, ProductMonitor>();
   private readonly activeRuns = new Map<string, ActiveMonitorRun>();
+  private readonly gateSignaled = new Set<string>();
+  private readonly runtimeListeners = new Set<(task: Task) => void>();
   private readonly defaultIntervalMs: number;
   private readonly minimumIntervalMs: number;
   private readonly searchLimit: number;
@@ -99,6 +101,11 @@ export class CommerceMonitorService implements ITaskExecutor {
     this.searchLimit = Math.min(250, Math.max(1, options.searchLimit ?? 50));
   }
 
+  onTaskUpdate(callback: (task: Task) => void): () => void {
+    this.runtimeListeners.add(callback);
+    return () => this.runtimeListeners.delete(callback);
+  }
+
   async execute(task: Task): Promise<boolean> {
     const shopId = task.config.shopId;
     if (!shopId) {
@@ -112,9 +119,14 @@ export class CommerceMonitorService implements ITaskExecutor {
       return false;
     }
 
+    const strategy = getMonitorStrategy(task);
     const criteria = getTaskProductCriteria(task);
-    if (!criteria) {
+    if (strategy.mode !== "early-gate" && !criteria) {
       task.lastError = "Monitoring-Task hat keine productCriteria.";
+      return false;
+    }
+    if (strategy.mode === "early-gate" && !this.options.preCheckoutGate) {
+      task.lastError = "Early-Gate ist konfiguriert, aber kein passiver PreCheckoutGate-Adapter registriert.";
       return false;
     }
 
@@ -127,9 +139,24 @@ export class CommerceMonitorService implements ITaskExecutor {
     const run: ActiveMonitorRun = { controller };
     this.activeRuns.set(task.id, run);
 
+    if (strategy.mode === "early-gate") {
+      setEarlyGateRuntime(task, {
+        activeArea: "monitor",
+        stage: "monitoring",
+        productName: strategy.productName,
+        keywords: strategy.discoveryKeywords,
+        monitoringAt: new Date().toISOString()
+      });
+      this.emitTaskUpdate(task);
+    }
+
     try {
       while (!controller.signal.aborted) {
-        await this.runCycle(task, shop, criteria, controller.signal);
+        if (strategy.mode === "early-gate") {
+          await this.runGateCycle(task, shop, controller.signal);
+        } else {
+          await this.runCycle(task, shop, criteria, controller.signal);
+        }
         task.lastError = undefined;
         if (controller.signal.aborted) break;
         await abortableDelay(this.intervalFor(task), controller.signal);
@@ -139,10 +166,44 @@ export class CommerceMonitorService implements ITaskExecutor {
     } catch (error) {
       if (controller.signal.aborted) return true;
       task.lastError = error instanceof Error ? error.message : String(error);
+      this.emitTaskUpdate(task);
       return false;
     } finally {
       if (this.activeRuns.get(task.id) === run) this.activeRuns.delete(task.id);
     }
+  }
+
+  async runGateCycle(task: Task, shop?: CommerceShop, signal?: AbortSignal): Promise<PreCheckoutGateEvent | undefined> {
+    if (this.gateSignaled.has(task.id)) return undefined;
+    const shopId = task.config.shopId;
+    if (!shopId) throw new Error("Early-Gate-Task hat keine shopId.");
+    const resolvedShop = shop ?? this.getShop(shopId);
+    if (!resolvedShop) throw new Error(`Shop ${shopId} ist nicht registriert.`);
+    const gate = this.options.preCheckoutGate;
+    if (!gate) throw new Error("Kein passiver PreCheckoutGate-Adapter registriert.");
+
+    const event = await gate.evaluate(task, resolvedShop, signal);
+    if (!event || signal?.aborted) return undefined;
+    this.gateSignaled.add(task.id);
+    const gateDetectedAt = event.observedAt.toISOString();
+    setEarlyGateRuntime(task, {
+      activeArea: "gate",
+      stage: "gate-detected",
+      gateDetectedAt
+    });
+    task.config.data = {
+      ...(task.config.data ?? {}),
+      gateTelemetry: {
+        source: event.source,
+        position: event.position,
+        timeToWaitSeconds: event.timeToWaitSeconds,
+        statusText: event.statusText,
+        observedAt: gateDetectedAt
+      }
+    };
+    this.emitTaskUpdate(task);
+    this.options.onGateEvent?.(task.id, event);
+    return event;
   }
 
   async runCycle(
@@ -200,12 +261,19 @@ export class CommerceMonitorService implements ITaskExecutor {
 
   resetTask(taskId: string): void {
     this.monitors.delete(taskId);
+    this.gateSignaled.delete(taskId);
   }
 
   async close(): Promise<void> {
     for (const run of this.activeRuns.values()) run.controller.abort();
     this.activeRuns.clear();
     this.monitors.clear();
+    this.gateSignaled.clear();
+    this.runtimeListeners.clear();
+  }
+
+  private emitTaskUpdate(task: Task): void {
+    for (const listener of this.runtimeListeners) listener(task);
   }
 
   private monitorFor(taskId: string): ProductMonitor {
