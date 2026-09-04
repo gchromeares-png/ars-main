@@ -26,13 +26,26 @@ jobs:
       - name: Install Patchright Chrome
         run: npm run browser:install -- --with-deps
 
+      - name: Run targeted payment gates
+        env:
+          ARES_RUN_BROWSER_INTEGRATION: "1"
+        run: >-
+          npx jest --runInBand
+          tests/payment-session-normalizer.test.ts
+          tests/profile-payment-vault.test.ts
+          tests/ephemeral-payment-executor.test.ts
+          tests/payment-persistence-safety.test.ts
+          tests/payment-preparation.test.ts
+          tests/payment-fixture.integration.test.ts
+          tests/payment-source-guard.test.ts
+
       - name: Build backend
         run: npm run build:backend
 
       - name: Build UI
         run: npm run build:ui
 
-      - name: Run tests
+      - name: Run full test suite
         env:
           ARES_RUN_BROWSER_INTEGRATION: "1"
         run: npm test -- --runInBand
