@@ -103,8 +103,8 @@ export class PatchrightBrowserWorker implements BrowserWorker {
     this.activeProfileDirs.delete(normalizedDir);
 
     try {
-      const pages = handle.context.pages();
-      await Promise.allSettled(pages.map(p => p.close().catch(() => undefined)));
+      // Let Chromium close the persistent profile directly so Cookies, History,
+      // Preferences and storage can be flushed coherently. Do not close pages first.
       await handle.context.close();
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
@@ -142,8 +142,6 @@ export class PatchrightBrowserWorker implements BrowserWorker {
     const results = await Promise.allSettled(
       handles.map(async ([taskId, handle]) => {
         try {
-          const pages = handle.context.pages();
-          await Promise.allSettled(pages.map(p => p.close().catch(() => undefined)));
           await handle.context.close();
         } finally {
           this.profileLeases.get(taskId)?.release();
