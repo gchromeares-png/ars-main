@@ -6,11 +6,13 @@ function source(relativePath: string): string {
 }
 
 describe("payment source guard", () => {
-  it("keeps the established checkout card class and maps profile aliases at boundaries", () => {
+  it("uses one established checkout card field contract end to end", () => {
     const models = source("src/payments/models.ts");
     const preparer = source("src/browser-worker/checkout-payment-preparer.ts");
     const vault = source("src/payments/profile-payment-vault.ts");
     const normalizer = source("src/payments/payment-session-normalizer.ts");
+    const profileUi = source("src/app/profile-payment/profile-payment.component.ts");
+    const profileHtml = source("src/app/profile-payment/profile-payment.component.html");
     const electronMain = source("src/electron/main.ts");
 
     expect(models).toContain("holderName?: string");
@@ -23,15 +25,16 @@ describe("payment source guard", () => {
     expect(preparer).not.toContain("card.cardholderName");
     expect(preparer).not.toContain("card.cvc");
 
-    expect(vault).toContain("cardholderName");
-    expect(vault).toContain("cvc");
-    expect(vault).toContain("holderName: secret.cardholderName");
-    expect(vault).toContain("securityCode: secret.cvc");
+    for (const paymentSource of [vault, profileUi, profileHtml]) {
+      expect(paymentSource).toContain("holderName");
+      expect(paymentSource).toContain("securityCode");
+      expect(paymentSource).not.toContain("cardholderName");
+    }
 
-    expect(normalizer).toContain('card["cardholderName"]');
-    expect(normalizer).toContain('card["cvc"]');
-    expect(normalizer).toContain("holderName:");
-    expect(normalizer).toContain("securityCode:");
+    expect(normalizer).toContain('card["holderName"]');
+    expect(normalizer).toContain('card["securityCode"]');
+    expect(normalizer).not.toContain('card["cardholderName"]');
+    expect(normalizer).not.toContain('card["cvc"]');
     expect(electronMain).toContain("normalizePaymentSessionInput(input)");
   });
 
