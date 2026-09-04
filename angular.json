@@ -20,7 +20,7 @@
             "tsConfig": "tsconfig.app.json",
             "inlineStyleLanguage": "scss",
             "assets": [],
-            "styles": ["src/app/app.component.scss", "src/app/early-gate-ui.scss"],
+            "styles": ["src/app/app.component.scss", "src/app/early-gate-ui.scss", "src/app/runtime-control/runtime-control-extras.scss"],
             "scripts": []
           },
           "configurations": {
