@@ -5,6 +5,11 @@ import {
   BrowserProfileInUseError,
   BrowserWorkerStateError
 } from "./errors";
+import {
+  acquireBrowserProfileLease,
+  resolveProfileUserDataDir,
+  type BrowserProfileLease
+} from "./profile-session-manager";
 import { launchBrowserContext } from "./patchright-launcher";
 import type {
   BrowserContextConfig,
@@ -17,9 +22,22 @@ export class PatchrightBrowserWorker implements BrowserWorker {
   private readonly contexts = new Map<string, BrowserContextHandle>();
   private readonly pendingCreations = new Set<string>();
   private readonly activeProfileDirs = new Set<string>();
+  private readonly taskProfileIds = new Map<string, string>();
+  private readonly profileLeases = new Map<string, BrowserProfileLease>();
   private readonly startedAt = new Date();
   private state: BrowserWorkerState = "healthy";
   private lastError?: string;
+
+  bindTaskProfile(taskId: string, profileId: string): void {
+    const normalizedTaskId = String(taskId ?? "").trim();
+    const normalizedProfileId = String(profileId ?? "").trim();
+    if (!normalizedTaskId || !normalizedProfileId) throw new TypeError("taskId and profileId are required.");
+    this.taskProfileIds.set(normalizedTaskId, normalizedProfileId);
+  }
+
+  getBoundProfileId(taskId: string): string | undefined {
+    return this.taskProfileIds.get(taskId);
+  }
 
   async createContext(config: BrowserContextConfig): Promise<BrowserContextHandle> {
     if (this.state !== "healthy") {
@@ -29,20 +47,34 @@ export class PatchrightBrowserWorker implements BrowserWorker {
       throw new BrowserContextAlreadyExistsError(config.taskId);
     }
 
-    const normalizedDir = path.resolve(config.userDataDir);
+    const profileId = this.taskProfileIds.get(config.taskId);
+    const requestedRoot = path.dirname(config.userDataDir);
+    const effectiveUserDataDir = profileId
+      ? resolveProfileUserDataDir(profileId, requestedRoot)
+      : config.userDataDir;
+    const normalizedDir = path.resolve(effectiveUserDataDir);
     if (this.activeProfileDirs.has(normalizedDir)) {
-      throw new BrowserProfileInUseError(config.userDataDir);
+      throw new BrowserProfileInUseError(effectiveUserDataDir, `worker:${process.pid}:${config.taskId}`);
     }
 
     this.pendingCreations.add(config.taskId);
     this.activeProfileDirs.add(normalizedDir);
 
+    let lease: BrowserProfileLease | undefined;
     try {
-      const handle = await launchBrowserContext(config);
+      lease = acquireBrowserProfileLease(normalizedDir, `worker:${process.pid}:${config.taskId}`);
+      this.profileLeases.set(config.taskId, lease);
+
+      const handle = await launchBrowserContext({
+        ...config,
+        userDataDir: normalizedDir
+      });
       this.contexts.set(config.taskId, handle);
       this.lastError = undefined;
       return handle;
     } catch (error) {
+      this.profileLeases.delete(config.taskId);
+      lease?.release();
       this.activeProfileDirs.delete(normalizedDir);
       this.lastError = error instanceof Error ? error.message : String(error);
       throw error;
@@ -53,9 +85,17 @@ export class PatchrightBrowserWorker implements BrowserWorker {
 
   async closeContext(taskId: string): Promise<void> {
     const handle = this.contexts.get(taskId);
-    if (!handle) return;
+    const lease = this.profileLeases.get(taskId);
 
     this.contexts.delete(taskId);
+    this.profileLeases.delete(taskId);
+    this.taskProfileIds.delete(taskId);
+
+    if (!handle) {
+      lease?.release();
+      return;
+    }
+
     const normalizedDir = path.resolve(handle.userDataDir);
     this.activeProfileDirs.delete(normalizedDir);
 
@@ -66,6 +106,8 @@ export class PatchrightBrowserWorker implements BrowserWorker {
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
       throw error;
+    } finally {
+      lease?.release();
     }
   }
 
@@ -89,17 +131,26 @@ export class PatchrightBrowserWorker implements BrowserWorker {
     if (this.state === "stopping" || this.state === "stopped") return;
     this.state = "stopping";
 
-    const handles = [...this.contexts.values()];
+    const handles = [...this.contexts.entries()];
     this.contexts.clear();
     this.activeProfileDirs.clear();
+    this.taskProfileIds.clear();
 
     const results = await Promise.allSettled(
-      handles.map(async handle => {
-        const pages = handle.context.pages();
-        await Promise.allSettled(pages.map(p => p.close().catch(() => undefined)));
-        await handle.context.close();
+      handles.map(async ([taskId, handle]) => {
+        try {
+          const pages = handle.context.pages();
+          await Promise.allSettled(pages.map(p => p.close().catch(() => undefined)));
+          await handle.context.close();
+        } finally {
+          this.profileLeases.get(taskId)?.release();
+          this.profileLeases.delete(taskId);
+        }
       })
     );
+
+    for (const lease of this.profileLeases.values()) lease.release();
+    this.profileLeases.clear();
 
     const failed = results.filter(result => result.status === "rejected");
     if (failed.length > 0) {
