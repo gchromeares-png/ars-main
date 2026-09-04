@@ -54,6 +54,8 @@ function inStock(availability: unknown): boolean {
   return /(?:^|\/)(?:instock|limitedavailability)$/i.test(String(availability ?? "").trim());
 }
 
+const FINAL_PURCHASE_TEXT = /(?:zahlungspflichtig\s+bestellen|jetzt\s+(?:kaufen|bezahlen)|bestellung\s+(?:aufgeben|abschließen)|place\s+order|pay\s+now|complete\s+(?:order|purchase)|submit\s+order)/i;
+
 export class PokemonCenterReleaseJourney implements ReleaseJourney {
   private readonly matcher = new ProductMatcher();
 
@@ -142,5 +144,29 @@ export class PokemonCenterReleaseJourney implements ReleaseJourney {
     if (!/(checkout|global-e|international)/i.test(`${title} ${current}`)) {
       throw new Error("Pokémon-Center-Checkout wurde nach Gast-Checkout nicht bestätigt.");
     }
+  }
+
+  async submitOrder(page: Page, _shop: CommerceShop, allowFinalPurchase: () => boolean): Promise<boolean> {
+    const candidates = page.locator('button, input[type="submit"], [role="button"]');
+    const count = Math.min(await candidates.count().catch(() => 0), 120);
+    for (let index = 0; index < count; index++) {
+      const candidate = candidates.nth(index);
+      if (!await candidate.isVisible().catch(() => false) || !await candidate.isEnabled().catch(() => false)) continue;
+      const text = await candidate.evaluate(element => [
+        element.textContent || "",
+        element.getAttribute("value") || "",
+        element.getAttribute("aria-label") || "",
+        element.getAttribute("data-test") || "",
+        element.getAttribute("data-testid") || ""
+      ].join(" ").replace(/\s+/g, " ").trim()).catch(() => "");
+      if (!FINAL_PURCHASE_TEXT.test(text)) continue;
+
+      // Hard backend-side guard immediately before the irreversible submit click.
+      if (!allowFinalPurchase()) return false;
+      await candidate.click();
+      await page.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => undefined);
+      return true;
+    }
+    return false;
   }
 }
