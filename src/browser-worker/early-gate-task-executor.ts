@@ -5,8 +5,11 @@ import type { ITaskExecutor } from "../interfaces";
 import type { Task } from "../models";
 import type { CommerceShop } from "../commerce/platforms";
 import type { AresProfile } from "../profiles/models";
+import type { CheckoutPaymentSession, PaymentPreparationResult } from "../payments/models";
 import type { BrowserWorker } from "./browser-worker";
 import { BrowserQueueWaiter } from "./queue-waiter";
+import { CheckoutPaymentPreparer } from "./checkout-payment-preparer";
+import { SemanticCheckoutPreparer, type SemanticCheckoutPreparationResult } from "./semantic-checkout-preparer";
 import { normalizeDiscoveryKeywords, setEarlyGateRuntime } from "../monitor/early-gate";
 import type { ReleaseJourney } from "../commerce/release-discovery/release-journey";
 
@@ -18,6 +21,8 @@ interface ActiveDiscoverySession {
 
 export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
   private readonly active = new Map<string, ActiveDiscoverySession>();
+  private readonly checkoutPreparer = new SemanticCheckoutPreparer();
+  private readonly paymentPreparer = new CheckoutPaymentPreparer();
   private allowFinalPurchase = false;
 
   constructor(
@@ -28,7 +33,7 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
     private readonly onTaskUpdate: (task: Task) => void = () => undefined
   ) {}
 
-  async execute(task: Task): Promise<boolean> {
+  async execute(task: Task, paymentSession?: CheckoutPaymentSession): Promise<boolean> {
     const shopId = task.config.shopId;
     const profileId = String(task.config.data?.["profileId"] ?? "").trim();
     const postQueue = task.config.data?.["postQueueDiscovery"] as Record<string, unknown> | undefined;
@@ -144,6 +149,17 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
       this.markStage(task, "cart", { cartAt: new Date().toISOString() });
 
       await journey.openCheckout(page, shop);
+      this.publishCheckoutPreparation(task, {
+        phase: "checkout-opened",
+        profileReady: false,
+        reviewReady: false
+      });
+
+      await this.prepareCheckoutUntilReady(task, session, journey, page, shop, profile, paymentSession);
+      if (session.controller.signal.aborted) return true;
+
+      // CHECKOUT means purchase-ready now: profile/address was completed and the
+      // final enabled submit control is present after safe checkout progression.
       this.markStage(task, "checkout", { checkoutAt: new Date().toISOString() });
       this.publishFinalPurchaseStatus(task, "blocked");
 
@@ -203,6 +219,85 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
     for (const session of this.active.values()) session.controller.abort();
     this.active.clear();
     await Promise.allSettled(taskIds.map(taskId => this.browserWorker.closeContext(taskId)));
+  }
+
+  private async prepareCheckoutUntilReady(
+    task: Task,
+    session: ActiveDiscoverySession,
+    journey: ReleaseJourney,
+    page: import("patchright").Page,
+    shop: CommerceShop,
+    profile: AresProfile,
+    paymentSession?: CheckoutPaymentSession
+  ): Promise<void> {
+    const deadline = Date.now() + this.checkoutPreparationMaxMs(task);
+    let profileReady = false;
+    let lastProfile: SemanticCheckoutPreparationResult | undefined;
+    let lastPayment: PaymentPreparationResult | undefined;
+
+    while (!session.controller.signal.aborted && Date.now() < deadline) {
+      lastProfile = await this.checkoutPreparer.prepare(page, profile).catch(() => undefined);
+      if (lastProfile?.requiredTargetsSatisfied) profileReady = true;
+
+      lastPayment = await this.paymentPreparer.prepare(page, paymentSession).catch(error => ({
+        detectedMethods: [],
+        selectedMethod: paymentSession?.method,
+        filledFields: [],
+        missingFields: [],
+        requiresUserAction: true,
+        note: `Zahlungsprüfung fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`
+      }));
+
+      const reviewReady = profileReady && await journey.isReadyForFinalSubmit(page, shop);
+      this.publishCheckoutPreparation(task, {
+        phase: reviewReady ? "purchase-ready" : "preparing",
+        profileReady,
+        reviewReady,
+        profile: lastProfile,
+        payment: lastPayment
+      });
+      if (reviewReady) return;
+
+      const advanced = await journey.advanceCheckout(page, shop).catch(() => false);
+      if (!advanced) await this.delay(700, session.controller.signal);
+    }
+
+    if (session.controller.signal.aborted) return;
+    const reason = !profileReady
+      ? "Checkout-Adresse/Profil wurde nicht vollständig bestätigt."
+      : "Finaler kaufbereiter Review-/Submit-Zustand wurde nicht erreicht.";
+    throw new Error(reason);
+  }
+
+  private publishCheckoutPreparation(task: Task, input: {
+    phase: "checkout-opened" | "preparing" | "purchase-ready";
+    profileReady: boolean;
+    reviewReady: boolean;
+    profile?: SemanticCheckoutPreparationResult;
+    payment?: PaymentPreparationResult;
+  }): void {
+    task.config.data = {
+      ...(task.config.data ?? {}),
+      checkoutPreparation: {
+        phase: input.phase,
+        profileReady: input.profileReady,
+        reviewReady: input.reviewReady,
+        ...(input.profile ? {
+          profile: {
+            billingMode: input.profile.billingMode,
+            requiredTargetsSatisfied: input.profile.requiredTargetsSatisfied,
+            requiredTargetCount: input.profile.requiredTargetCount,
+            filled: input.profile.filled,
+            missing: input.profile.missing,
+            writeCounts: input.profile.writeCounts
+          }
+        } : {}),
+        ...(input.payment ? { payment: input.payment } : {}),
+        updatedAt: new Date().toISOString()
+      },
+      ...(input.payment ? { paymentPreparation: input.payment } : {})
+    };
+    this.emit(task);
   }
 
   private publishKeywords(session: ActiveDiscoverySession): void {
@@ -266,6 +361,11 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
   private discoveryIntervalMs(task: Task): number {
     const raw = Number(task.config.data?.["discoveryIntervalMs"] ?? 3_000);
     return Number.isFinite(raw) ? Math.min(30_000, Math.max(1_000, raw)) : 3_000;
+  }
+
+  private checkoutPreparationMaxMs(task: Task): number {
+    const raw = Number(task.config.data?.["checkoutPreparationMaxMs"] ?? 10 * 60_000);
+    return Number.isFinite(raw) ? Math.min(30 * 60_000, Math.max(30_000, raw)) : 10 * 60_000;
   }
 
   private delay(ms: number, signal: AbortSignal): Promise<void> {
