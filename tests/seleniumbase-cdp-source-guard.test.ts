@@ -38,8 +38,18 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     }
   });
 
+  it("keeps the manual SeleniumBase test path SeleniumBase-owned end to end", () => {
+    expect(adapter).toContain("self._sb.goto(url)");
+    expect(adapter).toContain("self._sb.sleep(2)");
+    expect(adapter).toContain("self._sb.solve_captcha()");
+    expect(manualWorker).toContain("adapter.goto(start_url)");
+    expect(manualWorker).toContain("adapter.goto(url)");
+    expect(manualController.toLowerCase()).not.toContain("patchright");
+    expect(manualController).not.toContain("connectOverCDP");
+  });
+
   it("implements SeleniumBase Stealthy Playwright Mode on the existing context/page only", () => {
-    expect(adapter).toContain("self.get_cdp_endpoint()");
+    expect(adapter).toContain("self._sb.get_endpoint_url()");
     expect(adapter).toContain("playwright.chromium.connect_over_cdp(endpoint_url)");
     expect(adapter).toContain("context = browser.contexts[0]");
     expect(adapter).toContain("page = context.pages[0]");
@@ -48,37 +58,12 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     expect(manualWorker).toContain('command_type == "inspect-playwright"');
   });
 
-  it("bridges ARES Patchright to the SeleniumBase-owned Chrome over the existing CDP endpoint", () => {
-    expect(adapter).toContain("def get_cdp_endpoint(self) -> str:");
-    expect(adapter).toContain("self._sb.get_endpoint_url()");
-    expect(manualWorker).toContain('command_type == "get-cdp-endpoint"');
-    expect(manualWorker).toContain('"type": "cdp-endpoint"');
-    expect(manualController).toContain('import { chromium } from "patchright"');
-    expect(manualController).toContain("chromium.connectOverCDP(endpointUrl)");
-    expect(manualController).toContain("const contexts = browser.contexts()");
-    expect(manualController).toContain("const pages = context.pages()");
-    expect(manualController).not.toContain("browser.newContext(");
-    expect(manualController).not.toContain("chromium.launch(");
-  });
-
-  it("keeps the post-navigation SeleniumBase captcha command explicit and outside the protected ARES challenge core", () => {
-    expect(adapter).toContain("def solve_captcha(self) -> None:");
-    expect(adapter).toContain("self._sb.solve_captcha()");
-    expect(manualWorker).toContain('command_type == "solve-captcha"');
-    expect(manualWorker).toContain('"type": "captcha-attempted"');
-    expect(manualController).toContain("page.goto(target");
-    expect(manualController).toContain("POST_NAVIGATION_CAPTCHA_DELAY_MS = 2_000");
-    expect(manualController).toContain("await this.requestCaptchaAttempt(session)");
+  it("keeps the SeleniumBase worker isolated from Patchright and ARES protected cores", () => {
     for (const source of [adapter, worker, manualWorker, manualController]) {
+      expect(source.toLowerCase()).not.toContain("patchright");
       expect(source).not.toContain("src/challenges");
       expect(source).not.toContain("field-semantic-resolver");
       expect(source).not.toContain("payment-preparer");
-    }
-  });
-
-  it("keeps the SeleniumBase Python worker isolated from Patchright", () => {
-    for (const source of [adapter, worker, manualWorker]) {
-      expect(source.toLowerCase()).not.toContain("patchright");
     }
     expect(manualController).toContain('const SELENIUMBASE_PROFILE_DIR = ".ares-seleniumbase-cdp"');
     expect(manualController).toContain("resolveUserDataDir(profileId)");
