@@ -38,8 +38,8 @@ interface LocalFeedback {
 
 @Component({
   selector: ".task-builder",
-  templateUrl: "./drop-setups/drop-setups.component.html",
-  styleUrls: ["./drop-setups/drop-setups.component.scss"],
+  templateUrl: "./drop-setups.component.html",
+  styleUrls: ["./drop-setups.component.scss"],
   encapsulation: ViewEncapsulation.None
 })
 export class DropSetupsComponent implements OnInit, OnDestroy {
