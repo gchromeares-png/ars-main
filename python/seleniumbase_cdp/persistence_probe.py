@@ -15,6 +15,8 @@ from typing import Any, Dict, Tuple
 RESULT_PREFIX = "ARES_SB_RESULT\t"
 WORKER_PATH = Path(__file__).with_name("worker.py")
 COOKIE_NAME = "ares_sb_profile_probe"
+WORKER_TIMEOUT_SECONDS = 45
+KILL_TIMEOUT_SECONDS = 10
 
 
 class QuietHandler(http.server.BaseHTTPRequestHandler):
@@ -52,6 +54,30 @@ def _parse_result(stdout: str) -> Dict[str, Any]:
     raise RuntimeError(f"Worker emitted no ARES result marker. Output tail: {stdout[-1200:]}")
 
 
+def _kill_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=KILL_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except Exception:
+            process.kill()
+    else:
+        process.kill()
+
+    try:
+        process.wait(timeout=KILL_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
 def _run_worker(
     *,
     action: str,
@@ -67,20 +93,49 @@ def _run_worker(
         "headless": headless,
         "token": token,
     }
-    completed = subprocess.run(
+
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    print(f"[seleniumbase-persistence] starting {action}", flush=True)
+    process = subprocess.Popen(
         [sys.executable, str(WORKER_PATH)],
-        input=json.dumps(command) + "\n",
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        capture_output=True,
-        timeout=120,
-        check=False,
+        creationflags=creationflags,
     )
-    result = _parse_result(completed.stdout)
-    if completed.returncode != 0 or not result.get("ok"):
+
+    try:
+        stdout, stderr = process.communicate(
+            input=json.dumps(command) + "\n",
+            timeout=WORKER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        print(
+            f"[seleniumbase-persistence] {action} exceeded {WORKER_TIMEOUT_SECONDS}s; killing worker tree",
+            flush=True,
+        )
+        _kill_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except Exception:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+        raise TimeoutError(
+            f"SeleniumBase worker {action!r} exceeded {WORKER_TIMEOUT_SECONDS}s and was terminated"
+        ) from exc
+
+    result = _parse_result(stdout)
+    if process.returncode != 0 or not result.get("ok"):
         raise RuntimeError(
             "SeleniumBase worker failed: "
-            f"returncode={completed.returncode}, result={result}, stderr={completed.stderr[-1200:]}"
+            f"returncode={process.returncode}, result={result}, stderr={stderr[-1200:]}"
         )
+
+    print(f"[seleniumbase-persistence] completed {action}", flush=True)
     return result
 
 
