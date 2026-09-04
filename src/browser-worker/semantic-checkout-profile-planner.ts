@@ -1,11 +1,33 @@
 import type { Locator, Page } from "patchright";
 import type { AresProfile } from "../profiles/models";
+import type { SemanticTarget } from "./semantic-target";
+import type { SemanticFieldValueSource } from "./semantic-target-values";
 import type { UiInteractionHelper } from "./ui-interaction-helper";
 import { SemanticProfileMapper } from "./semantic-profile-mapper";
 
+export interface PlannedSemanticProfileValues extends SemanticFieldValueSource {
+  /** Feature policy from the selected profile. Missing/legacy profiles default to enabled. */
+  readonly semanticAutofillEnabled: boolean;
+}
+
 export interface SemanticCheckoutProfilePlan {
-  values: SemanticProfileMapper;
+  values: PlannedSemanticProfileValues;
   billingMode: "explicit-billing" | "same-as-shipping" | "separate-billing-fields";
+}
+
+class PlannedProfileValues implements PlannedSemanticProfileValues {
+  readonly semanticAutofillEnabled: boolean;
+
+  constructor(
+    private readonly mapper: SemanticProfileMapper,
+    profile: AresProfile
+  ) {
+    this.semanticAutofillEnabled = profile.browser?.kiAutofill !== false;
+  }
+
+  valueFor(target: SemanticTarget): string | undefined {
+    return this.mapper.valueFor(target);
+  }
 }
 
 const SAME_AS_SHIPPING_TEXT = /(?:same\s+as\s+(?:shipping|delivery)|billing\s+address\s+(?:is\s+)?same\s+as|rechnungs(?:adresse|anschrift)\s+(?:ist\s+)?(?:gleich|entspricht)\s+(?:der\s+)?liefer(?:adresse|anschrift)|liefer(?:adresse|anschrift)\s+(?:auch|als)\s+rechnungs(?:adresse|anschrift))/i;
@@ -16,20 +38,24 @@ export class SemanticCheckoutProfilePlanner {
   async prepare(page: Page, profile: AresProfile): Promise<SemanticCheckoutProfilePlan> {
     if (profile.billingAddress) {
       return {
-        values: new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }),
+        values: this.values(new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }), profile),
         billingMode: "explicit-billing"
       };
     }
 
     const preferred = new SemanticProfileMapper(profile, { billingMode: "prefer-same-as-shipping" });
     if (await this.activateSameAsShipping(page)) {
-      return { values: preferred, billingMode: "same-as-shipping" };
+      return { values: this.values(preferred, profile), billingMode: "same-as-shipping" };
     }
 
     return {
-      values: new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }),
+      values: this.values(new SemanticProfileMapper(profile, { billingMode: "separate-billing-fields" }), profile),
       billingMode: "separate-billing-fields"
     };
+  }
+
+  private values(mapper: SemanticProfileMapper, profile: AresProfile): PlannedSemanticProfileValues {
+    return new PlannedProfileValues(mapper, profile);
   }
 
   private async activateSameAsShipping(page: Page): Promise<boolean> {
