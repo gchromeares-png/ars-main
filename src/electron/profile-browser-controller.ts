@@ -1,9 +1,11 @@
 import { spawn } from "child_process";
 import type { ChildProcessWithoutNullStreams } from "child_process";
+import { randomUUID } from "crypto";
 import * as path from "path";
 import type { AresProfile } from "../profiles/models";
 import type { AresProxy } from "../proxies/models";
 import type { BrowserProxyConfig } from "../browser-worker/types";
+import type { ProfileCookieSnapshotCookie } from "../cookies/profile-cookie-snapshot-vault";
 import { resolveProfileUserDataDir } from "../browser-worker/profile-session-manager";
 import { registerProfilePaymentIpc } from "./profile-payment-controller";
 
@@ -24,9 +26,11 @@ export interface ProfileBrowserStatus {
 
 interface ManualBrowserWireMessage {
   type?: string;
+  requestId?: string;
   profileId?: string;
   pid?: number;
   userDataDir?: string;
+  cookies?: ProfileCookieSnapshotCookie[];
   error?: string;
 }
 
@@ -87,8 +91,8 @@ export class ProfileBrowserController {
 
       const cleanup = (): void => {
         clearTimeout(timeout);
-        child.stdout.removeAllListeners("data");
-        child.stderr.removeAllListeners("data");
+        child.stdout.removeListener("data", onStdout);
+        child.stderr.removeListener("data", onStderr);
         child.removeListener("error", onError);
         child.removeListener("exit", onEarlyExit);
       };
@@ -120,11 +124,8 @@ export class ProfileBrowserController {
         const detail = stderrBuffer.trim();
         finishError(new Error(`Profil-Browser wurde vor dem Start beendet (code=${String(code)}).${detail ? ` ${detail}` : ""}`));
       };
-
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", chunk => { stderrBuffer = `${stderrBuffer}${String(chunk)}`.slice(-2_000); });
-      child.stdout.on("data", chunk => {
+      const onStderr = (chunk: unknown): void => { stderrBuffer = `${stderrBuffer}${String(chunk)}`.slice(-2_000); };
+      const onStdout = (chunk: unknown): void => {
         stdoutBuffer += String(chunk);
         const lines = stdoutBuffer.split(/\r?\n/);
         stdoutBuffer = lines.pop() ?? "";
@@ -142,10 +143,79 @@ export class ProfileBrowserController {
             return;
           }
         }
-      });
+      };
+
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", onStderr);
+      child.stdout.on("data", onStdout);
       child.once("error", onError);
       child.once("exit", onEarlyExit);
       child.stdin.write(`${JSON.stringify(payload)}\n`);
+    });
+  }
+
+  async captureCookies(profileId: string): Promise<ProfileCookieSnapshotCookie[]> {
+    const id = String(profileId ?? "").trim();
+    const session = this.sessions.get(id);
+    if (!session || session.child.exitCode != null) {
+      throw new Error("Profil-Browser muss geöffnet sein, bevor Cookies gespeichert werden können.");
+    }
+
+    const child = session.child;
+    const requestId = randomUUID();
+    return new Promise<ProfileCookieSnapshotCookie[]>((resolve, reject) => {
+      let buffer = "";
+      let settled = false;
+      const timeout = setTimeout(() => finishError(new Error("Cookie-Snapshot Timeout.")), 10_000);
+
+      const cleanup = (): void => {
+        clearTimeout(timeout);
+        child.stdout.removeListener("data", onData);
+        child.removeListener("exit", onExit);
+        child.removeListener("error", onError);
+      };
+      const finishError = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const finishSuccess = (cookies: ProfileCookieSnapshotCookie[]): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(cookies);
+      };
+      const onExit = (): void => finishError(new Error("Profil-Browser wurde während des Cookie-Snapshots beendet."));
+      const onError = (error: Error): void => finishError(error);
+      const onData = (chunk: unknown): void => {
+        buffer += String(chunk);
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let message: ManualBrowserWireMessage;
+          try { message = JSON.parse(line) as ManualBrowserWireMessage; }
+          catch { continue; }
+          if (message.requestId !== requestId) continue;
+          if (message.type === "cookies") {
+            finishSuccess(Array.isArray(message.cookies) ? message.cookies : []);
+            return;
+          }
+          if (message.type === "error") {
+            finishError(new Error(message.error || "Cookies konnten nicht gelesen werden."));
+            return;
+          }
+        }
+      };
+
+      child.stdout.on("data", onData);
+      child.once("exit", onExit);
+      child.once("error", onError);
+      child.stdin.write(`${JSON.stringify({ type: "export-cookies", requestId })}\n`, error => {
+        if (error) finishError(error);
+      });
     });
   }
 
@@ -157,9 +227,6 @@ export class ProfileBrowserController {
     const child = session.child;
     this.sessions.delete(id);
     if (child.exitCode == null) {
-      // Do not terminate the Node worker first. On Windows SIGTERM may be abrupt,
-      // preventing Chromium from flushing Cookies/History/Preferences to userDataDir.
-      // Ask the worker to close its persistent context and exit on its own.
       try {
         child.stdin.write(`${JSON.stringify({ type: "close" })}\n`);
       } catch {}
