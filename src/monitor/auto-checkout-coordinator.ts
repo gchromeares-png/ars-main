@@ -71,7 +71,7 @@ export function getMonitorAction(task: Task): MonitorActionConfig {
     profileId,
     proxySelection,
     headless: Boolean(raw["headless"]),
-    paymentEnabled: Boolean(raw["paymentEnabled"])
+    paymentEnabled: true
   };
 }
 
@@ -133,7 +133,7 @@ export class MonitorAutoCheckoutCoordinator {
       };
 
       const child = this.orchestrator.createTask(childConfig);
-      this.copyPaymentSession(parent, child, action);
+      this.copyPaymentSession(parent, child);
 
       parent.config.data = {
         ...(parent.config.data ?? {}),
@@ -224,7 +224,7 @@ export class MonitorAutoCheckoutCoordinator {
         ...(child.config.data ?? {}),
         earlyGateRuntime: child.config.data?.["earlyGateRuntime"]
       };
-      this.copyPaymentSession(parent, child, action);
+      this.copyPaymentSession(parent, child);
 
       this.orchestrator.cancelTask(parent.id);
       void this.orchestrator.startTask(child.id);
@@ -237,10 +237,8 @@ export class MonitorAutoCheckoutCoordinator {
     }
   }
 
-  private copyPaymentSession(parent: Task, child: Task, action: AutoCheckoutActionConfig): void {
-    const paymentSession = action.paymentEnabled
-      ? this.options.getPaymentSession?.(parent.id)
-      : undefined;
+  private copyPaymentSession(parent: Task, child: Task): void {
+    const paymentSession = this.options.getPaymentSession?.(parent.id);
     if (!paymentSession) return;
     this.options.setPaymentSession?.(child.id, {
       ...paymentSession,
