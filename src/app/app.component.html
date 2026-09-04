@@ -128,19 +128,18 @@
               <label><span>Proxy</span><select [(ngModel)]="taskProxyMode"><option value="profile-default">Profilstandard</option><option value="direct">Direkt / kein Proxy</option><option value="proxy">Bestimmten Proxy</option></select></label>
               <label *ngIf="taskProxyMode === 'proxy'"><span>Checkout-Proxy</span><select [(ngModel)]="selectedTaskProxyId"><option value="">Proxy auswählen</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select></label>
               <label class="switch-row"><input type="checkbox" [(ngModel)]="headless"><span>Headless Browser</span></label>
-              <label class="switch-row"><input type="checkbox" [(ngModel)]="taskPaymentEnabled"><span>Zahlungsdaten aus Profil verwenden</span></label>
             </div>
 
             <div class="assignment-preview">
               <div><span>Profil</span><strong>{{ selectedProfileId || 'nicht gewählt' }}</strong></div>
               <div><span>Proxy</span><strong>{{ taskProxyMode === 'direct' ? 'Direkt' : taskProxyMode === 'proxy' ? (selectedTaskProxyId ? getProxyName(selectedTaskProxyId) : 'Proxy fehlt') : 'Profilstandard' }}</strong></div>
-              <div><span>Zahlung</span><strong>{{ taskPaymentEnabled ? getPaymentMethodLabel(taskPaymentMethod) + ' · aus Profil' : 'manuell im Checkout' }}</strong></div>
+              <div><span>Zahlung</span><strong>{{ getPaymentMethodLabel(taskPaymentMethod) }} · Profil aktiv</strong></div>
               <div><span>Finaler Kauf</span><strong>{{ system.allowFinalPurchase ? 'GLOBAL AN' : 'GLOBAL AUS' }}</strong></div>
             </div>
 
-            <div class="payment-session profile-payment-source" *ngIf="taskPaymentEnabled">
+            <div class="payment-session profile-payment-source">
               <div class="payment-session-head">
-                <div><strong>Profil ist Source of Truth</strong><small>Kartendaten können hier nicht überschrieben werden. ARES lädt die verschlüsselten Zahlungsdaten des ausgewählten Profils erst für die Checkout-Session.</small></div>
+                <div><strong>Profil-Zahlung ist immer aktiv</strong><small>Die Zahlungsart kommt aus dem ausgewählten Profil. Kartendaten können hier nicht überschrieben oder deaktiviert werden; ARES lädt sie erst für die Checkout-Session aus dem verschlüsselten Vault.</small></div>
                 <span class="security-chip">PROFILE VAULT</span>
               </div>
               <p class="security-note">Falls im Profil keine passenden Zahlungsdaten vorhanden sind, bleibt der Checkout an der Zahlungsstufe stehen. Es gibt keinen Klartext-Fallback im Task.</p>
