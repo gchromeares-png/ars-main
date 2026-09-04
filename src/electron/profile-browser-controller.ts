@@ -5,6 +5,7 @@ import type { AresProfile } from "../profiles/models";
 import type { AresProxy } from "../proxies/models";
 import type { BrowserProxyConfig } from "../browser-worker/types";
 import { resolveProfileUserDataDir } from "../browser-worker/profile-session-manager";
+import { registerProfilePaymentIpc } from "./profile-payment-controller";
 
 interface ManualBrowserSession {
   profileId: string;
@@ -35,14 +36,16 @@ export class ProfileBrowserController {
   constructor(
     private readonly profileRoot: string,
     private readonly getProxy: (proxyId: string) => AresProxy | undefined
-  ) {}
+  ) {
+    registerProfilePaymentIpc(path.dirname(profileRoot));
+  }
 
   async open(profile: AresProfile, startUrl?: string): Promise<ProfileBrowserStatus> {
     const profileId = String(profile.id ?? "").trim();
     if (!profileId) throw new Error("Profil-ID fehlt.");
 
     const existing = this.sessions.get(profileId);
-    if (existing && !existing.child.killed && existing.child.exitCode == null) {
+    if (existing && existing.child.exitCode == null) {
       return this.status(profileId);
     }
 
@@ -95,7 +98,7 @@ export class ProfileBrowserController {
         settled = true;
         cleanup();
         this.sessions.delete(profileId);
-        if (!child.killed) child.kill("SIGTERM");
+        if (child.exitCode == null) child.kill("SIGTERM");
         reject(error);
       };
 
@@ -153,16 +156,20 @@ export class ProfileBrowserController {
 
     const child = session.child;
     this.sessions.delete(id);
-    if (!child.killed && child.exitCode == null) {
-      child.kill("SIGTERM");
-      await new Promise<void>(resolve => {
-        const timeout = setTimeout(resolve, 5_000);
-        child.once("exit", () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-      });
-      if (!child.killed && child.exitCode == null) child.kill("SIGKILL");
+    if (child.exitCode == null) {
+      // Do not terminate the Node worker first. On Windows SIGTERM may be abrupt,
+      // preventing Chromium from flushing Cookies/History/Preferences to userDataDir.
+      // Ask the worker to close its persistent context and exit on its own.
+      try {
+        child.stdin.write(`${JSON.stringify({ type: "close" })}\n`);
+      } catch {}
+
+      const graceful = await this.waitForExit(child, 8_000);
+      if (!graceful && child.exitCode == null) {
+        child.kill("SIGTERM");
+        const terminated = await this.waitForExit(child, 2_000);
+        if (!terminated && child.exitCode == null) child.kill("SIGKILL");
+      }
     }
     return this.status(id);
   }
@@ -170,7 +177,7 @@ export class ProfileBrowserController {
   status(profileId: string): ProfileBrowserStatus {
     const id = String(profileId ?? "").trim();
     const session = this.sessions.get(id);
-    const open = Boolean(session && !session.child.killed && session.child.exitCode == null);
+    const open = Boolean(session && session.child.exitCode == null);
     return {
       profileId: id,
       open,
@@ -187,6 +194,23 @@ export class ProfileBrowserController {
   async closeAll(): Promise<void> {
     const profileIds = [...this.sessions.keys()];
     await Promise.allSettled(profileIds.map(profileId => this.close(profileId)));
+  }
+
+  private waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
+    if (child.exitCode != null) return Promise.resolve(true);
+    return new Promise<boolean>(resolve => {
+      let settled = false;
+      const finish = (exited: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        child.removeListener("exit", onExit);
+        resolve(exited);
+      };
+      const onExit = (): void => finish(true);
+      const timeout = setTimeout(() => finish(false), timeoutMs);
+      child.once("exit", onExit);
+    });
   }
 
   private resolveProxy(profile: AresProfile): BrowserProxyConfig | undefined {

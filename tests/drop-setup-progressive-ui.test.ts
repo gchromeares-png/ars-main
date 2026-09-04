@@ -17,7 +17,7 @@ describe("Drop Setup progressive UI", () => {
     expect(html).toContain("Speichern & Starten");
   });
 
-  it("persists setup metadata but keeps sensitive payment values outside the saved setup", () => {
+  it("persists setup metadata while keeping card secrets out of saved setups and task UI", () => {
     const setupInterfaceStart = component.indexOf("interface DropSetup");
     const feedbackStart = component.indexOf("interface LocalFeedback", setupInterfaceStart);
     const setupInterface = component.slice(setupInterfaceStart, feedbackStart);
@@ -26,9 +26,10 @@ describe("Drop Setup progressive UI", () => {
     expect(component).toContain("localStorage.setItem(this.storageKey, JSON.stringify(this.setups))");
     expect(setupInterface).not.toContain("cardNumber");
     expect(setupInterface).not.toContain("securityCode");
-    expect(component).toContain("sessionCardNumber");
-    expect(component).toContain("clearSensitivePaymentInputs()");
-    expect(html).toContain("RAM-only");
+    expect(component).not.toContain("sessionCardNumber");
+    expect(component).not.toContain("sessionCardSecurityCode");
+    expect(html).not.toContain('[(ngModel)]="sessionCardNumber"');
+    expect(html).not.toContain('[(ngModel)]="sessionCardSecurityCode"');
   });
 
   it("creates one parent monitor task per selected profile and supports staggered starts", () => {

@@ -48,6 +48,6 @@ export interface AresProfile {
   proxy?: ProxyConfig;
   preferredProxyId?: string;
   browser?: BrowserProfileConfig;
-  /** Non-sensitive preference only. Card number/CVV are session-only and never stored here. */
+  /** Non-sensitive preference only. Card number/CVC live only in the separate encrypted profile payment vault. */
   paymentPreference?: StoredPaymentPreference;
 }

@@ -12,7 +12,9 @@ import { AresProfile } from "../profiles/models";
 import { ProxyRepository } from "../proxies/proxy-repository";
 import { ProxyHealthService } from "../proxies/proxy-health-service";
 import type { AresProxy } from "../proxies/models";
-import type { CheckoutPaymentSession, PaymentMethod } from "../payments/models";
+import type { CheckoutPaymentSession } from "../payments/models";
+import type { ProfilePaymentVault } from "../payments/profile-payment-vault";
+import { normalizePaymentSessionInput } from "../payments/payment-session-normalizer";
 import { EphemeralPaymentExecutor } from "../payments/ephemeral-payment-executor";
 import { SqliteTaskStore } from "../persistence/sqlite-task-store";
 import { TaskPersistenceCoordinator } from "../persistence/task-persistence-coordinator";
@@ -33,11 +35,13 @@ import {
   testCapMonsterApiKey
 } from "./capmonster-api-key-health";
 import { ProfileBrowserController } from "./profile-browser-controller";
+import { registerProfilePaymentIpc } from "./profile-payment-controller";
 
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: TaskOrchestrator;
 let browserWorker: BrowserWorkerPoolClient;
 let profileBrowserController: ProfileBrowserController;
+let profilePaymentVault: ProfilePaymentVault;
 let browserProfileRoot = "";
 let commerceExecutor: CommerceTaskExecutorRouter;
 let commerceMonitor: CommerceMonitorService;
@@ -90,28 +94,6 @@ function normalizeStoredShop(input: any): CommerceShop | undefined {
     platform,
     config: input.config && typeof input.config === "object" ? input.config : {}
   };
-}
-
-function normalizePaymentSession(input: any): CheckoutPaymentSession | undefined {
-  const allowedMethods = new Set<PaymentMethod>(["card", "paypal", "shop-pay", "klarna", "other"]);
-  const method = String(input?.method ?? "").trim() as PaymentMethod;
-  if (!allowedMethods.has(method)) return undefined;
-
-  const session: CheckoutPaymentSession = {
-    method,
-    label: typeof input?.label === "string" ? input.label.trim().slice(0, 120) || undefined : undefined
-  };
-
-  if (method === "card" && input?.card && typeof input.card === "object") {
-    session.card = {
-      holderName: typeof input.card.holderName === "string" ? input.card.holderName.trim().slice(0, 120) || undefined : undefined,
-      cardNumber: typeof input.card.cardNumber === "string" ? input.card.cardNumber.replace(/\s+/g, "").slice(0, 24) || undefined : undefined,
-      expiry: typeof input.card.expiry === "string" ? input.card.expiry.trim().slice(0, 12) || undefined : undefined,
-      securityCode: typeof input.card.securityCode === "string" ? input.card.securityCode.trim().slice(0, 8) || undefined : undefined
-    };
-  }
-
-  return session;
 }
 
 function getShopsFilePath(): string | undefined {
@@ -185,6 +167,7 @@ async function createBackend(): Promise<void> {
   const userData = app.getPath("userData");
   profileRepository.setStoragePath(path.join(userData, "profiles.json"));
   proxyRepository.setStoragePath(path.join(userData, "proxies.json"));
+  profilePaymentVault = registerProfilePaymentIpc(userData);
   loadShops();
 
   browserProfileRoot = path.join(userData, "browser-profiles");
@@ -238,7 +221,8 @@ async function createBackend(): Promise<void> {
 
   const paymentAwareBrowserWorker = new EphemeralPaymentExecutor(
     browserWorker,
-    taskId => paymentSessions.get(taskId)
+    taskId => paymentSessions.get(taskId),
+    (profileId, preference) => profilePaymentVault.toCheckoutPaymentSession(profileId, preference)
   );
 
   commerceExecutor = new CommerceTaskExecutorRouter(shopId => shops.get(shopId));
@@ -395,6 +379,7 @@ ipcMain.handle("delete-profile", async (_event, profileId: string) => {
   if (!profileRepository.delete(id)) return { success: false, error: "Profil konnte nicht gelöscht werden." };
   try {
     removeProfileUserDataDir(id, browserProfileRoot);
+    profilePaymentVault.delete(id);
     return { success: true };
   } catch (error) {
     profileRepository.save(profile);
@@ -468,7 +453,7 @@ ipcMain.handle("set-payment-session", (_event, taskId: string, input: unknown) =
     return { success: false, error: "Task für Zahlungsdaten wurde nicht gefunden." };
   }
 
-  const session = normalizePaymentSession(input);
+  const session = normalizePaymentSessionInput(input);
   if (!session) {
     paymentSessions.delete(id);
     return { success: false, error: "Ungültige Zahlungsart." };

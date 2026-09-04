@@ -1,10 +1,15 @@
 import type { ITaskExecutor } from "../interfaces";
 import type { Task } from "../models";
-import type { CheckoutPaymentSession } from "./models";
+import type { CheckoutPaymentSession, StoredPaymentPreference } from "./models";
 
 type RuntimeUpdateSource = ITaskExecutor & {
   onTaskUpdate?: (callback: (task: Task) => void) => () => void;
 };
+
+type ProfilePaymentSessionResolver = (
+  profileId: string,
+  preference?: StoredPaymentPreference
+) => CheckoutPaymentSession;
 
 const SESSION_KEY = "__paymentSession";
 
@@ -14,6 +19,12 @@ function sanitizedConfig(config: Task["config"]): Task["config"] {
   return { ...config, data };
 }
 
+function taskProfileId(task: Task): string {
+  const data = task.config.data ?? {};
+  const action = data["monitorAction"] as { profileId?: string } | undefined;
+  return String(data["profileId"] ?? action?.profileId ?? "").trim();
+}
+
 export class EphemeralPaymentExecutor implements ITaskExecutor {
   private readonly listeners = new Set<(task: Task) => void>();
   private readonly taskRefs = new Map<string, Task>();
@@ -21,7 +32,8 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
 
   constructor(
     private readonly delegate: ITaskExecutor,
-    private readonly getPaymentSession: (taskId: string) => CheckoutPaymentSession | undefined
+    private readonly getPaymentSession: (taskId: string) => CheckoutPaymentSession | undefined,
+    private readonly getProfilePaymentSession?: ProfilePaymentSessionResolver
   ) {
     const runtimeSource = delegate as RuntimeUpdateSource;
     this.unsubscribe = runtimeSource.onTaskUpdate?.(workerTask => {
@@ -39,7 +51,7 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
   }
 
   async execute(task: Task): Promise<boolean> {
-    const session = this.getPaymentSession(task.id);
+    const session = this.resolveProfilePaymentSession(task, this.getPaymentSession(task.id));
     const workerTask: Task = {
       ...task,
       config: {
@@ -82,5 +94,33 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
     this.listeners.clear();
     this.taskRefs.clear();
     await this.delegate.close?.();
+  }
+
+  private resolveProfilePaymentSession(
+    task: Task,
+    session: CheckoutPaymentSession | undefined
+  ): CheckoutPaymentSession | undefined {
+    if (!session || session.method !== "card") return session;
+
+    const profileId = taskProfileId(task);
+    const profileOnlySession: CheckoutPaymentSession = {
+      method: "card",
+      label: session.label
+    };
+
+    // Profile-backed card data is authoritative. Any card secret supplied by a
+    // legacy/manual task payload is ignored and never gets a fallback path.
+    if (!profileId || !this.getProfilePaymentSession) return profileOnlySession;
+
+    try {
+      return this.getProfilePaymentSession(profileId, {
+        method: "card",
+        label: session.label
+      });
+    } catch {
+      // Fail closed: payment preparation reports missing fields instead of using
+      // plaintext task payloads when the encrypted profile vault is unavailable.
+      return profileOnlySession;
+    }
   }
 }

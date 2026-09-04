@@ -1,9 +1,6 @@
 <div class="app-shell">
   <div class="ambient-glow glow-a"></div>
   <div class="ambient-glow glow-b"></div>
-  <div class="leaf-field" aria-hidden="true">
-    <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-  </div>
 
   <aside class="sidebar">
     <div class="sidebar-brand">
@@ -15,8 +12,8 @@
     </div>
 
     <nav class="side-nav" aria-label="ARES Bereiche">
-      <button [class.active]="activeTab === 'dashboard'" (click)="setTab('dashboard')"><span class="nav-icon">⌂</span><span>Dashboard</span></button>
-      <button [class.active]="activeTab === 'tasks'" (click)="setTab('tasks')"><span class="nav-icon">▣</span><span>Tasks</span><b>{{ tasks.length }}</b></button>
+      <button [class.active]="activeTab === 'dashboard'" (click)="setTab('dashboard')"><span class="nav-icon">⌂</span><span>Overview</span></button>
+      <button [class.active]="activeTab === 'tasks'" (click)="setTab('tasks')"><span class="nav-icon">◎</span><span>Watch</span><b>{{ activeTaskCount }}</b></button>
       <button [class.active]="activeTab === 'profiles'" (click)="setTab('profiles')"><span class="nav-icon">◉</span><span>Profiles</span><b>{{ profiles.length }}</b></button>
       <button [class.active]="activeTab === 'proxies'" (click)="setTab('proxies')"><span class="nav-icon">↗</span><span>Proxys</span><b>{{ proxies.length }}</b></button>
       <button [class.active]="activeTab === 'shops'" (click)="setTab('shops')"><span class="nav-icon">◇</span><span>Shops</span><b>{{ shops.length }}</b></button>
@@ -24,14 +21,17 @@
 
     <div class="sidebar-status">
       <div><span class="pulse"></span><strong>Backend online</strong></div>
-      <small>{{ activeTaskCount }} aktive Task(s)</small>
+      <small>{{ activeTaskCount }} aktiv · {{ tasks.length }} gesamt</small>
       <small>Node {{ system.electronNodeVersion || '–' }}</small>
     </div>
   </aside>
 
   <div class="main-column">
     <header class="topbar">
-      <div><div class="eyebrow">COMMERCE CONTROL CENTER</div><h1>{{ activeTab | titlecase }}</h1></div>
+      <div>
+        <div class="eyebrow">COMMERCE CONTROL CENTER</div>
+        <h1>{{ (activeTab === 'tasks' ? 'Watch' : activeTab) | titlecase }}</h1>
+      </div>
       <div class="backend-state">
         <span class="pulse"></span>ONLINE
         <span class="key-chip" [class.ready]="system.captchaApiKeyConfigured" [class.missing]="!system.captchaApiKeyConfigured">{{ getCaptchaKeyStatusLabel() }}</span>
@@ -43,78 +43,77 @@
       <div *ngIf="info" class="notice info">{{ info }}</div>
 
       <ng-container *ngIf="activeTab === 'dashboard'">
-        <section class="hero">
+        <section class="hero compact-hero">
           <div class="hero-copy">
-            <div class="eyebrow">MISSION CONTROL</div>
-            <h2>Monitoring und Checkout in einem Workflow.</h2>
-            <p>ARES kann normal auf Produktverfügbarkeit warten oder über Early Gate früh einen Browser-Child starten. Der finale Kauf ist im Backend nach jedem Start standardmäßig AUS und wird nur global freigegeben.</p>
+            <div class="eyebrow">OVERVIEW</div>
+            <h2>Ein Einstiegspunkt. Klare Bereiche.</h2>
+            <p>Watch ist zum Konfigurieren und Starten da. Profiles enthalten Identität, Adressen, Browser-Defaults und Zahlungsdaten. Laufzeitdiagnostik bleibt hier in der Übersicht.</p>
           </div>
-          <div class="hero-badge"><span>RUNTIME</span><strong>{{ system.availableWorkers }} Slots</strong><small>Watchdog + Queue Recovery aktiv</small></div>
+          <div class="hero-badge"><span>RUNTIME</span><strong>{{ system.availableWorkers }} Slots</strong><small>{{ activeTaskCount }} aktive Vorgänge</small></div>
         </section>
 
         <section class="stats-grid">
-          <article class="stat-card"><span>TASKS</span><strong>{{ tasks.length }}</strong><small>gesamt persistiert</small></article>
-          <article class="stat-card"><span>MONITOR ONLY</span><strong>{{ monitorOnlyTasks.length }}</strong><small>nur beobachten</small></article>
-          <article class="stat-card"><span>AUTO CHECKOUT</span><strong>{{ autoCheckoutTasks.length }}</strong><small>inkl. Early Gate</small></article>
-          <article class="stat-card"><span>CHECKOUT RUNS</span><strong>{{ checkoutRuns.length }}</strong><small>automatisch erzeugt</small></article>
-          <article class="stat-card"><span>PROFILE</span><strong>{{ profiles.length }}</strong><small>Checkout-Profile</small></article>
-          <article class="stat-card"><span>PROXYS</span><strong>{{ proxies.length }}</strong><small>Proxy Vault</small></article>
+          <article class="stat-card"><span>WATCHES</span><strong>{{ monitorOnlyTasks.length + autoCheckoutTasks.length }}</strong><small>Monitoring-Konfigurationen</small></article>
+          <article class="stat-card"><span>ACTIVE</span><strong>{{ activeTaskCount }}</strong><small>aktuell laufend</small></article>
+          <article class="stat-card"><span>CHECKOUT RUNS</span><strong>{{ checkoutRuns.length }}</strong><small>ausgelöste Browser-Runs</small></article>
+          <article class="stat-card"><span>PROFILES</span><strong>{{ profiles.length }}</strong><small>gespeicherte Profile</small></article>
         </section>
 
         <section class="quick-actions">
-          <button (click)="setTab('tasks')"><strong>Neuen Task anlegen</strong><small>Produktmonitor oder Early Gate</small></button>
-          <button (click)="setTab('profiles')"><strong>Profil verwalten</strong><small>Kontakt, Adresse, Zahlung</small></button>
-          <button (click)="setTab('proxies')"><strong>Proxy verwalten</strong><small>Vault + Session-Zuordnung</small></button>
-          <button (click)="setTab('shops')"><strong>Shop registrieren</strong><small>Plattform + Basis-URL</small></button>
+          <button (click)="setTab('tasks')"><strong>Watch anlegen</strong><small>Produktmonitor oder Early Gate</small></button>
+          <button (click)="setTab('profiles')"><strong>Profil verwalten</strong><small>Identität, Adresse, Zahlung</small></button>
+          <button (click)="setTab('proxies')"><strong>Proxy verwalten</strong><small>Verbindung und Health</small></button>
+          <button (click)="setTab('shops')"><strong>Shop registrieren</strong><small>Plattform und Basis-URL</small></button>
         </section>
 
         <app-runtime-control [system]="system" [tasks]="tasks"></app-runtime-control>
       </ng-container>
 
       <ng-container *ngIf="activeTab === 'tasks'">
-        <section class="section-heading">
-          <div><div class="eyebrow">TASK CONTROL</div><h2>Task erstellen</h2></div>
-          <p>Normaler Produktmonitor und Early Gate nutzen denselben Monitor-/Coordinator-/Orchestrator-Stack. Angular konfiguriert und visualisiert nur.</p>
+        <section class="section-heading clean-heading">
+          <div><div class="eyebrow">WATCH</div><h2>Neue Überwachung</h2></div>
+          <p>Hier definierst du nur den Watch-Flow. Laufende und alte Runs sind weiter unten standardmäßig eingeklappt.</p>
         </section>
 
-        <app-runtime-control [system]="system" [tasks]="tasks"></app-runtime-control>
+        <section class="panel task-builder command-panel focused-builder">
+          <div class="panel-header">
+            <div><div class="eyebrow">1 · STRATEGIE</div><h3>Wann soll ARES reagieren?</h3></div>
+          </div>
 
-        <section class="panel task-builder command-panel">
-          <div class="panel-header"><div><div class="eyebrow">1 · TRIGGER STRATEGY</div><h3>Wie soll ARES starten?</h3></div><span class="security-chip">SAME BACKEND</span></div>
           <div class="mode-selector strategy-selector">
             <button type="button" [class.active]="monitorStrategyMode === 'product-monitor'" (click)="setMonitorStrategy('product-monitor')">
-              <span class="mode-icon">◎</span><strong>Normaler Produktmonitor</strong><small>Produktdaten beobachten; optional bei Verfügbarkeit einen Browser-Checkout starten.</small>
+              <span class="mode-icon">◎</span><strong>Produktmonitor</strong><small>Produktdaten beobachten und optional bei Verfügbarkeit Checkout vorbereiten.</small>
             </button>
             <button type="button" [class.active]="monitorStrategyMode === 'early-gate'" (click)="setMonitorStrategy('early-gate')">
-              <span class="mode-icon">◈</span><strong>Early Gate</strong><small>Passives Gate-/Queue-Signal erkennen und erst danach genau einen Browser-Child starten.</small>
+              <span class="mode-icon">◈</span><strong>Early Gate</strong><small>Auf ein passives Gate-/Queue-Signal reagieren und danach den Browser-Flow starten.</small>
             </button>
           </div>
 
           <ng-container *ngIf="monitorStrategyMode === 'product-monitor'">
             <div class="builder-divider"></div>
-            <div class="panel-header"><div><div class="eyebrow">2 · ACTION</div><h3>Was soll beim Produkt-Treffer passieren?</h3></div></div>
+            <div class="panel-header"><div><div class="eyebrow">2 · AKTION</div><h3>Was passiert bei einem Treffer?</h3></div></div>
             <div class="mode-selector">
               <button type="button" [class.active]="taskMode === 'monitor-only'" (click)="taskMode = 'monitor-only'">
-                <span class="mode-icon">◎</span><strong>Nur überwachen</strong><small>Produktänderungen beobachten und protokollieren. Kein Browser nötig.</small>
+                <span class="mode-icon">◎</span><strong>Nur beobachten</strong><small>Kein Browser. Änderungen werden überwacht und protokolliert.</small>
               </button>
               <button type="button" [class.active]="taskMode === 'auto-checkout'" (click)="taskMode = 'auto-checkout'">
-                <span class="mode-icon">⚡</span><strong>Bei Treffer Checkout vorbereiten</strong><small>Bei Verfügbarkeit genau eine isolierte Browser-Session starten.</small>
+                <span class="mode-icon">⚡</span><strong>Checkout vorbereiten</strong><small>Bei Verfügbarkeit einen isolierten Browser-Run starten.</small>
               </button>
             </div>
           </ng-container>
 
           <div class="builder-divider"></div>
-          <div class="panel-header"><div><div class="eyebrow">{{ monitorStrategyMode === 'early-gate' ? '2' : '3' }} · PRODUCT</div><h3>{{ monitorStrategyMode === 'early-gate' ? 'Release Discovery konfigurieren' : 'Monitoring konfigurieren' }}</h3></div></div>
+          <div class="panel-header"><div><div class="eyebrow">{{ monitorStrategyMode === 'early-gate' ? '2' : '3' }} · PRODUKT</div><h3>Was soll überwacht werden?</h3></div></div>
           <div class="form-grid">
-            <label><span>Task-Name</span><input [(ngModel)]="taskName" placeholder="z. B. Pokémon Drop"></label>
+            <label><span>Watch-Name</span><input [(ngModel)]="taskName" placeholder="z. B. Pokémon Drop"></label>
             <label><span>Shop</span><select [(ngModel)]="selectedShopId"><option value="">Shop auswählen</option><option *ngFor="let shop of shops; trackBy: trackShop" [value]="shop.id">{{ shop.name }} · {{ getPlatformLabel(shop.platform) }}</option></select></label>
             <label class="wide" *ngIf="monitorStrategyMode === 'product-monitor'"><span>Produkt / Keyword / Produkt-URL</span><input [(ngModel)]="searchTerm" placeholder="z. B. Pokemon 151 Booster Bundle"></label>
             <label class="wide" *ngIf="monitorStrategyMode === 'early-gate'"><span>Produktname</span><input [(ngModel)]="earlyGateProductName" placeholder="z. B. Pokémon Center Elite Trainer Box"></label>
-            <label><span>Prüfintervall in Sekunden</span><input [(ngModel)]="taskIntervalSeconds" type="number" min="1" step="1"></label>
+            <label><span>Prüfintervall</span><input [(ngModel)]="taskIntervalSeconds" type="number" min="1" step="1"><small>Sekunden</small></label>
           </div>
 
           <div class="keyword-builder" *ngIf="monitorStrategyMode === 'early-gate'">
-            <div class="keyword-builder-head"><div><strong>Discovery-Keywords</strong><small>Mehrere Begriffe. Während POST_QUEUE_DISCOVERY später live änderbar.</small></div><span class="count-chip">{{ discoveryKeywords.length }}</span></div>
+            <div class="keyword-builder-head"><div><strong>Discovery-Keywords</strong><small>Nur die Begriffe, die nach dem Gate relevant sind.</small></div><span class="count-chip">{{ discoveryKeywords.length }}</span></div>
             <div class="keyword-chips" *ngIf="discoveryKeywords.length">
               <span class="keyword-chip" *ngFor="let keyword of discoveryKeywords">{{ keyword }}<button type="button" (click)="removeDiscoveryKeyword(keyword)" aria-label="Keyword entfernen">×</button></span>
             </div>
@@ -123,104 +122,98 @@
 
           <ng-container *ngIf="taskNeedsCheckoutSession">
             <div class="builder-divider"></div>
-            <div class="panel-header"><div><div class="eyebrow">{{ monitorStrategyMode === 'early-gate' ? '3' : '4' }} · CHECKOUT SESSION</div><h3>Profil & Session-Zuordnung</h3></div><span class="security-chip">ONE CHILD</span></div>
+            <div class="panel-header"><div><div class="eyebrow">{{ monitorStrategyMode === 'early-gate' ? '3' : '4' }} · CHECKOUT</div><h3>Welches Profil soll verwendet werden?</h3></div></div>
             <div class="form-grid">
-              <label><span>Profil</span><select [(ngModel)]="selectedProfileId" (ngModelChange)="syncProfileDefaults()"><option value="">Profil auswählen</option><option *ngFor="let profile of profiles" [value]="profile.id">{{ profile.name }} — {{ profile.contact.firstName }} {{ profile.contact.lastName }}</option></select><small *ngIf="!profiles.length">Unter Profiles zuerst ein Profil speichern.</small></label>
-              <label><span>Proxy-Zuordnung</span><select [(ngModel)]="taskProxyMode"><option value="profile-default">Profilstandard verwenden</option><option value="direct">Direkt / kein Proxy</option><option value="proxy">Bestimmten Proxy verwenden</option></select></label>
-              <label *ngIf="taskProxyMode === 'proxy'"><span>Checkout-Proxy</span><select [(ngModel)]="selectedTaskProxyId"><option value="">Proxy auswählen</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select><small *ngIf="!proxies.length">Im Proxy-Tab zuerst einen Proxy speichern.</small></label>
+              <label class="wide"><span>Profil</span><select [(ngModel)]="selectedProfileId" (ngModelChange)="syncProfileDefaults()"><option value="">Profil auswählen</option><option *ngFor="let profile of profiles" [value]="profile.id">{{ profile.name }} — {{ profile.contact.firstName }} {{ profile.contact.lastName }}</option></select><small *ngIf="!profiles.length">Unter Profiles zuerst ein Profil speichern.</small></label>
+              <label><span>Proxy</span><select [(ngModel)]="taskProxyMode"><option value="profile-default">Profilstandard</option><option value="direct">Direkt / kein Proxy</option><option value="proxy">Bestimmten Proxy</option></select></label>
+              <label *ngIf="taskProxyMode === 'proxy'"><span>Checkout-Proxy</span><select [(ngModel)]="selectedTaskProxyId"><option value="">Proxy auswählen</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select></label>
               <label class="switch-row"><input type="checkbox" [(ngModel)]="headless"><span>Headless Browser</span></label>
-              <label class="switch-row"><input type="checkbox" [(ngModel)]="taskPaymentEnabled"><span>Zahlungsmethode vorbereiten</span></label>
             </div>
 
             <div class="assignment-preview">
               <div><span>Profil</span><strong>{{ selectedProfileId || 'nicht gewählt' }}</strong></div>
               <div><span>Proxy</span><strong>{{ taskProxyMode === 'direct' ? 'Direkt' : taskProxyMode === 'proxy' ? (selectedTaskProxyId ? getProxyName(selectedTaskProxyId) : 'Proxy fehlt') : 'Profilstandard' }}</strong></div>
-              <div><span>Session</span><strong>genau ein Browser-Child</strong></div>
+              <div><span>Zahlung</span><strong>{{ getPaymentMethodLabel(taskPaymentMethod) }} · Profil aktiv</strong></div>
               <div><span>Finaler Kauf</span><strong>{{ system.allowFinalPurchase ? 'GLOBAL AN' : 'GLOBAL AUS' }}</strong></div>
             </div>
 
-            <div class="payment-session" *ngIf="taskPaymentEnabled">
-              <div class="payment-session-head"><div><strong>Session-Zahlung</strong><small>Nur RAM · wird beim Trigger an den erzeugten Browser-Child kopiert und danach verworfen.</small></div><span class="security-chip">NICHT PERSISTIERT</span></div>
-              <div class="form-grid">
-                <label><span>Zahlungsart</span><select [(ngModel)]="taskPaymentMethod"><option value="card">Karte</option><option value="paypal">PayPal</option><option value="shop-pay">Shop Pay</option><option value="klarna">Klarna</option><option value="other">Andere</option></select></label>
-                <label><span>Bezeichnung / bevorzugter Text</span><input [(ngModel)]="taskPaymentLabel" placeholder="optional, z. B. PayPal"></label>
+            <div class="payment-session profile-payment-source">
+              <div class="payment-session-head">
+                <div><strong>Profil-Zahlung ist immer aktiv</strong><small>Die Zahlungsart kommt aus dem ausgewählten Profil. Kartendaten können hier nicht überschrieben oder deaktiviert werden; ARES lädt sie erst für die Checkout-Session aus dem verschlüsselten Vault.</small></div>
+                <span class="security-chip">PROFILE VAULT</span>
               </div>
-              <div class="form-grid card-fields" *ngIf="taskPaymentMethod === 'card'">
-                <label><span>Karteninhaber</span><input [(ngModel)]="sessionCardHolderName" autocomplete="off"></label>
-                <label><span>Kartennummer</span><input [(ngModel)]="sessionCardNumber" inputmode="numeric" autocomplete="off"></label>
-                <label><span>Ablaufdatum</span><input [(ngModel)]="sessionCardExpiry" placeholder="MM/YY" autocomplete="off"></label>
-                <label><span>CVV / CVC</span><input [(ngModel)]="sessionCardSecurityCode" type="password" inputmode="numeric" autocomplete="off"></label>
-              </div>
-              <p class="security-note">ARES darf Zahlungsart und sichtbare Felder vorbereiten. Der finale Submit ist zusätzlich durch den globalen Backend-Guard geschützt; nach jedem App-Start ist er AUS.</p>
+              <p class="security-note">Falls im Profil keine passenden Zahlungsdaten vorhanden sind, bleibt der Checkout an der Zahlungsstufe stehen. Es gibt keinen Klartext-Fallback im Task.</p>
             </div>
           </ng-container>
 
-          <div class="primary-action-row"><button class="btn btn-primary" (click)="createTask()">{{ monitorStrategyMode === 'early-gate' ? 'Early-Gate-Task erstellen' : taskMode === 'auto-checkout' ? 'Auto-Checkout-Task erstellen' : 'Monitoring-Task erstellen' }}</button></div>
+          <div class="primary-action-row"><button class="btn btn-primary" (click)="createTask()">{{ monitorStrategyMode === 'early-gate' ? 'Early-Gate-Watch erstellen' : taskMode === 'auto-checkout' ? 'Checkout-Watch erstellen' : 'Watch erstellen' }}</button></div>
         </section>
 
-        <section class="panel task-panel">
-          <div class="panel-header"><div><div class="eyebrow">TASK HISTORY</div><h3>Tasks & Browser-Children</h3></div><span class="count-chip">{{ tasks.length }}</span></div>
-          <div class="empty-state" *ngIf="!tasks.length">Noch keine Tasks vorhanden.</div>
+        <details class="history-disclosure">
+          <summary>
+            <span><strong>Runs & Verlauf</strong><small>{{ tasks.length }} Einträge · standardmäßig geschlossen</small></span>
+            <span class="count-chip">{{ tasks.length }}</span>
+          </summary>
 
-          <article class="task-row" *ngFor="let task of tasks; trackBy: trackTask" [class.early-gate-row]="isEarlyGateFlowTask(task)">
-            <div class="task-name-block">
-              <div class="task-title-line"><span class="kind-chip" [class.monitor]="isMonitorTask(task)">{{ getTaskKind(task) }}</span><strong>{{ task.config.name }}</strong></div>
-              <small>{{ task.config.shopId || 'kein Shop' }} · Profil: {{ getTaskProfileName(task) }}</small>
-              <small>Proxy: {{ getTaskProxyStatus(task) }}</small>
-              <small *ngIf="isEarlyGateFlowTask(task)">Aktiver Bereich: <strong>{{ getActiveArea(task) }}</strong></small>
-              <small *ngIf="getTaskParentId(task)">Parent-Monitor: {{ getTaskParentId(task) }}</small>
-              <small *ngIf="getTaskChildId(task)">Browser-Child: {{ getTaskChildId(task) }}</small>
-              <small class="task-error" *ngIf="task.lastError">{{ task.lastError }}</small>
+          <section class="panel task-panel history-panel">
+            <div class="empty-state" *ngIf="!tasks.length">Noch keine Runs vorhanden.</div>
 
-              <div class="runtime-detail automation-detail" *ngIf="isAutoCheckoutTask(task)"><strong>Automation</strong><span>{{ getTaskAutomationStatus(task) }}</span></div>
+            <article class="task-row" *ngFor="let task of tasks; trackBy: trackTask" [class.early-gate-row]="isEarlyGateFlowTask(task)">
+              <div class="task-name-block">
+                <div class="task-title-line"><span class="kind-chip" [class.monitor]="isMonitorTask(task)">{{ getTaskKind(task) }}</span><strong>{{ task.config.name }}</strong></div>
+                <small>{{ task.config.shopId || 'kein Shop' }} · Profil: {{ getTaskProfileName(task) }}</small>
+                <small>Proxy: {{ getTaskProxyStatus(task) }}</small>
+                <small *ngIf="isEarlyGateFlowTask(task)">Bereich: <strong>{{ getActiveArea(task) }}</strong></small>
+                <small class="task-error" *ngIf="task.lastError">{{ task.lastError }}</small>
 
-              <div class="early-gate-runtime" *ngIf="isEarlyGateFlowTask(task)">
-                <div class="flow-timeline" aria-label="Early-Gate-Flow">
-                  <div class="flow-step" *ngFor="let step of earlyGateFlowSteps" [class.done]="getFlowStepState(task, step.key) === 'done'" [class.active]="getFlowStepState(task, step.key) === 'active'">
-                    <span class="flow-dot"></span><small>{{ step.label }}</small>
+                <div class="runtime-detail automation-detail" *ngIf="isAutoCheckoutTask(task)"><strong>Automation</strong><span>{{ getTaskAutomationStatus(task) }}</span></div>
+
+                <div class="early-gate-runtime" *ngIf="isEarlyGateFlowTask(task)">
+                  <div class="flow-timeline" aria-label="Early-Gate-Flow">
+                    <div class="flow-step" *ngFor="let step of earlyGateFlowSteps" [class.done]="getFlowStepState(task, step.key) === 'done'" [class.active]="getFlowStepState(task, step.key) === 'active'">
+                      <span class="flow-dot"></span><small>{{ step.label }}</small>
+                    </div>
+                  </div>
+                  <div class="queue-inline" *ngIf="task.state === 'WAITING_QUEUE'">
+                    <div><span>POS</span><strong>{{ getTaskQueuePosition(task) }}</strong></div>
+                    <div><span>TTW</span><strong>{{ getTaskQueueWait(task) }}</strong></div>
+                  </div>
+                  <div class="live-keywords" *ngIf="isEarlyGateChildTask(task)">
+                    <div class="keyword-builder-head"><div><strong>Aktive Discovery-Keywords</strong><small>{{ isLiveKeywordEditable(task) ? 'Live editierbar' : 'Backend-Stand' }}</small></div><span class="count-chip">{{ getActiveDiscoveryKeywords(task).length }}</span></div>
+                    <div class="keyword-chips" *ngIf="getActiveDiscoveryKeywords(task).length">
+                      <span class="keyword-chip" *ngFor="let keyword of getActiveDiscoveryKeywords(task)">{{ keyword }}<button type="button" *ngIf="isLiveKeywordEditable(task)" (click)="removeLiveDiscoveryKeyword(task, keyword)" aria-label="Aktives Keyword entfernen">×</button></span>
+                    </div>
+                    <div class="keyword-input-row" *ngIf="isLiveKeywordEditable(task)"><input [(ngModel)]="liveKeywordDrafts[task.id]" (keyup.enter)="addLiveDiscoveryKeyword(task)" placeholder="Keyword hinzufügen"><button type="button" class="btn btn-small btn-secondary" (click)="addLiveDiscoveryKeyword(task)">Übernehmen</button></div>
                   </div>
                 </div>
 
-                <div class="queue-inline" *ngIf="task.state === 'WAITING_QUEUE'">
-                  <div><span>POS</span><strong>{{ getTaskQueuePosition(task) }}</strong></div>
-                  <div><span>TTW</span><strong>{{ getTaskQueueWait(task) }}</strong></div>
-                </div>
-
-                <div class="live-keywords" *ngIf="isEarlyGateChildTask(task)">
-                  <div class="keyword-builder-head"><div><strong>Aktive Discovery-Keywords</strong><small>{{ isLiveKeywordEditable(task) ? 'Live editierbar · Backend bestätigt den aktiven Satz.' : 'Aktueller Backend-Stand' }}</small></div><span class="count-chip">{{ getActiveDiscoveryKeywords(task).length }}</span></div>
-                  <div class="keyword-chips" *ngIf="getActiveDiscoveryKeywords(task).length">
-                    <span class="keyword-chip" *ngFor="let keyword of getActiveDiscoveryKeywords(task)">{{ keyword }}<button type="button" *ngIf="isLiveKeywordEditable(task)" (click)="removeLiveDiscoveryKeyword(task, keyword)" aria-label="Aktives Keyword entfernen">×</button></span>
-                  </div>
-                  <div class="keyword-input-row" *ngIf="isLiveKeywordEditable(task)"><input [(ngModel)]="liveKeywordDrafts[task.id]" (keyup.enter)="addLiveDiscoveryKeyword(task)" placeholder="Keyword während Release hinzufügen"><button type="button" class="btn btn-small btn-secondary" (click)="addLiveDiscoveryKeyword(task)">Übernehmen</button></div>
-                </div>
+                <div class="runtime-detail" *ngIf="!isMonitorTask(task)"><strong>Challenge</strong><span>{{ getTaskCaptchaStatus(task) }}</span><small *ngIf="getTaskChallengeType(task)">Typ: {{ getTaskChallengeType(task) }}</small></div>
+                <div class="runtime-detail payment-detail" *ngIf="!isMonitorOnlyTask(task)"><strong>Zahlung</strong><span>{{ getTaskPaymentStatus(task) }}</span><small *ngIf="getTaskDetectedPaymentMethods(task)">Erkannt: {{ getTaskDetectedPaymentMethods(task) }}</small></div>
               </div>
 
-              <div class="runtime-detail" *ngIf="!isMonitorTask(task)"><strong>Challenge</strong><span>{{ getTaskCaptchaStatus(task) }}</span><small *ngIf="getTaskChallengeType(task)">Typ: {{ getTaskChallengeType(task) }}</small></div>
-              <div class="runtime-detail payment-detail" *ngIf="!isMonitorOnlyTask(task)"><strong>Zahlung</strong><span>{{ getTaskPaymentStatus(task) }}</span><small *ngIf="getTaskDetectedPaymentMethods(task)">Erkannt: {{ getTaskDetectedPaymentMethods(task) }}</small></div>
-            </div>
+              <div class="retry-info">{{ task.retries ?? 0 }}/{{ task.maxRetries ?? 0 }} retries</div>
+              <span class="status" [ngClass]="task.state.toLowerCase()">{{ task.state }}</span>
 
-            <div class="retry-info">{{ task.retries ?? 0 }}/{{ task.maxRetries ?? 0 }} retries</div>
-            <span class="status" [ngClass]="task.state.toLowerCase()">{{ task.state }}</span>
+              <div class="task-actions">
+                <button *ngIf="isStartable(task)" class="btn btn-small btn-primary" (click)="startTask(task.id)">Start</button>
+                <button *ngIf="isPausable(task)" class="btn btn-small btn-warning" (click)="pauseTask(task.id)">Pause</button>
+                <button *ngIf="isResumable(task)" class="btn btn-small btn-primary" (click)="resumeTask(task.id)">Fortsetzen</button>
+                <button *ngIf="isStoppable(task)" class="btn btn-small btn-danger" (click)="stopTask(task.id)">Stop</button>
+                <button class="btn btn-small btn-secondary" (click)="toggleTaskLogs(task.id)">{{ expandedTaskLogId === task.id ? 'Logs schließen' : 'Logs' }}</button>
+              </div>
 
-            <div class="task-actions">
-              <button *ngIf="isStartable(task)" class="btn btn-small btn-primary" (click)="startTask(task.id)">Start</button>
-              <button *ngIf="isPausable(task)" class="btn btn-small btn-warning" (click)="pauseTask(task.id)">Pause</button>
-              <button *ngIf="isResumable(task)" class="btn btn-small btn-primary" (click)="resumeTask(task.id)">Fortsetzen</button>
-              <button *ngIf="isStoppable(task)" class="btn btn-small btn-danger" (click)="stopTask(task.id)">Stop</button>
-              <button class="btn btn-small btn-secondary" (click)="toggleTaskLogs(task.id)">{{ expandedTaskLogId === task.id ? 'Logs schließen' : 'Logs' }}</button>
-            </div>
-
-            <div class="task-log-panel" *ngIf="expandedTaskLogId === task.id">
-              <div class="task-log-header"><div><strong>Task-Verlauf</strong><small>Letzte {{ taskLogs[task.id] ? taskLogs[task.id].length : 0 }} Einträge · SQLite</small></div><button class="btn btn-small btn-secondary" (click)="loadTaskLogs(task.id)">Aktualisieren</button></div>
-              <div class="task-log-empty" *ngIf="!taskLogs[task.id] || !taskLogs[task.id].length">Noch keine Log-Einträge vorhanden.</div>
-              <div class="task-log-entry" *ngFor="let log of taskLogs[task.id]" [class.warn]="log.level === 'warn'" [class.error]="log.level === 'error'"><time>{{ log.createdAt | date:'HH:mm:ss' }}</time><strong>{{ log.event }}</strong><span>{{ log.state || '-' }}</span><p>{{ log.message }}</p></div>
-            </div>
-          </article>
-        </section>
+              <div class="task-log-panel" *ngIf="expandedTaskLogId === task.id">
+                <div class="task-log-header"><div><strong>Task-Verlauf</strong><small>Letzte {{ taskLogs[task.id] ? taskLogs[task.id].length : 0 }} Einträge</small></div><button class="btn btn-small btn-secondary" (click)="loadTaskLogs(task.id)">Aktualisieren</button></div>
+                <div class="task-log-empty" *ngIf="!taskLogs[task.id] || !taskLogs[task.id].length">Noch keine Log-Einträge vorhanden.</div>
+                <div class="task-log-entry" *ngFor="let log of taskLogs[task.id]" [class.warn]="log.level === 'warn'" [class.error]="log.level === 'error'"><time>{{ log.createdAt | date:'HH:mm:ss' }}</time><strong>{{ log.event }}</strong><span>{{ log.state || '-' }}</span><p>{{ log.message }}</p></div>
+              </div>
+            </article>
+          </section>
+        </details>
       </ng-container>
 
       <ng-container *ngIf="activeTab === 'profiles'">
-        <section class="section-heading"><div><div class="eyebrow">PROFILE VAULT</div><h2>Profiles</h2></div><p>Kontakt, Liefer-/Rechnungsadresse, Browser-Defaults, Standard-Proxy und Zahlungspräferenz gehören in ein Profil.</p></section>
+        <section class="section-heading clean-heading"><div><div class="eyebrow">PROFILE</div><h2>Profile</h2></div><p>Ein Profil ist die zentrale Quelle für Checkout-Identität, Adressen, Browser-Defaults und Zahlungsdaten.</p></section>
         <section class="panel profile-panel">
           <div class="profile-tabs">
             <button [class.active]="profileTab === 'identity'" (click)="setProfileTab('identity')">Persönlich</button>
@@ -236,11 +229,11 @@
           </div>
 
           <ng-container *ngIf="profileTab === 'address'">
-            <div class="panel-header"><div><div class="eyebrow">SHIPPING / DEFAULT</div><h3>Lieferadresse</h3></div></div>
+            <div class="panel-header"><div><div class="eyebrow">SHIPPING</div><h3>Lieferadresse</h3></div></div>
             <div class="form-grid">
               <label class="wide"><span>Adresszeile 1</span><input [(ngModel)]="newProfile.shippingAddress.address1" placeholder="z. B. Mönckebergstraße 7"></label>
-              <label><span>Straße (optional strukturiert)</span><input [(ngModel)]="newProfile.shippingAddress.street" placeholder="Mönckebergstraße"></label>
-              <label><span>Hausnummer (optional strukturiert)</span><input [(ngModel)]="newProfile.shippingAddress.houseNumber" placeholder="7"></label>
+              <label><span>Straße (optional strukturiert)</span><input [(ngModel)]="newProfile.shippingAddress.street"></label>
+              <label><span>Hausnummer (optional strukturiert)</span><input [(ngModel)]="newProfile.shippingAddress.houseNumber"></label>
               <label><span>Adresszusatz</span><input [(ngModel)]="newProfile.shippingAddress.address2"></label>
               <label><span>PLZ</span><input [(ngModel)]="newProfile.shippingAddress.postalCode"></label>
               <label><span>Stadt</span><input [(ngModel)]="newProfile.shippingAddress.city"></label>
@@ -253,9 +246,9 @@
             <ng-container *ngIf="!newProfile.billingSameAsShipping">
               <div class="panel-header"><div><div class="eyebrow">BILLING</div><h3>Separate Rechnungsadresse</h3></div></div>
               <div class="form-grid">
-                <label class="wide"><span>Adresszeile 1</span><input [(ngModel)]="newProfile.billingAddress.address1" placeholder="z. B. Alexanderplatz 1"></label>
-                <label><span>Straße (optional strukturiert)</span><input [(ngModel)]="newProfile.billingAddress.street" placeholder="Alexanderplatz"></label>
-                <label><span>Hausnummer (optional strukturiert)</span><input [(ngModel)]="newProfile.billingAddress.houseNumber" placeholder="1"></label>
+                <label class="wide"><span>Adresszeile 1</span><input [(ngModel)]="newProfile.billingAddress.address1"></label>
+                <label><span>Straße (optional strukturiert)</span><input [(ngModel)]="newProfile.billingAddress.street"></label>
+                <label><span>Hausnummer (optional strukturiert)</span><input [(ngModel)]="newProfile.billingAddress.houseNumber"></label>
                 <label><span>Adresszusatz</span><input [(ngModel)]="newProfile.billingAddress.address2"></label>
                 <label><span>PLZ</span><input [(ngModel)]="newProfile.billingAddress.postalCode"></label>
                 <label><span>Stadt</span><input [(ngModel)]="newProfile.billingAddress.city"></label>
@@ -265,73 +258,65 @@
           </ng-container>
 
           <div class="form-grid" *ngIf="profileTab === 'browser'">
-            <label><span>Standard-Proxy</span><select [(ngModel)]="newProfile.preferredProxyId"><option value="">Direkt / kein Standardproxy</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select><small>Kann pro Auto-Checkout-Task überschrieben werden.</small></label>
+            <label><span>Standard-Proxy</span><select [(ngModel)]="newProfile.preferredProxyId"><option value="">Direkt / kein Standardproxy</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select></label>
             <label class="wide"><span>User-Agent</span><input [(ngModel)]="newProfile.browser!.userAgent" placeholder="optional"></label>
-            <label class="switch-row"><input type="checkbox" [(ngModel)]="newProfile.browser!.kiAutofill"><span>KI AutoFill</span><small>Semantische Feldauflösung aktivieren. Bei Aus bleiben deterministische Shop-Fallbacks verfügbar.</small></label>
+            <label class="switch-row"><input type="checkbox" [(ngModel)]="newProfile.browser!.kiAutofill"><span>KI AutoFill</span><small>Semantische Feldauflösung aktivieren.</small></label>
           </div>
+
           <div class="payment-preference" *ngIf="profileTab === 'payment'">
-            <div class="form-grid"><label><span>Bevorzugte Zahlungsart</span><select [(ngModel)]="newProfile.paymentPreference!.method"><option value="card">Karte</option><option value="paypal">PayPal</option><option value="shop-pay">Shop Pay</option><option value="klarna">Klarna</option><option value="other">Andere</option></select></label><label><span>Bezeichnung</span><input [(ngModel)]="newProfile.paymentPreference!.label" placeholder="optional"></label></div>
-            <div class="vault-warning"><strong>Keine Kartennummer und kein CVV im Profil.</strong><span>Sensible Zahlungsdaten werden nur session-only am Auto-Checkout-Task gesetzt.</span></div>
+            <div class="panel-header"><div><div class="eyebrow">PAYMENT</div><h3>Zahlungsprofil</h3></div></div>
+            <div class="form-grid">
+              <label><span>Bevorzugte Zahlungsart</span><select [(ngModel)]="newProfile.paymentPreference!.method"><option value="card">Karte</option><option value="paypal">PayPal</option><option value="shop-pay">Shop Pay</option><option value="klarna">Klarna</option><option value="other">Andere</option></select></label>
+              <label><span>Bezeichnung</span><input [(ngModel)]="newProfile.paymentPreference!.label" placeholder="optional"></label>
+            </div>
+            <app-profile-payment *ngIf="newProfile.paymentPreference!.method === 'card'" [profileId]="newProfile.id"></app-profile-payment>
           </div>
 
           <div class="primary-action-row split"><button class="btn btn-secondary" (click)="resetProfileForm()">Neu / leeren</button><button class="btn btn-primary" (click)="saveProfile()">Profil speichern</button></div>
-          <div class="profile-list" *ngIf="profiles.length"><article class="profile-card" *ngFor="let profile of profiles"><div><strong>{{ profile.name }}</strong><small>{{ profile.contact.firstName }} {{ profile.contact.lastName }} · Versand: {{ profile.shippingAddress.city }}<ng-container *ngIf="!profile.billingSameAsShipping"> · Rechnung: {{ profile.billingAddress.city }}</ng-container></small><small>Proxy: {{ getProfileProxyName(profile) }} · KI AutoFill: {{ profile.browser?.kiAutofill !== false ? 'AN' : 'AUS' }} · Zahlung: {{ getPaymentMethodLabel(profile.paymentPreference?.method) }}</small></div><button class="btn btn-small btn-secondary" (click)="editProfile(profile)">Bearbeiten</button></article></div>
+
+          <div class="profile-list" *ngIf="profiles.length">
+            <article class="profile-card" *ngFor="let profile of profiles">
+              <div>
+                <strong>{{ profile.name }}</strong>
+                <small>{{ profile.contact.firstName }} {{ profile.contact.lastName }} · {{ profile.shippingAddress.city }}</small>
+                <small>Proxy: {{ getProfileProxyName(profile) }} · KI AutoFill: {{ profile.browser?.kiAutofill !== false ? 'AN' : 'AUS' }} · Zahlung: {{ getPaymentMethodLabel(profile.paymentPreference?.method) }}</small>
+              </div>
+              <button class="btn btn-small btn-secondary" (click)="editProfile(profile)">Bearbeiten</button>
+            </article>
+          </div>
         </section>
       </ng-container>
 
       <ng-container *ngIf="activeTab === 'proxies'">
-        <section class="section-heading proxy-heading">
-          <div><div class="eyebrow">PROXY INTELLIGENCE</div><h2>Proxy Vault</h2></div>
-          <div class="heading-actions">
-            <span class="quota-note">proxycheck.io · keyless · 100 checks/day</span>
-            <button class="btn btn-secondary" [disabled]="testingAllProxies || !proxies.length" (click)="testAllProxies()">{{ testingAllProxies ? 'Checks laufen…' : 'Alle testen' }}</button>
-          </div>
-        </section>
+        <section class="section-heading clean-heading"><div><div class="eyebrow">NETWORK</div><h2>Proxys</h2></div><p>Verbindungen zentral speichern, testen und Profilen zuweisen.</p></section>
         <section class="proxy-layout">
           <section class="panel proxy-editor">
             <div class="panel-header"><div><div class="eyebrow">PROXY CONFIG</div><h3>Proxy hinzufügen</h3></div></div>
-            <div class="form-grid"><label><span>Proxy-ID</span><input [(ngModel)]="newProxy.id" placeholder="de-resi-01"></label><label><span>Name</span><input [(ngModel)]="newProxy.name" placeholder="DE Residential 01"></label><label><span>Protokoll</span><select [(ngModel)]="newProxy.protocol"><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks5">SOCKS5</option></select></label><label><span>Host</span><input [(ngModel)]="newProxy.host" placeholder="proxy.example.net"></label><label><span>Port</span><input [(ngModel)]="newProxy.port" type="number" min="1" max="65535"></label><label><span>Username</span><input [(ngModel)]="newProxy.username" placeholder="optional"></label><label class="wide"><span>Passwort</span><input [(ngModel)]="newProxy.password" type="password" placeholder="optional"></label></div>
+            <div class="form-grid">
+              <label><span>Proxy-ID</span><input [(ngModel)]="newProxy.id" placeholder="de-resi-01"></label>
+              <label><span>Name</span><input [(ngModel)]="newProxy.name" placeholder="DE Residential 01"></label>
+              <label><span>Protokoll</span><select [(ngModel)]="newProxy.protocol"><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks5">SOCKS5</option></select></label>
+              <label><span>Host</span><input [(ngModel)]="newProxy.host"></label>
+              <label><span>Port</span><input [(ngModel)]="newProxy.port" type="number" min="1" max="65535"></label>
+              <label><span>Username</span><input [(ngModel)]="newProxy.username" placeholder="optional"></label>
+              <label class="wide"><span>Passwort</span><input [(ngModel)]="newProxy.password" type="password" placeholder="optional"></label>
+            </div>
             <div class="primary-action-row"><button class="btn btn-primary" (click)="saveProxy()">Proxy speichern</button></div>
-            <div class="proxy-info-note"><strong>Lightweight Health Check</strong><span>Kein Browser. ARES misst Exit-IP und Latenz direkt über den Proxy und fragt Reputation/Geo anschließend über proxycheck.io ab.</span></div>
           </section>
 
           <section class="panel proxy-list-panel">
-            <div class="panel-header"><div><div class="eyebrow">NETWORK NODES</div><h3>Gespeicherte Proxys</h3></div><span class="count-chip">{{ proxies.length }}</span></div>
+            <div class="panel-header"><div><div class="eyebrow">GESPEICHERT</div><h3>Proxy-Liste</h3></div><div class="heading-actions"><span class="count-chip">{{ proxies.length }}</span><button class="btn btn-small btn-secondary" [disabled]="testingAllProxies || !proxies.length" (click)="testAllProxies()">{{ testingAllProxies ? 'Checks…' : 'Alle testen' }}</button></div></div>
             <div class="empty-state" *ngIf="!proxies.length">Noch keine Proxys gespeichert.</div>
-
             <article class="proxy-card proxy-health-card" *ngFor="let proxy of proxies; trackBy: trackProxy" [class.online]="proxy.health?.status === 'online'" [class.offline]="proxy.health?.status === 'offline'">
               <div class="proxy-card-head">
-                <div class="proxy-identity">
-                  <span class="health-dot" [class.online]="proxy.health?.status === 'online'" [class.offline]="proxy.health?.status === 'offline'"></span>
-                  <div><strong>{{ proxy.name }}</strong><small>{{ getProxyEndpoint(proxy) }} · {{ proxy.username ? 'AUTH' : 'NO AUTH' }}</small></div>
-                </div>
-                <div class="proxy-actions">
-                  <button class="btn btn-small btn-accent" [disabled]="isProxyTesting(proxy.id)" (click)="testProxy(proxy)">{{ isProxyTesting(proxy.id) ? 'TEST…' : 'TEST' }}</button>
-                  <button class="btn btn-small btn-secondary" (click)="editProxy(proxy)">EDIT</button>
-                  <button class="btn btn-small btn-danger" (click)="deleteProxy(proxy.id)">DEL</button>
-                </div>
+                <div class="proxy-identity"><span class="health-dot" [class.online]="proxy.health?.status === 'online'" [class.offline]="proxy.health?.status === 'offline'"></span><div><strong>{{ proxy.name }}</strong><small>{{ getProxyEndpoint(proxy) }}</small></div></div>
+                <div class="proxy-actions"><button class="btn btn-small btn-accent" [disabled]="isProxyTesting(proxy.id)" (click)="testProxy(proxy)">{{ isProxyTesting(proxy.id) ? 'TEST…' : 'TEST' }}</button><button class="btn btn-small btn-secondary" (click)="editProxy(proxy)">EDIT</button><button class="btn btn-small btn-danger" (click)="deleteProxy(proxy.id)">DEL</button></div>
               </div>
-
               <div class="proxy-health-grid">
                 <div><span>STATUS</span><strong>{{ proxy.health?.status === 'online' ? 'ONLINE' : proxy.health?.status === 'offline' ? 'OFFLINE' : 'UNKNOWN' }}</strong></div>
                 <div><span>LATENCY</span><strong>{{ proxy.health?.latencyMs != null ? proxy.health?.latencyMs + ' ms' : '—' }}</strong></div>
                 <div><span>EXIT IP</span><strong>{{ proxy.health?.exitIp || '—' }}</strong></div>
                 <div><span>LOCATION</span><strong>{{ getProxyLocation(proxy) }}</strong></div>
-                <div><span>NETWORK</span><strong>{{ getProxyNetwork(proxy) }}</strong></div>
-                <div><span>TYPE</span><strong>{{ proxy.health?.reputation?.detectedType || '—' }}</strong></div>
-              </div>
-
-              <div class="proxy-reputation-row">
-                <span class="metric-chip" [ngClass]="proxy.health?.reputation?.riskLevel || 'unknown'">{{ getProxyRiskLabel(proxy) }}</span>
-                <span class="metric-chip spam">{{ getProxySpamLabel(proxy) }}</span>
-                <span class="metric-chip">ATTACKS {{ proxy.health?.reputation?.attackTotal != null ? proxy.health?.reputation?.attackTotal : '—' }}</span>
-                <span class="metric-chip" [class.detected]="proxy.health?.reputation?.proxyDetected">{{ proxy.health?.reputation?.proxyDetected ? 'PROXY DETECTED' : 'DETECTION —' }}</span>
-              </div>
-
-              <div class="proxy-card-foot">
-                <small>{{ getProxyCheckLabel(proxy) }}</small>
-                <small *ngIf="proxy.health?.error" class="proxy-health-error">{{ proxy.health?.error }}</small>
-                <small *ngIf="proxy.health?.reputation?.error" class="proxy-health-error">Reputation: {{ proxy.health?.reputation?.error }}</small>
               </div>
             </article>
           </section>
@@ -339,11 +324,16 @@
       </ng-container>
 
       <ng-container *ngIf="activeTab === 'shops'">
-        <section class="section-heading"><div><div class="eyebrow">SHOP REGISTRY</div><h2>Shops</h2></div><p>Plattform und Basis-URL einmal registrieren. Monitoring nutzt die Commerce-API; Early Gate bleibt passiv und Browser-Handoff läuft über den bestehenden Coordinator.</p></section>
+        <section class="section-heading clean-heading"><div><div class="eyebrow">SHOP REGISTRY</div><h2>Shops</h2></div><p>Plattform und Basis-URL einmal registrieren.</p></section>
         <section class="panel shops-panel">
-          <div class="form-grid"><label><span>Shop-ID</span><input [(ngModel)]="newShop.id" placeholder="mein-shop"></label><label><span>Name</span><input [(ngModel)]="newShop.name" placeholder="Mein Shop"></label><label><span>Plattform</span><select [(ngModel)]="newShop.platform"><option *ngFor="let platform of commercePlatforms" [ngValue]="platform">{{ getPlatformLabel(platform) }}</option></select></label><label><span>Shop-URL</span><input [(ngModel)]="newShop.baseUrl" placeholder="https://dein-shop.de"></label></div>
+          <div class="form-grid">
+            <label><span>Shop-ID</span><input [(ngModel)]="newShop.id" placeholder="mein-shop"></label>
+            <label><span>Name</span><input [(ngModel)]="newShop.name" placeholder="Mein Shop"></label>
+            <label><span>Plattform</span><select [(ngModel)]="newShop.platform"><option *ngFor="let platform of commercePlatforms" [ngValue]="platform">{{ getPlatformLabel(platform) }}</option></select></label>
+            <label><span>Shop-URL</span><input [(ngModel)]="newShop.baseUrl" placeholder="https://dein-shop.de"></label>
+          </div>
           <div class="primary-action-row"><button class="btn btn-primary" (click)="registerShop()">Shop registrieren</button></div>
-          <div class="shop-grid" *ngIf="shops.length"><article class="shop-card" *ngFor="let shop of shops; trackBy: trackShop"><div><strong>{{ shop.name }}</strong><small>{{ shop.baseUrl }}</small><small>{{ hasExecutorForShop(shop) ? 'Monitoring + Browser-Checkout' : system.earlyGateReady ? 'Monitoring + Early Gate' : 'Monitoring / Registry' }}</small></div><span class="platform-pill">{{ getPlatformLabel(shop.platform) }}</span></article></div>
+          <div class="shop-grid" *ngIf="shops.length"><article class="shop-card" *ngFor="let shop of shops; trackBy: trackShop"><div><strong>{{ shop.name }}</strong><small>{{ shop.baseUrl }}</small></div><span class="platform-pill">{{ getPlatformLabel(shop.platform) }}</span></article></div>
         </section>
       </ng-container>
     </main>

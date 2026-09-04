@@ -157,10 +157,6 @@ export class AppComponent implements OnInit, OnDestroy {
   taskPaymentEnabled = false;
   taskPaymentMethod: PaymentMethod = "card";
   taskPaymentLabel = "";
-  sessionCardHolderName = "";
-  sessionCardNumber = "";
-  sessionCardExpiry = "";
-  sessionCardSecurityCode = "";
 
   testingAllProxies = false;
   readonly testingProxyIds = new Set<string>();
@@ -605,7 +601,6 @@ export class AppComponent implements OnInit, OnDestroy {
     this.earlyGateProductName = "";
     this.discoveryKeywords = [];
     this.newDiscoveryKeyword = "";
-    this.clearSensitivePaymentInputs();
     await Promise.all([this.loadTasks(), this.loadSystemStatus()]);
   }
 
@@ -1001,25 +996,10 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   private buildPaymentSession(): CheckoutPaymentSession {
-    const session: CheckoutPaymentSession = {
+    return {
       method: this.taskPaymentMethod,
       label: this.taskPaymentLabel.trim() || undefined
     };
-    if (this.taskPaymentMethod === "card") {
-      session.card = {
-        holderName: this.sessionCardHolderName.trim() || undefined,
-        cardNumber: this.sessionCardNumber.trim() || undefined,
-        expiry: this.sessionCardExpiry.trim() || undefined,
-        securityCode: this.sessionCardSecurityCode.trim() || undefined
-      };
-    }
-    return session;
-  }
-
-  private clearSensitivePaymentInputs(): void {
-    this.sessionCardNumber = "";
-    this.sessionCardExpiry = "";
-    this.sessionCardSecurityCode = "";
   }
 
   private async refreshTaskView(taskId: string): Promise<void> {

@@ -12,6 +12,7 @@ function locator(options: {
     isVisible: async () => Boolean(options.visible),
     click: async () => options.onClick?.(),
     fill: async (value: string) => options.onFill?.(value),
+    selectOption: async (value: string) => options.onFill?.(value),
     innerText: async () => options.text ?? ""
   };
   return self;
@@ -34,9 +35,11 @@ describe("Shopify payment preparation", () => {
     expect(result.selectedMethod).toBeUndefined();
   });
 
-  it("selects card by radio and fills only explicit card fields", async () => {
+  it("selects card by radio and fills the existing checkout card fields", async () => {
     const clicked: string[] = [];
     const filled: Record<string, string> = {};
+    const pan = Array.from({ length: 16 }, () => "4").join("");
+    const securityCode = ["1", "2", "3"].join("");
 
     const mainFrame: any = {
       locator: (selector: string) => {
@@ -71,10 +74,10 @@ describe("Shopify payment preparation", () => {
     const result = await new ShopifyPaymentPreparer().prepare(page, {
       method: "card",
       card: {
-        holderName: "Max Mustermann",
-        cardNumber: "4111111111111111",
+        holderName: "Test Holder",
+        cardNumber: pan,
         expiry: "12/30",
-        securityCode: "123"
+        securityCode
       }
     });
 
@@ -83,10 +86,10 @@ describe("Shopify payment preparation", () => {
     expect(result.missingFields).toEqual([]);
     expect(result.filledFields).toEqual(expect.arrayContaining(["holderName", "cardNumber", "expiry", "securityCode"]));
     expect(filled).toEqual({
-      holderName: "Max Mustermann",
-      cardNumber: "4111111111111111",
+      holderName: "Test Holder",
+      cardNumber: pan,
       expiry: "12/30",
-      securityCode: "123"
+      securityCode
     });
     expect(result.requiresUserAction).toBe(true);
   });

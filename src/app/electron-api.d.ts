@@ -6,6 +6,9 @@ declare global {
       getProfiles(): Promise<any>;
       saveProfile(profile: unknown): Promise<any>;
       deleteProfile(profileId: string): Promise<any>;
+      getProfilePayment(profileId: string): Promise<any>;
+      saveProfilePayment(profileId: string, payment: unknown): Promise<any>;
+      deleteProfilePayment(profileId: string): Promise<any>;
       getProfileBrowserStatus(profileId: string): Promise<any>;
       openProfileBrowser(profileId: string, startUrl?: string): Promise<any>;
       closeProfileBrowser(profileId: string): Promise<any>;
