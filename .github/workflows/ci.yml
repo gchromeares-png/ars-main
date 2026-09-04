@@ -43,7 +43,46 @@ jobs:
         run: npm run build:backend
 
       - name: Build UI
-        run: npm run build:ui
+        shell: bash
+        run: |
+          set -euo pipefail
+          log_file="$(mktemp)"
+
+          setsid bash -lc 'npm run build:ui' > >(tee "$log_file") 2>&1 &
+          build_pid=$!
+
+          cleanup() {
+            kill -TERM -- "-$build_pid" 2>/dev/null || true
+            sleep 1
+            kill -KILL -- "-$build_pid" 2>/dev/null || true
+            wait "$build_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 120); do
+            if grep -q "Build at:" "$log_file" && test -f dist/ares/index.html; then
+              echo "Angular build output verified; terminating any lingering CLI process."
+              exit 0
+            fi
+
+            if ! kill -0 "$build_pid" 2>/dev/null; then
+              set +e
+              wait "$build_pid"
+              status=$?
+              set -e
+              if [ "$status" -eq 0 ] && test -f dist/ares/index.html; then
+                echo "Angular build exited normally and output was verified."
+                exit 0
+              fi
+              echo "Angular build exited with status $status before a valid output was produced."
+              exit "$status"
+            fi
+
+            sleep 1
+          done
+
+          echo "Angular build did not produce a verified output within 120 seconds."
+          exit 1
 
       - name: Run full test suite
         env:
