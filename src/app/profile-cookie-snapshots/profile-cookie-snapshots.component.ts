@@ -4,6 +4,10 @@ import {
   ProfileCookieSnapshotService,
   type CookieSnapshotView
 } from "../services/profile-cookie-snapshot.service";
+import {
+  getSelectedCookieSnapshot,
+  setSelectedCookieSnapshot
+} from "../services/profile-cookie-snapshot-selection";
 
 @Component({
   selector: "app-profile-cookie-snapshots",
@@ -29,7 +33,10 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
   ) {}
 
   ngOnChanges(changes: SimpleChanges): void {
-    if (changes["profileId"]) void this.refresh();
+    if (changes["profileId"]) {
+      this.selectedId = this.profileId ? getSelectedCookieSnapshot(this.profileId) ?? "" : "";
+      void this.refresh();
+    }
   }
 
   async refresh(): Promise<void> {
@@ -126,6 +133,7 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
 
   select(id: string): void {
     this.selectedId = id;
+    if (this.profileId) setSelectedCookieSnapshot(this.profileId, id);
     this.selectedIdChange.emit(id);
   }
 
