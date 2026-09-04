@@ -1,17 +1,18 @@
 import { normalizePaymentSessionInput } from "../src/payments/payment-session-normalizer";
 
 describe("payment session IPC compatibility boundary", () => {
-  it("rewrites legacy card aliases to canonical names immediately", () => {
+  it("maps profile/UI aliases into the established checkout session fields", () => {
     const pan = Array.from({ length: 16 }, () => "4").join("");
-    const legacyCvc = ["1", "2", "3"].join("");
+    const cvc = ["1", "2", "3"].join("");
 
     const session = normalizePaymentSessionInput({
       method: "card",
       card: {
-        holderName: "Legacy Holder",
+        cardholderName: "Profile Holder",
         cardNumber: pan,
-        expiry: "12/30",
-        securityCode: legacyCvc
+        expiryMonth: "12",
+        expiryYear: "2030",
+        cvc
       }
     });
 
@@ -19,30 +20,28 @@ describe("payment session IPC compatibility boundary", () => {
       method: "card",
       label: undefined,
       card: {
-        cardholderName: "Legacy Holder",
+        holderName: "Profile Holder",
         cardNumber: pan,
-        expiryMonth: undefined,
-        expiryYear: undefined,
         expiry: "12/30",
-        cvc: legacyCvc
+        securityCode: cvc
       }
     });
-    expect(session?.card).not.toHaveProperty("holderName");
-    expect(session?.card).not.toHaveProperty("securityCode");
+    expect(session?.card).not.toHaveProperty("cardholderName");
+    expect(session?.card).not.toHaveProperty("cvc");
   });
 
-  it("prefers canonical fields when canonical and legacy values are both supplied", () => {
+  it("keeps the existing checkout field names when they are supplied directly", () => {
     const session = normalizePaymentSessionInput({
       method: "card",
       card: {
-        cardholderName: "Canonical Holder",
-        holderName: "Legacy Holder",
-        cvc: "987",
-        securityCode: "123"
+        holderName: "Existing Holder",
+        securityCode: "987",
+        cardholderName: "UI Alias Holder",
+        cvc: "123"
       }
     });
 
-    expect(session?.card?.cardholderName).toBe("Canonical Holder");
-    expect(session?.card?.cvc).toBe("987");
+    expect(session?.card?.holderName).toBe("Existing Holder");
+    expect(session?.card?.securityCode).toBe("987");
   });
 });
