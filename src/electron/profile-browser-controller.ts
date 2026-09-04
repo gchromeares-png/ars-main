@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import type { ChildProcessWithoutNullStreams } from "child_process";
 import { randomUUID } from "crypto";
+import { ipcMain } from "electron";
 import * as path from "path";
 import type { AresProfile } from "../profiles/models";
 import type { AresProxy } from "../proxies/models";
@@ -9,6 +10,10 @@ import type { ProfileCookieSnapshotCookie } from "../cookies/profile-cookie-snap
 import { resolveProfileUserDataDir } from "../browser-worker/profile-session-manager";
 import { registerProfilePaymentIpc } from "./profile-payment-controller";
 import { registerProfileCookieSnapshotIpc } from "./profile-cookie-snapshot-controller";
+import {
+  SeleniumBaseProfileBrowserController,
+  type SeleniumBaseProfileBrowserStatus
+} from "./seleniumbase-profile-browser-controller";
 
 interface ManualBrowserSession {
   profileId: string;
@@ -25,6 +30,12 @@ export interface ProfileBrowserStatus {
   startedAt?: string;
 }
 
+export interface ProfileBrowserOpenOptions {
+  engine: "seleniumbase-cdp";
+  startUrl?: string;
+  cookieSnapshotId?: string;
+}
+
 interface ManualBrowserWireMessage {
   type?: string;
   requestId?: string;
@@ -37,6 +48,7 @@ interface ManualBrowserWireMessage {
 
 export class ProfileBrowserController {
   private readonly sessions = new Map<string, ManualBrowserSession>();
+  private readonly seleniumBase: SeleniumBaseProfileBrowserController;
 
   constructor(
     private readonly profileRoot: string,
@@ -45,9 +57,23 @@ export class ProfileBrowserController {
     const userDataRoot = path.dirname(profileRoot);
     registerProfilePaymentIpc(userDataRoot);
     registerProfileCookieSnapshotIpc(userDataRoot, this);
+    this.seleniumBase = new SeleniumBaseProfileBrowserController(profileRoot, getProxy);
+    this.registerSeleniumBaseIpc();
   }
 
-  async open(profile: AresProfile, startUrl?: string): Promise<ProfileBrowserStatus> {
+  async open(
+    profile: AresProfile,
+    startUrlOrOptions?: string | ProfileBrowserOpenOptions
+  ): Promise<ProfileBrowserStatus | SeleniumBaseProfileBrowserStatus> {
+    if (typeof startUrlOrOptions === "object" && startUrlOrOptions?.engine === "seleniumbase-cdp") {
+      return this.seleniumBase.open(
+        profile,
+        startUrlOrOptions.startUrl,
+        startUrlOrOptions.cookieSnapshotId
+      );
+    }
+
+    const startUrl = typeof startUrlOrOptions === "string" ? startUrlOrOptions : undefined;
     const profileId = String(profile.id ?? "").trim();
     if (!profileId) throw new Error("Profil-ID fehlt.");
     const existing = this.sessions.get(profileId);
@@ -175,8 +201,57 @@ export class ProfileBrowserController {
     const open = Boolean(session && session.child.exitCode == null);
     return { profileId: id, open, pid: open ? session?.child.pid : undefined, userDataDir: resolveProfileUserDataDir(id, this.profileRoot), startedAt: open ? session?.startedAt : undefined };
   }
-  isOpen(profileId: string): boolean { return this.status(profileId).open; }
-  async closeAll(): Promise<void> { await Promise.allSettled([...this.sessions.keys()].map(profileId => this.close(profileId))); }
+
+  isOpen(profileId: string): boolean {
+    return this.status(profileId).open || this.seleniumBase.isOpen(profileId);
+  }
+
+  async closeAll(): Promise<void> {
+    await Promise.allSettled([
+      ...[...this.sessions.keys()].map(profileId => this.close(profileId)),
+      this.seleniumBase.closeAll()
+    ]);
+  }
+
+  private registerSeleniumBaseIpc(): void {
+    ipcMain.handle("get-seleniumbase-profile-browser-status", (_event, profileId: string) => {
+      try {
+        return { success: true, status: this.seleniumBase.status(profileId) };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle("close-seleniumbase-profile-browser", async (_event, profileId: string) => {
+      try {
+        return { success: true, status: await this.seleniumBase.close(profileId) };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle("apply-seleniumbase-cookie-snapshot", async (_event, profileId: string, snapshotId: string) => {
+      try {
+        return { success: true, ...(await this.seleniumBase.applySnapshot(profileId, snapshotId)) };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle("save-seleniumbase-profile-cookie-snapshot", async (
+      _event,
+      profileId: string,
+      name: string,
+      snapshotId?: string
+    ) => {
+      try {
+        const snapshot = await this.seleniumBase.saveSnapshot(profileId, name, snapshotId);
+        return { success: true, snapshot };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+  }
 
   private waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
     if (child.exitCode != null) return Promise.resolve(true);
