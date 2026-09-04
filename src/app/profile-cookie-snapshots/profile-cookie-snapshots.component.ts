@@ -23,6 +23,11 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
   snapshots: CookieSnapshotView[] = [];
   snapshotName = "";
   browserOpen = false;
+  seleniumBaseBrowserOpen = false;
+  seleniumBaseStartUrl = "";
+  seleniumBasePid?: number;
+  seleniumBaseUserDataDir = "";
+  seleniumBaseAppliedSnapshotId = "";
   busy = false;
   error = "";
   info = "";
@@ -44,18 +49,27 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
     if (!this.profileId) {
       this.snapshots = [];
       this.browserOpen = false;
+      this.seleniumBaseBrowserOpen = false;
+      this.seleniumBasePid = undefined;
+      this.seleniumBaseUserDataDir = "";
+      this.seleniumBaseAppliedSnapshotId = "";
       if (this.selectedId) this.select("");
       return;
     }
 
-    const [snapshotsResult, browserResult] = await Promise.all([
+    const [snapshotsResult, browserResult, seleniumBaseResult] = await Promise.all([
       this.snapshotsApi.list(this.profileId),
-      this.browserApi.getStatus(this.profileId)
+      this.browserApi.getStatus(this.profileId),
+      this.browserApi.getSeleniumBaseStatus(this.profileId)
     ]);
     this.snapshots = snapshotsResult?.success && Array.isArray(snapshotsResult.snapshots)
       ? snapshotsResult.snapshots
       : [];
     this.browserOpen = Boolean(browserResult?.success && browserResult.status?.open);
+    this.seleniumBaseBrowserOpen = Boolean(seleniumBaseResult?.success && seleniumBaseResult.status?.open);
+    this.seleniumBasePid = seleniumBaseResult?.status?.pid;
+    this.seleniumBaseUserDataDir = String(seleniumBaseResult?.status?.userDataDir || "");
+    this.seleniumBaseAppliedSnapshotId = String(seleniumBaseResult?.status?.appliedSnapshotId || "");
     if (this.selectedId && !this.snapshots.some(item => item.id === this.selectedId)) this.select("");
   }
 
@@ -68,7 +82,7 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
       if (!result?.success) this.error = result?.error || "Profil-Browser konnte nicht geöffnet werden.";
       else {
         this.browserOpen = true;
-        this.info = "Profil-Browser geöffnet. Einloggen/navigieren und danach Snapshot speichern.";
+        this.info = "Patchright-Profilbrowser geöffnet. Einloggen/navigieren und danach Snapshot speichern.";
       }
     } finally {
       this.busy = false;
@@ -87,6 +101,68 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
     }
   }
 
+  async openSeleniumBaseBrowser(): Promise<void> {
+    if (!this.profileId || this.busy) return;
+    this.busy = true;
+    this.error = "";
+    try {
+      const result = await this.browserApi.openSeleniumBase(
+        this.profileId,
+        this.seleniumBaseStartUrl.trim() || undefined,
+        this.selectedId || undefined
+      );
+      if (!result?.success) {
+        this.error = result?.error || "SeleniumBase-CDP-Profilbrowser konnte nicht geöffnet werden.";
+        return;
+      }
+      this.seleniumBaseBrowserOpen = true;
+      this.seleniumBasePid = result.status?.pid;
+      this.seleniumBaseUserDataDir = String(result.status?.userDataDir || "");
+      this.seleniumBaseAppliedSnapshotId = String(result.status?.appliedSnapshotId || this.selectedId || "");
+      this.info = this.selectedId
+        ? "SeleniumBase CDP geöffnet; ausgewählter Snapshot wurde in diese Session geladen."
+        : "SeleniumBase CDP geöffnet; der eigene persistente SeleniumBase-Profilstate ist aktiv.";
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async closeSeleniumBaseBrowser(): Promise<void> {
+    if (!this.profileId || this.busy) return;
+    this.busy = true;
+    this.error = "";
+    try {
+      const result = await this.browserApi.closeSeleniumBase(this.profileId);
+      if (!result?.success) {
+        this.error = result?.error || "SeleniumBase-CDP-Profilbrowser konnte nicht geschlossen werden.";
+        return;
+      }
+      this.seleniumBaseBrowserOpen = false;
+      this.seleniumBasePid = undefined;
+      this.seleniumBaseAppliedSnapshotId = "";
+      this.info = "SeleniumBase CDP sauber beendet; Profilstate wurde über sb.quit() geschlossen.";
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async applySelectedToSeleniumBase(): Promise<void> {
+    if (!this.profileId || !this.selectedId || !this.seleniumBaseBrowserOpen || this.busy) return;
+    this.busy = true;
+    this.error = "";
+    try {
+      const result = await this.browserApi.applySeleniumBaseSnapshot(this.profileId, this.selectedId);
+      if (!result?.success) {
+        this.error = result?.error || "Cookie-Snapshot konnte nicht in die SeleniumBase-Session geladen werden.";
+        return;
+      }
+      this.seleniumBaseAppliedSnapshotId = this.selectedId;
+      this.info = `${result.count ?? 0} Cookies in die laufende SeleniumBase-CDP-Session geladen.`;
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async saveSnapshot(): Promise<void> {
     const name = this.snapshotName.trim();
     if (!this.profileId || !name || this.busy) {
@@ -94,7 +170,7 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
       return;
     }
     if (!this.browserOpen) {
-      this.error = "Profil-Browser zuerst öffnen. Gespeichert werden nur die Cookies der aktuell geöffneten Profil-Session.";
+      this.error = "Patchright-Profilbrowser zuerst öffnen. Gespeichert werden nur die Cookies der aktuell geöffneten Session.";
       return;
     }
 
@@ -107,7 +183,35 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
         return;
       }
       this.snapshotName = "";
-      this.info = `${result.snapshot?.cookieCount ?? 0} Cookies verschlüsselt gespeichert.`;
+      this.info = `${result.snapshot?.cookieCount ?? 0} Patchright-Cookies verschlüsselt gespeichert.`;
+      await this.refresh();
+      if (result.snapshot?.id) this.select(result.snapshot.id);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async saveSeleniumBaseSnapshot(): Promise<void> {
+    const name = this.snapshotName.trim();
+    if (!this.profileId || !name || this.busy) {
+      if (!name) this.error = "Bitte einen Snapshot-Namen eingeben.";
+      return;
+    }
+    if (!this.seleniumBaseBrowserOpen) {
+      this.error = "SeleniumBase-CDP-Profilbrowser zuerst öffnen.";
+      return;
+    }
+
+    this.busy = true;
+    this.error = "";
+    try {
+      const result = await this.browserApi.saveSeleniumBaseSnapshot(this.profileId, name);
+      if (!result?.success) {
+        this.error = result?.error || "SeleniumBase-Cookies konnten nicht gespeichert werden.";
+        return;
+      }
+      this.snapshotName = "";
+      this.info = `${result.snapshot?.cookieCount ?? 0} SeleniumBase-CDP-Cookies verschlüsselt gespeichert.`;
       await this.refresh();
       if (result.snapshot?.id) this.select(result.snapshot.id);
     } finally {
@@ -124,6 +228,7 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
       if (!result?.success) this.error = result?.error || "Snapshot konnte nicht gelöscht werden.";
       else {
         if (this.selectedId === snapshot.id) this.select("");
+        if (this.seleniumBaseAppliedSnapshotId === snapshot.id) this.seleniumBaseAppliedSnapshotId = "";
         await this.refresh();
       }
     } finally {
