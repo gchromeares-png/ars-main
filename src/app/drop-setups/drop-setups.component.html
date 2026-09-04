@@ -189,8 +189,8 @@
       </div>
 
       <div class="session-payment-box">
-        <label class="session-payment-toggle"><input type="checkbox" [(ngModel)]="sessionPaymentEnabled"><span><strong>Zahlungsdaten aus Profilen verwenden</strong><small>Optional · jeder Run verwendet ausschließlich die Zahlungspräferenz und bei Karte den verschlüsselten Vault seines zugeordneten Profils.</small></span></label>
-        <div class="session-payment-fields" *ngIf="sessionPaymentEnabled">
+        <div class="session-payment-fields">
+          <div><strong>Profil-Zahlung ist immer aktiv</strong><small>Jeder Run verwendet automatisch die Zahlungspräferenz seines Profils; Kartendaten kommen bei Karte ausschließlich aus dem verschlüsselten Profile Vault.</small></div>
           <div class="assignment-list">
             <div class="assignment-line" *ngFor="let assignment of draft.assignments">
               <span class="assignment-profile">{{ profileName(assignment.profileId) }}</span>
@@ -198,7 +198,7 @@
               <span>PROFILE VAULT</span>
             </div>
           </div>
-          <small>Keine manuellen Kartenfelder im Drop Setup. Kartennummer und CVC können hier nicht überschrieben werden.</small>
+          <small>Keine manuellen Kartenfelder und kein Payment-Schalter im Drop Setup. Kartennummer und CVC können hier weder überschrieben noch deaktiviert werden.</small>
         </div>
       </div>
 
