@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 import mycdp
+import psutil
 from seleniumbase import sb_cdp
 
 
@@ -141,6 +144,7 @@ class SeleniumBaseCdpAdapter:
         if self._closed:
             return
         self._closed = True
+        chrome_pid = self.chrome_pid
         if self._playwright is not None:
             try:
                 self._playwright.stop()
@@ -150,6 +154,23 @@ class SeleniumBaseCdpAdapter:
                 self._playwright_context = None
                 self._playwright_page = None
         self._sb.quit()
+        self._wait_for_profile_flush(chrome_pid)
+
+    @staticmethod
+    def _wait_for_profile_flush(chrome_pid: int | None) -> None:
+        """Do not reopen a persistent profile while Chrome is still settling.
+
+        SeleniumBase already performs a graceful Pure-CDP browser close. Windows
+        can still need a short disk-settle window before the same user-data-dir is
+        opened by a new process. Waiting here keeps the lifecycle SeleniumBase-owned
+        while preventing an immediate reopen from racing cookie/session persistence.
+        """
+        if chrome_pid:
+            try:
+                psutil.Process(chrome_pid).wait(timeout=5.0)
+            except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                pass
+        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
 
     @staticmethod
     def _cookie_param(cookie: Dict[str, Any]) -> mycdp.network.CookieParam:
