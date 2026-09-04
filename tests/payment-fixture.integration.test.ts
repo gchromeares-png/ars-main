@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { chromium, type Page } from "patchright";
+import { chromium, type BrowserContext, type Page } from "patchright";
 import { CheckoutPaymentPreparer } from "../src/browser-worker/checkout-payment-preparer";
 
 const describeBrowser = process.env["ARES_RUN_BROWSER_INTEGRATION"] === "1" ? describe : describe.skip;
@@ -9,6 +9,7 @@ describeBrowser("local payment fixture", () => {
   jest.setTimeout(30_000);
 
   let browser: Awaited<ReturnType<typeof chromium.launch>>;
+  let context: BrowserContext;
   let page: Page;
 
   beforeAll(async () => {
@@ -21,11 +22,12 @@ describeBrowser("local payment fixture", () => {
   });
 
   beforeEach(async () => {
-    page = await browser.newPage();
+    context = await browser.newContext();
+    page = await context.newPage();
   });
 
   afterEach(async () => {
-    await page.close();
+    await context.close();
   });
 
   it("fills cardholderName, cardNumber, expiry and cvc without any order submission", async () => {
@@ -50,10 +52,10 @@ describeBrowser("local payment fixture", () => {
       }
     });
 
-    expect(await page.locator('#cardholder').inputValue()).toBe("Fixture Holder");
-    expect(await page.locator('#card-number').inputValue()).toBe(pan);
-    expect(await page.locator('#expiry').inputValue()).toBe("12/30");
-    expect(await page.locator('#cvc').inputValue()).toBe(cvc);
+    expect(await page.locator("#cardholder").inputValue()).toBe("Fixture Holder");
+    expect(await page.locator("#card-number").inputValue()).toBe(pan);
+    expect(await page.locator("#expiry").inputValue()).toBe("12/30");
+    expect(await page.locator("#cvc").inputValue()).toBe(cvc);
     expect(result.filledFields).toEqual(expect.arrayContaining(["cardholderName", "cardNumber", "expiry", "cvc"]));
     expect(result.missingFields).toEqual([]);
     expect(result.requiresUserAction).toBe(true);
