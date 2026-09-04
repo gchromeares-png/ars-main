@@ -53,7 +53,7 @@ export class CheckoutPaymentPreparer {
       return result;
     }
 
-    await this.fillCardField(page, "cardholderName", card.cardholderName ?? card.holderName, [
+    await this.fillCardField(page, "cardholderName", card.cardholderName, [
       'input[autocomplete="cc-name"]',
       'input[name*="cardholder" i]',
       'input[name*="card_name" i]',
@@ -69,7 +69,7 @@ export class CheckoutPaymentPreparer {
 
     await this.fillExpiry(page, card.expiryMonth, card.expiryYear, card.expiry, result);
 
-    await this.fillCardField(page, "cvc", card.cvc ?? card.securityCode, [
+    await this.fillCardField(page, "cvc", card.cvc, [
       'input[autocomplete="cc-csc"]',
       'input[name*="security_code" i]',
       'input[name*="cvv" i]',
