@@ -3,7 +3,7 @@ import type { Task } from "../src/models";
 import { TaskState } from "../src/models";
 
 describe("EphemeralPaymentExecutor", () => {
-  it("passes payment data only to the delegated task copy and strips it from runtime/persistent task state", async () => {
+  it("passes payment session data only to the delegated task copy and strips it from runtime/persistent task state", async () => {
     let runtimeListener: ((task: Task) => void) | undefined;
     let delegatedTask: Task | undefined;
 
@@ -14,13 +14,16 @@ describe("EphemeralPaymentExecutor", () => {
       },
       execute: async (task: Task) => {
         delegatedTask = task;
-        expect((task.config.data as any)?.__paymentSession?.card?.securityCode).toBe("123");
+        expect((task.config.data as any)?.__paymentSession).toEqual({
+          method: "paypal",
+          label: "Primary PayPal"
+        });
 
         task.config.data = {
           ...(task.config.data ?? {}),
           paymentPreparation: {
-            detectedMethods: ["card"],
-            filledFields: ["cardNumber"],
+            detectedMethods: ["paypal"],
+            filledFields: [],
             missingFields: [],
             requiresUserAction: true
           }
@@ -46,12 +49,8 @@ describe("EphemeralPaymentExecutor", () => {
     };
 
     const executor = new EphemeralPaymentExecutor(delegate, () => ({
-      method: "card",
-      card: {
-        cardNumber: "4111111111111111",
-        expiry: "12/30",
-        securityCode: "123"
-      }
+      method: "paypal",
+      label: "Primary PayPal"
     }));
 
     const updates: Task[] = [];
