@@ -10,7 +10,6 @@ export interface AutoCheckoutActionConfig {
   profileId: string;
   proxySelection?: ProxySelection;
   headless?: boolean;
-  paymentEnabled?: boolean;
 }
 
 export interface MonitorOnlyActionConfig {
@@ -70,8 +69,7 @@ export function getMonitorAction(task: Task): MonitorActionConfig {
     mode: "auto-checkout",
     profileId,
     proxySelection,
-    headless: Boolean(raw["headless"]),
-    paymentEnabled: true
+    headless: Boolean(raw["headless"])
   };
 }
 
