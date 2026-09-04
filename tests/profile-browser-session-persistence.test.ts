@@ -42,12 +42,16 @@ describe("profile-owned browser session persistence", () => {
     expect(browserWorker).not.toContain("pages.map(p => p.close()");
   });
 
-  it("does not synthesize or persist session cookies outside Chromium", () => {
+  it("does not automatically synthesize or persist session cookies outside Chromium", () => {
     for (const source of [browserWorker, manualBrowser, workerRuntime, protocol, electronMain]) {
       expect(source).not.toMatch(/session[-_ ]?cookie[-_ ]?vault/i);
       expect(source).not.toMatch(/sessionCookies/i);
     }
-    expect(browserWorker).not.toContain("context.addCookies");
+
+    // Explicit user-selected cookie snapshots may be injected into a task context,
+    // but the manual browser and runtime must not automatically restore session cookies.
+    expect(browserWorker).toContain("taskCookieSnapshots");
+    expect(browserWorker).toContain("handle.context.addCookies(snapshot as any)");
     expect(manualBrowser).not.toContain("context.addCookies");
     expect(workerRuntime).not.toContain("context.addCookies");
   });
