@@ -401,10 +401,16 @@ export class DropSetupsComponent implements OnInit, OnDestroy {
 
   runBrowserStatus(run: any): string {
     const child = this.childFor(run);
-    if (child) return "Browser läuft";
-    if (run?.state === TaskState.FAILED) return "Fehler";
-    if (run?.state === TaskState.CANCELLED) return "Gestoppt";
-    return "Monitor aktiv";
+    const audit = child?.config?.data?.browserEnvironment || run?.config?.data?.browserEnvironment;
+    const environment = audit?.status === "green"
+      ? " · Env GRÜN"
+      : audit?.status === "warning"
+        ? " · Env WARNUNG"
+        : "";
+    if (child) return `Browser läuft${environment}`;
+    if (run?.state === TaskState.FAILED) return `Fehler${environment}`;
+    if (run?.state === TaskState.CANCELLED) return `Gestoppt${environment}`;
+    return `Monitor aktiv${environment}`;
   }
 
   runProfileName(run: any): string {
