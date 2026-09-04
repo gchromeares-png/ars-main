@@ -312,8 +312,9 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     const plan = await new SemanticCheckoutProfilePlanner(interactions).prepare(page, profile);
     const autofill = new SemanticFieldAutofill(page, interactions, this.fieldResolver);
 
-    // This Set describes global field requirements only. Concrete write/completion
-    // identity is always the full SemanticTarget (intent + context).
+    // Intent-only configuration is permitted here because it describes the global
+    // classes of fields required by checkout. Concrete completion identity is
+    // derived below from the observed SemanticTargets.
     const requiredIntents = new Set<ConcreteFieldIntent>([
       "email",
       "firstName",
@@ -322,6 +323,10 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       "city",
       "postalCode"
     ]);
+
+    const requiredTargets = (): SemanticTarget[] => autofill.observedTargets().filter(target =>
+      target.intent !== "unknown" && requiredIntents.has(target.intent as ConcreteFieldIntent)
+    );
 
     // Compatibility fallback for checkout versions whose fields cannot be resolved
     // semantically. These are explicit unknown-context targets and receive their
@@ -365,12 +370,20 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       }
 
       const snapshot = await autofill.result(plan.values);
-      const completion = evaluateSemanticCheckoutCompletion(snapshot, requiredIntents);
+      const completion = evaluateSemanticCheckoutCompletion({
+        filled: snapshot.filled,
+        missing: snapshot.missing,
+        requiredTargets: requiredTargets()
+      });
       if (completion.complete) break;
     }
 
     const result = await autofill.result(plan.values);
-    const completion = evaluateSemanticCheckoutCompletion(result, requiredIntents);
+    const completion = evaluateSemanticCheckoutCompletion({
+      filled: result.filled,
+      missing: result.missing,
+      requiredTargets: requiredTargets()
+    });
     return {
       ...result,
       billingMode: plan.billingMode,
