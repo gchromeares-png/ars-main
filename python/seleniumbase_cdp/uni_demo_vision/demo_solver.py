@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import asdict
 from typing import Any, Dict, List
@@ -78,48 +79,55 @@ class UniDemoVisionRunner:
 
     def _snapshot(self) -> Dict[str, Any]:
         script = r"""
-        const root = document.querySelector('[data-ares-demo-challenge]');
-        if (!root) return { optedIn: false };
-        const tiles = [...root.querySelectorAll('[data-ares-demo-tile]')];
-        return {
-          optedIn: true,
-          target: root.getAttribute('data-ares-demo-target') || '',
-          generation: root.getAttribute('data-ares-demo-generation') ||
-                      tiles.map((tile) => {
-                        const img = tile.querySelector('img');
-                        return img ? (img.currentSrc || img.src || '') : '';
-                      }).join('|'),
-          sources: tiles.map((tile) => {
-            const img = tile.querySelector('img');
-            return img ? (img.currentSrc || img.src || '') : '';
-          })
-        };
+        (() => {
+          const root = document.querySelector('[data-ares-demo-challenge]');
+          if (!root) return { optedIn: false };
+          const tiles = [...root.querySelectorAll('[data-ares-demo-tile]')];
+          return {
+            optedIn: true,
+            target: root.getAttribute('data-ares-demo-target') || '',
+            generation: root.getAttribute('data-ares-demo-generation') ||
+                        tiles.map((tile) => {
+                          const img = tile.querySelector('img');
+                          return img ? (img.currentSrc || img.src || '') : '';
+                        }).join('|'),
+            sources: tiles.map((tile) => {
+              const img = tile.querySelector('img');
+              return img ? (img.currentSrc || img.src || '') : '';
+            })
+          };
+        })()
         """
         value = self._sb.evaluate(script)
         return dict(value) if isinstance(value, dict) else {"optedIn": False}
 
     def _apply_selection(self, indexes: List[int]) -> None:
-        script = r"""
-        const indexes = arguments[0];
-        const root = document.querySelector('[data-ares-demo-challenge]');
-        if (!root) return false;
-        const tiles = [...root.querySelectorAll('[data-ares-demo-tile]')];
-        indexes.forEach((index) => {
-          const tile = tiles[index];
-          if (tile && tile.getAttribute('aria-pressed') !== 'true') tile.click();
-        });
-        const submit = root.querySelector('[data-ares-demo-submit]');
-        if (submit) submit.click();
-        return true;
+        encoded = json.dumps([int(index) for index in indexes])
+        script = f"""
+        (() => {{
+          const indexes = {encoded};
+          const root = document.querySelector('[data-ares-demo-challenge]');
+          if (!root) return false;
+          const tiles = [...root.querySelectorAll('[data-ares-demo-tile]')];
+          indexes.forEach((index) => {{
+            const tile = tiles[index];
+            if (tile && tile.getAttribute('aria-pressed') !== 'true') tile.click();
+          }});
+          const submit = root.querySelector('[data-ares-demo-submit]');
+          if (submit) submit.click();
+          return true;
+        }})()
         """
-        self._sb.evaluate(script, indexes)
+        self._sb.evaluate(script)
 
     def _completion_state(self) -> str:
         script = r"""
-        const root = document.querySelector('[data-ares-demo-challenge]');
-        if (!root) return 'missing';
-        if (root.getAttribute('data-ares-demo-complete') === 'true') return 'complete';
-        if (root.getAttribute('data-ares-demo-failed') === 'true') return 'failed';
-        return 'pending';
+        (() => {
+          const root = document.querySelector('[data-ares-demo-challenge]');
+          if (!root) return 'missing';
+          if (root.getAttribute('data-ares-demo-complete') === 'true') return 'complete';
+          if (root.getAttribute('data-ares-demo-failed') === 'true') return 'failed';
+          return 'pending';
+        })()
         """
         return str(self._sb.evaluate(script) or "pending")
