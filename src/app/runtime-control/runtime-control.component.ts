@@ -1,5 +1,6 @@
 import { Component, Input, OnDestroy, OnInit } from "@angular/core";
 import { ElectronService } from "../services/electron.service";
+import { ProfileBrowserService, type ProfileBrowserStatusView } from "../services/profile-browser.service";
 
 interface QueueView {
   active?: boolean;
@@ -28,9 +29,17 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
   purchaseChanging = false;
   apiKeyTesting = false;
   apiKeyCheck: any;
+  bulkStarting = false;
+  bulkStopping = false;
+  profiles: any[] = [];
+  readonly profileBrowserStatuses: Record<string, ProfileBrowserStatusView> = {};
+  readonly profileBrowserBusyIds = new Set<string>();
   private refreshTimer?: ReturnType<typeof setInterval>;
 
-  constructor(private readonly electron: ElectronService) {}
+  constructor(
+    private readonly electron: ElectronService,
+    private readonly profileBrowser: ProfileBrowserService
+  ) {}
 
   ngOnInit(): void {
     this.runtimeSystem = this.system;
@@ -51,6 +60,29 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
 
   get checkoutReadyTasks(): any[] {
     return this.tasks.filter(task => task.state === "CHECKOUT" && this.isEarlyGateChild(task));
+  }
+
+  get startableTasks(): any[] {
+    return this.tasks.filter(task => task?.state === "QUEUED");
+  }
+
+  get stoppableTasks(): any[] {
+    const stoppable = new Set([
+      "STARTING",
+      "RUNNING",
+      "WAITING_QUEUE",
+      "POST_QUEUE_DISCOVERY",
+      "PRODUCT_FOUND",
+      "CART",
+      "CHECKOUT",
+      "RETRYING",
+      "PAUSED"
+    ]);
+    return this.tasks.filter(task => stoppable.has(String(task?.state ?? "")));
+  }
+
+  get openProfileBrowserCount(): number {
+    return this.profiles.filter(profile => this.isProfileBrowserOpen(profile.id)).length;
   }
 
   get workers(): any[] {
@@ -150,6 +182,99 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
     return `${Math.round(interval / 1_000)}s Heartbeat · ${Math.round(timeout / 1_000)}s Timeout`;
   }
 
+  isProfileBrowserOpen(profileId: string): boolean {
+    return this.profileBrowserStatuses[profileId]?.open === true;
+  }
+
+  profileBrowserDetails(profileId: string): string {
+    const status = this.profileBrowserStatuses[profileId];
+    if (!status?.open) return "GESCHLOSSEN";
+    return `OFFEN${status.pid ? ` · PID ${status.pid}` : ""}`;
+  }
+
+  async openProfileBrowser(profile: any): Promise<void> {
+    const profileId = String(profile?.id ?? "").trim();
+    if (!profileId || this.profileBrowserBusyIds.has(profileId)) return;
+    this.profileBrowserBusyIds.add(profileId);
+    this.actionMessage = "";
+    try {
+      const result = await this.profileBrowser.open(profileId);
+      if (!result?.success) {
+        this.actionMessage = result?.error || `Profil-Browser ${profile?.name || profileId} konnte nicht geöffnet werden.`;
+        return;
+      }
+      this.profileBrowserStatuses[profileId] = result.status;
+      this.actionMessage = `Profil-Browser ${profile?.name || profileId} geöffnet.`;
+    } finally {
+      this.profileBrowserBusyIds.delete(profileId);
+    }
+  }
+
+  async closeProfileBrowser(profile: any): Promise<void> {
+    const profileId = String(profile?.id ?? "").trim();
+    if (!profileId || this.profileBrowserBusyIds.has(profileId)) return;
+    this.profileBrowserBusyIds.add(profileId);
+    this.actionMessage = "";
+    try {
+      const result = await this.profileBrowser.close(profileId);
+      if (!result?.success) {
+        this.actionMessage = result?.error || `Profil-Browser ${profile?.name || profileId} konnte nicht geschlossen werden.`;
+        return;
+      }
+      this.profileBrowserStatuses[profileId] = result.status;
+      this.actionMessage = `Profil-Browser ${profile?.name || profileId} geschlossen.`;
+    } finally {
+      this.profileBrowserBusyIds.delete(profileId);
+    }
+  }
+
+  startAllTasks(): void {
+    if (this.bulkStarting) return;
+    const targets = [...this.startableTasks];
+    if (!targets.length) {
+      this.actionMessage = "Keine QUEUED Tasks zum Starten.";
+      return;
+    }
+
+    this.bulkStarting = true;
+    this.actionMessage = `${targets.length} Startbefehl(e) gleichzeitig gesendet.`;
+    const requests = targets.map(task => this.electron.startTask(task.id));
+
+    setTimeout(() => { this.bulkStarting = false; }, 1_000);
+    void Promise.allSettled(requests).then(async results => {
+      const failed = results.filter(result => result.status === "rejected" || (result.status === "fulfilled" && !result.value?.success));
+      this.actionMessage = failed.length
+        ? `${targets.length - failed.length}/${targets.length} Task(s) gestartet · ${failed.length} Fehler.`
+        : `${targets.length} Task(s) gestartet.`;
+      await this.refreshRuntime();
+    });
+  }
+
+  async stopAllTasks(): Promise<void> {
+    if (this.bulkStopping) return;
+    const targets = [...this.stoppableTasks];
+    if (!targets.length) {
+      this.actionMessage = "Keine laufenden Tasks zum Stoppen.";
+      return;
+    }
+
+    this.bulkStopping = true;
+    this.actionMessage = "";
+    try {
+      const results = await Promise.allSettled(targets.map(async task => {
+        await this.electron.clearPaymentSession(task.id).catch(() => undefined);
+        return this.electron.stopTask(task.id);
+      }));
+      const failed = results.filter(result => result.status === "rejected" || (result.status === "fulfilled" && !result.value?.success));
+      this.actionMessage = failed.length
+        ? `${targets.length - failed.length}/${targets.length} Task(s) gestoppt · ${failed.length} Fehler.`
+        : `${targets.length} Task(s) gestoppt.`;
+      await this.refreshRuntime();
+    } finally {
+      this.bulkStopping = false;
+    }
+  }
+
   async testCapmonsterApiKey(): Promise<void> {
     if (this.apiKeyTesting) return;
     this.apiKeyTesting = true;
@@ -212,8 +337,24 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
     return this.runtimeSystem ?? this.system ?? {};
   }
 
+  private async refreshProfileBrowsers(): Promise<void> {
+    const profilesResult = await this.electron.getProfiles().catch(() => undefined);
+    if (!profilesResult?.success) return;
+    this.profiles = Array.isArray(profilesResult.profiles) ? profilesResult.profiles : [];
+
+    await Promise.all(this.profiles.map(async profile => {
+      const profileId = String(profile?.id ?? "").trim();
+      if (!profileId || this.profileBrowserBusyIds.has(profileId)) return;
+      const result = await this.profileBrowser.getStatus(profileId).catch(() => undefined);
+      if (result?.success && result.status) this.profileBrowserStatuses[profileId] = result.status;
+    }));
+  }
+
   private async refreshRuntime(): Promise<void> {
-    const result = await this.electron.getSystemStatus();
+    const [result] = await Promise.all([
+      this.electron.getSystemStatus(),
+      this.refreshProfileBrowsers()
+    ]);
     if (result?.success) this.runtimeSystem = result;
   }
 
