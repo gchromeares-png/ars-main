@@ -31,6 +31,15 @@ describe("ARES browser core migration", () => {
     expect(launcher).toContain("if (!config.proxy) return args.length ? args : undefined");
   });
 
+  it("hardens proxied browser contexts against direct DNS paths", () => {
+    expect(launcher).toContain("--disable-async-dns");
+    expect(launcher).toContain("DnsOverHttps");
+    expect(launcher).toContain("NetworkPrediction");
+    expect(launcher).toContain("--host-resolver-rules=");
+    expect(launcher).toContain("MAP * ~NOTFOUND , EXCLUDE");
+    expect(launcher).not.toContain("--dns-prefetch-disable");
+  });
+
   it("never removes Chromium singleton profile locks blindly", () => {
     expect(launcher).not.toContain("clearStaleChromeLocks");
     expect(launcher).not.toContain('rm(path.join(userDataDir');

@@ -8,6 +8,10 @@ import { attachLiveChallengePageWatcher } from "../challenges/live-challenge-pag
 
 const WEBRTC_PROXY_POLICY = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp";
 const WEBRTC_PERMISSION_CHECK = "--enforce-webrtc-ip-permission-check";
+const DISABLE_ASYNC_DNS = "--disable-async-dns";
+const DISABLE_FEATURES_PREFIX = "--disable-features=";
+const HOST_RESOLVER_RULES_PREFIX = "--host-resolver-rules=";
+const PROXY_DISABLED_FEATURES = ["DnsOverHttps", "NetworkPrediction"] as const;
 
 function assertTaskId(taskId: string): void {
   if (!taskId || !taskId.trim()) {
@@ -37,16 +41,60 @@ function toProxy(proxy?: BrowserProxyConfig): {
   };
 }
 
+function mergeDisabledFeatures(args: string[], required: readonly string[]): string[] {
+  const passthrough: string[] = [];
+  const disabled: string[] = [];
+
+  for (const arg of args) {
+    if (!arg.startsWith(DISABLE_FEATURES_PREFIX)) {
+      passthrough.push(arg);
+      continue;
+    }
+
+    disabled.push(...arg.slice(DISABLE_FEATURES_PREFIX.length).split(",").map(value => value.trim()).filter(Boolean));
+  }
+
+  for (const feature of required) {
+    if (!disabled.includes(feature)) disabled.push(feature);
+  }
+
+  passthrough.push(`${DISABLE_FEATURES_PREFIX}${disabled.join(",")}`);
+  return passthrough;
+}
+
+function strictHostResolverRule(proxy: BrowserProxyConfig): string | undefined {
+  // Explicit proxy bypass rules intentionally permit direct traffic. In that case
+  // do not install a global DNS black-hole rule because it would break the bypass.
+  if (proxy.bypass?.trim()) return undefined;
+  return `${HOST_RESOLVER_RULES_PREFIX}MAP * ~NOTFOUND , EXCLUDE ${proxy.host.trim()}`;
+}
+
 function buildChromiumArgs(config: BrowserContextConfig): string[] | undefined {
   const args = [...(config.args ?? [])];
   if (!config.proxy) return args.length ? args : undefined;
 
   // A proxied browser must not open a parallel non-proxied WebRTC UDP route.
-  const hardened = args.filter(arg => !arg.startsWith("--force-webrtc-ip-handling-policy="));
-  if (!hardened.includes(WEBRTC_PERMISSION_CHECK)) {
-    hardened.push(WEBRTC_PERMISSION_CHECK);
-  }
+  let hardened = args.filter(arg =>
+    !arg.startsWith("--force-webrtc-ip-handling-policy=") && arg !== "--enable-async-dns"
+  );
+  if (!hardened.includes(WEBRTC_PERMISSION_CHECK)) hardened.push(WEBRTC_PERMISSION_CHECK);
   hardened.push(WEBRTC_PROXY_POLICY);
+
+  // Modern Chromium replaced the old dns-prefetch switch with NetworkPrediction.
+  // Disable speculative network prediction, Secure DNS/DoH and the built-in async
+  // DNS client for explicit proxy sessions.
+  hardened = mergeDisabledFeatures(hardened, PROXY_DISABLED_FEATURES);
+  if (!hardened.includes(DISABLE_ASYNC_DNS)) hardened.push(DISABLE_ASYNC_DNS);
+
+  // With no explicit bypass, block every local hostname resolution except the
+  // proxy endpoint itself. HTTP(S) proxies receive destination hostnames directly;
+  // Chromium SOCKS5 always performs destination name resolution proxy-side.
+  const resolverRule = strictHostResolverRule(config.proxy);
+  if (resolverRule) {
+    hardened = hardened.filter(arg => !arg.startsWith(HOST_RESOLVER_RULES_PREFIX));
+    hardened.push(resolverRule);
+  }
+
   return hardened;
 }
 
@@ -90,7 +138,7 @@ export async function launchBrowserContext(config: BrowserContextConfig): Promis
 
     const page = await initialPage(context);
 
-    // 🚀 Hier wird der globale Watcher an die Page gehängt:
+    // Existing challenge watcher remains unchanged.
     attachLiveChallengePageWatcher(page);
 
     return {
