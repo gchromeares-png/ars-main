@@ -6,6 +6,13 @@ import {
   type FieldSemanticResolver
 } from "./field-semantic-resolver";
 import {
+  fallbackTraceResolution,
+  unknownTraceResolution,
+  type SemanticCheckoutTraceRecorder,
+  type SemanticCheckoutTraceResolution,
+  type SemanticCheckoutTraceSnapshot
+} from "./semantic-checkout-observability";
+import {
   targetKey,
   type FieldIntent,
   type SemanticTarget,
@@ -17,6 +24,16 @@ export interface SemanticAutofillResult {
   filled: SemanticTarget[];
   missing: SemanticTarget[];
   writeCounts: Record<string, number>;
+  trace?: SemanticCheckoutTraceSnapshot;
+}
+
+export interface SemanticAutofillWriteTraceOptions {
+  kind?: "semantic" | "fallback";
+  resolution?: SemanticCheckoutTraceResolution;
+}
+
+interface TracedSemanticFieldValueSource extends SemanticFieldValueSource {
+  semanticCheckoutTrace?: SemanticCheckoutTraceRecorder;
 }
 
 function normalizeValue(value: string): string {
@@ -28,94 +45,285 @@ function semanticAutofillEnabled(values: SemanticFieldValueSource): boolean {
   return policy.semanticAutofillEnabled !== false;
 }
 
+function semanticCheckoutTrace(values: SemanticFieldValueSource): SemanticCheckoutTraceRecorder | undefined {
+  return (values as TracedSemanticFieldValueSource).semanticCheckoutTrace;
+}
+
 export class SemanticFieldAutofill {
   private readonly completedTargets = new Map<SemanticTargetKey, Locator>();
   private readonly writeCounts = new Map<SemanticTargetKey, number>();
   private readonly seenTargets = new Map<SemanticTargetKey, SemanticTarget>();
+  private trace?: SemanticCheckoutTraceRecorder;
 
   constructor(
     private readonly page: Page,
     private readonly interactions: UiInteractionHelper,
-    private readonly resolver: FieldSemanticResolver
-  ) {}
+    private readonly resolver: FieldSemanticResolver,
+    trace?: SemanticCheckoutTraceRecorder
+  ) {
+    this.trace = trace;
+  }
 
   async fillSemantic(values: SemanticFieldValueSource): Promise<void> {
+    // Bind the checkout-run recorder before the feature gate so deterministic
+    // shop fallbacks remain observable even when KI AutoFill is disabled.
+    this.trace ??= semanticCheckoutTrace(values);
+
     // A disabled KI AutoFill policy intentionally skips semantic DOM resolution.
     // Shop compatibility fallbacks may still fill deterministic known selectors.
     if (!semanticAutofillEnabled(values)) return;
 
     const descriptors = await collectFieldDescriptors(this.page);
     const resolved = await this.resolver.resolve(descriptors);
-    const ranked = resolved
-      .filter(item => item.target.intent !== "unknown")
-      .sort((left, right) => right.confidence - left.confidence);
+    const ranked = [...resolved].sort((left, right) => right.confidence - left.confidence);
 
     for (const item of ranked) {
-      if (item.target.intent === "unknown") continue;
+      const resolution: SemanticCheckoutTraceResolution = {
+        resolverSource: {
+          intent: item.source.intent,
+          context: item.source.context
+        },
+        confidence: item.confidence
+      };
+
+      if (item.target.intent === "unknown") {
+        this.trace?.record({
+          target: item.target,
+          ...resolution,
+          valueAvailable: false,
+          action: "resolve",
+          result: "unresolved"
+        });
+        continue;
+      }
 
       const locator = fieldLocator(this.page, item.descriptor.index);
-      if (!await this.isInteractive(locator)) continue;
-
-      this.rememberTarget(item.target);
       const value = values.valueFor(item.target);
-      if (!value?.trim()) continue;
-      if (await this.isCompleted(item.target, value)) continue;
-
       if (item.descriptor.tagName === "select") {
-        await this.selectLocator(item.target, locator, value).catch(() => false);
+        await this.selectLocator(item.target, locator, value, { kind: "semantic", resolution }).catch(() => false);
       } else {
-        await this.fillLocator(item.target, locator, value).catch(() => false);
+        await this.fillLocator(item.target, locator, value, { kind: "semantic", resolution }).catch(() => false);
       }
     }
   }
 
-  async fillLocator(target: SemanticTarget, locator: Locator, value: string): Promise<boolean> {
-    const desired = normalizeValue(value);
-    if (!desired || target.intent === "unknown") return false;
-    if (!await this.isInteractive(locator)) return false;
+  async fillLocator(
+    target: SemanticTarget,
+    locator: Locator,
+    value: string | undefined,
+    traceOptions: SemanticAutofillWriteTraceOptions = {}
+  ): Promise<boolean> {
+    const kind = this.traceKind(traceOptions);
+    const resolution = this.traceResolution(traceOptions);
+    const valueAvailable = Boolean(value?.trim());
+    const action = kind === "fallback" ? "fallback-write" : "write";
+
+    if (target.intent === "unknown") {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable,
+        action: "resolve",
+        result: "unresolved"
+      });
+      return false;
+    }
+
+    if (!await this.isInteractive(locator)) {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable,
+        action: "interaction-check",
+        result: "non-interactive"
+      });
+      return false;
+    }
+
     const key = this.rememberTarget(target);
-    if (await this.isCompleted(target, desired)) return true;
+    const desired = normalizeValue(value ?? "");
+    if (!desired) {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable: false,
+        action: "value-check",
+        result: "missing-value"
+      });
+      return false;
+    }
+
+    if (await this.isCompleted(target, desired)) {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable: true,
+        action: "completion-check",
+        result: "already-complete"
+      });
+      return true;
+    }
 
     const current = await this.readValue(locator);
     if (normalizeValue(current) === desired) {
       this.completedTargets.set(key, locator);
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable: true,
+        action: "completion-check",
+        result: "already-complete"
+      });
       return true;
     }
 
-    await this.interactions.fill(locator, desired, {
-      attempts: 2,
-      seed: `semantic-fill:${key}`
-    });
+    try {
+      await this.interactions.fill(locator, desired, {
+        attempts: 2,
+        seed: `semantic-fill:${key}`
+      });
+    } catch (error) {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable: true,
+        action,
+        result: "write-failed"
+      });
+      throw error;
+    }
     this.bumpWriteCount(target);
 
     const after = await this.readValue(locator);
-    if (normalizeValue(after) !== desired) return false;
+    if (normalizeValue(after) !== desired) {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable: true,
+        action,
+        result: "write-failed"
+      });
+      return false;
+    }
+
     this.completedTargets.set(key, locator);
+    this.trace?.record({
+      target,
+      ...resolution,
+      valueAvailable: true,
+      action,
+      result: kind === "fallback" ? "fallback-filled" : "filled"
+    });
     return true;
   }
 
-  async selectLocator(target: SemanticTarget, locator: Locator, value: string): Promise<boolean> {
-    const desired = normalizeValue(value);
-    if (!desired || target.intent === "unknown") return false;
-    if (!await this.isInteractive(locator)) return false;
+  async selectLocator(
+    target: SemanticTarget,
+    locator: Locator,
+    value: string | undefined,
+    traceOptions: SemanticAutofillWriteTraceOptions = {}
+  ): Promise<boolean> {
+    const kind = this.traceKind(traceOptions);
+    const resolution = this.traceResolution(traceOptions);
+    const valueAvailable = Boolean(value?.trim());
+    const action = kind === "fallback" ? "fallback-select" : "select";
+
+    if (target.intent === "unknown") {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable,
+        action: "resolve",
+        result: "unresolved"
+      });
+      return false;
+    }
+
+    if (!await this.isInteractive(locator)) {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable,
+        action: "interaction-check",
+        result: "non-interactive"
+      });
+      return false;
+    }
+
     const key = this.rememberTarget(target);
-    if (await this.isCompleted(target, desired)) return true;
+    const desired = normalizeValue(value ?? "");
+    if (!desired) {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable: false,
+        action: "value-check",
+        result: "missing-value"
+      });
+      return false;
+    }
+
+    if (await this.isCompleted(target, desired)) {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable: true,
+        action: "completion-check",
+        result: "already-complete"
+      });
+      return true;
+    }
 
     const current = await this.readValue(locator);
     if (normalizeValue(current).toUpperCase() === desired.toUpperCase()) {
       this.completedTargets.set(key, locator);
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable: true,
+        action: "completion-check",
+        result: "already-complete"
+      });
       return true;
     }
 
-    await this.interactions.select(locator, desired, {
-      attempts: 2,
-      seed: `semantic-select:${key}`
-    });
+    try {
+      await this.interactions.select(locator, desired, {
+        attempts: 2,
+        seed: `semantic-select:${key}`
+      });
+    } catch (error) {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable: true,
+        action,
+        result: "write-failed"
+      });
+      throw error;
+    }
     this.bumpWriteCount(target);
 
     const after = await this.readValue(locator);
-    if (normalizeValue(after).toUpperCase() !== desired.toUpperCase()) return false;
+    if (normalizeValue(after).toUpperCase() !== desired.toUpperCase()) {
+      this.trace?.record({
+        target,
+        ...resolution,
+        valueAvailable: true,
+        action,
+        result: "write-failed"
+      });
+      return false;
+    }
+
     this.completedTargets.set(key, locator);
+    this.trace?.record({
+      target,
+      ...resolution,
+      valueAvailable: true,
+      action,
+      result: kind === "fallback" ? "fallback-filled" : "filled"
+    });
     return true;
   }
 
@@ -136,6 +344,8 @@ export class SemanticFieldAutofill {
     values: SemanticFieldValueSource,
     targets: SemanticTarget[] = [...this.seenTargets.values()]
   ): Promise<SemanticAutofillResult> {
+    this.trace ??= semanticCheckoutTrace(values);
+
     const filled: SemanticTarget[] = [];
     const missing: SemanticTarget[] = [];
     const uniqueTargets = new Map<SemanticTargetKey, SemanticTarget>();
@@ -154,7 +364,12 @@ export class SemanticFieldAutofill {
 
     const writeCounts: Record<string, number> = {};
     for (const [key, count] of this.writeCounts.entries()) writeCounts[key] = count;
-    return { filled, missing, writeCounts };
+    return {
+      filled,
+      missing,
+      writeCounts,
+      ...(this.trace ? { trace: this.trace.snapshot() } : {})
+    };
   }
 
   private async isCompleted(target: SemanticTarget, value: string): Promise<boolean> {
@@ -185,5 +400,15 @@ export class SemanticFieldAutofill {
   private bumpWriteCount(target: SemanticTarget): void {
     const key = targetKey(target);
     this.writeCounts.set(key, (this.writeCounts.get(key) ?? 0) + 1);
+  }
+
+  private traceKind(options: SemanticAutofillWriteTraceOptions): "semantic" | "fallback" {
+    if (options.kind) return options.kind;
+    return options.resolution ? "semantic" : "fallback";
+  }
+
+  private traceResolution(options: SemanticAutofillWriteTraceOptions): SemanticCheckoutTraceResolution {
+    if (options.resolution) return options.resolution;
+    return this.traceKind(options) === "fallback" ? fallbackTraceResolution() : unknownTraceResolution();
   }
 }
