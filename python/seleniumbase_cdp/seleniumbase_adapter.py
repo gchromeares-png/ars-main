@@ -57,21 +57,14 @@ class SeleniumBaseCdpAdapter:
 
     def goto(self, url: str) -> None:
         self._sb.goto(url)
+        self._sb.sleep(2)
+        self._sb.solve_captcha()
 
     def execute_script(self, script: str) -> Any:
         return self._sb.execute_script(script)
 
     def sleep(self, seconds: float) -> None:
         self._sb.sleep(seconds)
-
-    def get_cdp_endpoint(self) -> str:
-        endpoint = str(self._sb.get_endpoint_url() or "").strip()
-        if not endpoint:
-            raise RuntimeError("SeleniumBase lieferte keinen CDP-Endpunkt.")
-        return endpoint
-
-    def solve_captcha(self) -> None:
-        self._sb.solve_captcha()
 
     def set_snapshot_cookies(self, cookies: Iterable[Dict[str, Any]]) -> int:
         params = [self._cookie_param(dict(cookie)) for cookie in cookies]
@@ -95,7 +88,7 @@ class SeleniumBaseCdpAdapter:
 
         from playwright.sync_api import sync_playwright
 
-        endpoint_url = self.get_cdp_endpoint()
+        endpoint_url = self._sb.get_endpoint_url()
         playwright = sync_playwright().start()
         try:
             browser = playwright.chromium.connect_over_cdp(endpoint_url)
