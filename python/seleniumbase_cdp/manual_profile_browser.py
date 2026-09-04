@@ -4,12 +4,14 @@ import json
 import queue
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict
 
 from seleniumbase_adapter import SeleniumBaseCdpAdapter
 
 RESULT_PREFIX = "ARES_SB_MANUAL\t"
+LAST_URL_FILENAME = ".ares-last-url"
 
 
 def _emit(payload: Dict[str, Any]) -> None:
@@ -44,6 +46,45 @@ def _proxy_value(command: Dict[str, Any]) -> str | None:
     return value or None
 
 
+def _restorable_url(value: str) -> bool:
+    lowered = value.lower()
+    return lowered.startswith("http://") or lowered.startswith("https://")
+
+
+def _read_last_url(profile_dir: Path) -> str:
+    try:
+        value = (profile_dir / LAST_URL_FILENAME).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return value if _restorable_url(value) else ""
+
+
+def _remember_last_url(
+    profile_dir: Path,
+    adapter: SeleniumBaseCdpAdapter,
+    previous: str = "",
+) -> str:
+    try:
+        value = str(adapter.execute_script("return window.location.href;") or "").strip()
+    except Exception:
+        return previous
+    if not _restorable_url(value) or value == previous:
+        return previous
+
+    target = profile_dir / LAST_URL_FILENAME
+    temporary = profile_dir / f"{LAST_URL_FILENAME}.tmp"
+    try:
+        temporary.write_text(value, encoding="utf-8")
+        temporary.replace(target)
+    except OSError:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return previous
+    return value
+
+
 def _start(command: Dict[str, Any]) -> int:
     if str(command.get("type") or "") != "start":
         raise ValueError("First SeleniumBase command must be type='start'")
@@ -62,18 +103,19 @@ def _start(command: Dict[str, Any]) -> int:
         headless=False,
         proxy=_proxy_value(command),
         user_agent=user_agent,
-        restore_last_session=True,
     )
     closed = False
+    last_url = _read_last_url(profile_dir)
     try:
         initial_cookies = command.get("cookies")
         applied = 0
         if isinstance(initial_cookies, list) and initial_cookies:
             applied = adapter.set_snapshot_cookies(initial_cookies)
 
-        start_url = str(command.get("startUrl") or "").strip()
+        start_url = str(command.get("startUrl") or "").strip() or last_url
         if start_url:
             adapter.goto(start_url)
+            last_url = _remember_last_url(profile_dir, adapter, last_url)
 
         _emit(
             {
@@ -89,11 +131,18 @@ def _start(command: Dict[str, Any]) -> int:
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
         reader = threading.Thread(target=_command_reader, args=(commands,), daemon=True)
         reader.start()
+        next_url_capture = time.monotonic() + 2.0
 
         while True:
             if not adapter.is_running():
                 _emit({"type": "browser-closed", "profileId": profile_id})
                 break
+
+            now = time.monotonic()
+            if now >= next_url_capture:
+                last_url = _remember_last_url(profile_dir, adapter, last_url)
+                next_url_capture = now + 2.0
+
             try:
                 next_command = commands.get(timeout=0.4)
             except queue.Empty:
@@ -103,6 +152,7 @@ def _start(command: Dict[str, Any]) -> int:
             next_request_id = str(next_command.get("requestId") or "")
             try:
                 if command_type == "close":
+                    last_url = _remember_last_url(profile_dir, adapter, last_url)
                     adapter.quit()
                     closed = True
                     _emit({"type": "closed", "requestId": next_request_id, "profileId": profile_id})
@@ -136,6 +186,7 @@ def _start(command: Dict[str, Any]) -> int:
                     if not url:
                         raise ValueError("navigate requires a URL")
                     adapter.goto(url)
+                    last_url = _remember_last_url(profile_dir, adapter, last_url)
                     _emit({"type": "navigated", "requestId": next_request_id, "profileId": profile_id})
                     continue
                 if command_type == "attach-playwright":
@@ -185,6 +236,7 @@ def _start(command: Dict[str, Any]) -> int:
     finally:
         if not closed:
             try:
+                _remember_last_url(profile_dir, adapter, last_url)
                 adapter.quit()
             except Exception:
                 pass
