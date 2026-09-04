@@ -60,7 +60,7 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
 
   it("restores the previous manual SeleniumBase tab and waits for persistent-profile shutdown", () => {
     expect(adapter).toContain('kwargs["browser_args"] = ["--restore-last-session"]');
-    expect(adapter).toContain("psutil.Process(chrome_pid).wait(timeout=2.0)");
+    expect(adapter).toContain("psutil.Process(chrome_pid).wait(timeout=5.0)");
     expect(adapter).toContain('time.sleep(1.0 if sys.platform.startswith("win") else 0.2)');
     expect(manualWorker).toContain("restore_last_session=True");
     expect(reopenProbe).toContain('RESTORE_PATH = "/restore-target"');
