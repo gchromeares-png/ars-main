@@ -1,5 +1,6 @@
 import type { Locator, Page } from "patchright";
 import type { AresProfile } from "../profiles/models";
+import type { SemanticCheckoutBillingMode } from "./semantic-checkout-observability";
 import type { SemanticTarget } from "./semantic-target";
 import type { SemanticFieldValueSource } from "./semantic-target-values";
 import type { UiInteractionHelper } from "./ui-interaction-helper";
@@ -12,7 +13,7 @@ export interface PlannedSemanticProfileValues extends SemanticFieldValueSource {
 
 export interface SemanticCheckoutProfilePlan {
   values: PlannedSemanticProfileValues;
-  billingMode: "explicit-billing" | "same-as-shipping" | "separate-billing-fields";
+  billingMode: SemanticCheckoutBillingMode;
 }
 
 class PlannedProfileValues implements PlannedSemanticProfileValues {
