@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import os
 import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 import mycdp
+import psutil
 from seleniumbase import sb_cdp
 
 
@@ -169,13 +169,10 @@ class SeleniumBaseCdpAdapter:
         while preventing an immediate reopen from racing cookie/session persistence.
         """
         if chrome_pid:
-            deadline = time.monotonic() + 2.0
-            while time.monotonic() < deadline:
-                try:
-                    os.kill(chrome_pid, 0)
-                except OSError:
-                    break
-                time.sleep(0.05)
+            try:
+                psutil.Process(chrome_pid).wait(timeout=2.0)
+            except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                pass
         time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
 
     @staticmethod
