@@ -173,14 +173,15 @@ export class ElectronService {
     return Promise.resolve({ success: true });
   }
 
-  startTask(taskId: string): Promise<any> {
+  async startTask(taskId: string): Promise<any> {
+    await this.ensureProfilePaymentSession(taskId);
     if (this.api) return this.api.startTask(taskId);
     const task = this.previewTasks.find(item => item.id === taskId);
     if (task) {
       task.state = "RUNNING";
       this.recordPreviewLog(task, "taskStateChanged", "info", "QUEUED -> RUNNING");
     }
-    return Promise.resolve({ success: true, task });
+    return { success: true, task };
   }
 
   pauseTask(taskId: string): Promise<any> {
@@ -325,6 +326,33 @@ export class ElectronService {
       };
     }
     return () => undefined;
+  }
+
+  private async ensureProfilePaymentSession(taskId: string): Promise<void> {
+    const taskResult = await this.getTaskStatus(taskId);
+    const task = taskResult?.success ? taskResult.task : undefined;
+    const data = task?.config?.data as Record<string, unknown> | undefined;
+    if (!data) return;
+
+    const action = data["monitorAction"] as { mode?: string; profileId?: string } | undefined;
+    const profileId = String(action?.profileId ?? data["profileId"] ?? "").trim();
+    const usesCheckoutProfile = action?.mode === "auto-checkout" || Boolean(data["profileId"]);
+    if (!usesCheckoutProfile || !profileId) return;
+
+    const profilesResult = await this.getProfiles();
+    const profile = Array.isArray(profilesResult?.profiles)
+      ? profilesResult.profiles.find((item: any) => String(item?.id ?? "") === profileId)
+      : undefined;
+    const preference = profile?.paymentPreference;
+    const result = await this.setPaymentSession(taskId, {
+      method: preference?.method ?? "card",
+      label: typeof preference?.label === "string" && preference.label.trim()
+        ? preference.label.trim()
+        : undefined
+    });
+    if (!result?.success) {
+      throw new Error(result?.error || `Profil-Zahlung für Task ${taskId} konnte nicht vorbereitet werden.`);
+    }
   }
 
   private recordPreviewLog(task: BrowserPreviewTask, event: string, level: BrowserPreviewLog["level"], message: string): void {
