@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
-from seleniumbase import sb_cdp
+from seleniumbase_adapter import SeleniumBaseCdpAdapter
 
 RESULT_PREFIX = "ARES_SB_RESULT\t"
 COOKIE_NAME = "ares_sb_profile_probe"
@@ -38,30 +38,34 @@ def _run(command: Dict[str, Any]) -> Dict[str, Any]:
     headless = bool(command.get("headless", True))
     token = str(command.get("token", ""))
 
-    sb = sb_cdp.Chrome(
-        user_data_dir=str(profile_dir),
-        headless=headless,
-    )
+    adapter = SeleniumBaseCdpAdapter(profile_dir=profile_dir, headless=headless)
     try:
-        sb.goto(url)
+        adapter.goto(url)
 
         if action == "seed-persistence":
             if not token:
                 raise ValueError("seed-persistence requires a non-empty token")
-
-            cookie_value = f"{COOKIE_NAME}={token}; Max-Age=86400; Path=/; SameSite=Lax"
-            sb.execute_script(
-                f"document.cookie = {json.dumps(cookie_value)};"
-            )
-            sb.execute_script(
+            adapter.set_snapshot_cookies([
+                {
+                    "name": COOKIE_NAME,
+                    "value": token,
+                    "domain": "127.0.0.1",
+                    "path": "/",
+                    "expires": 4102444800,
+                    "httpOnly": False,
+                    "secure": False,
+                    "sameSite": "Lax",
+                }
+            ])
+            adapter.execute_script(
                 "localStorage.setItem("
                 f"{json.dumps(STORAGE_KEY)}, {json.dumps(token)}"
                 ");"
             )
-            sb.sleep(0.25)
+            adapter.sleep(0.25)
 
-        cookie_text = sb.execute_script("return document.cookie;") or ""
-        storage_value = sb.execute_script(
+        cookies = adapter.get_snapshot_cookies()
+        storage_value = adapter.execute_script(
             f"return localStorage.getItem({json.dumps(STORAGE_KEY)});"
         )
 
@@ -69,11 +73,11 @@ def _run(command: Dict[str, Any]) -> Dict[str, Any]:
             "ok": True,
             "action": action,
             "profile_dir": str(profile_dir),
-            "cookie_text": str(cookie_text),
+            "cookies": cookies,
             "storage_value": storage_value,
         }
     finally:
-        sb.quit()
+        adapter.quit()
 
 
 def main() -> int:
