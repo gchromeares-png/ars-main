@@ -74,7 +74,10 @@ async function start(request: ManualProfileBrowserStartRequest): Promise<void> {
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 rl.once("line", line => {
-  if (!line.trim()) return void closeAndExit(1);
+  if (!line.trim()) {
+    void closeAndExit(1);
+    return;
+  }
   try {
     const request = JSON.parse(line) as ManualProfileBrowserStartRequest;
     if (request.type !== "start") throw new Error("Unknown manual profile browser request.");
