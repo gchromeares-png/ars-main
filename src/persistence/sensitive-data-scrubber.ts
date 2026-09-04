@@ -1,8 +1,9 @@
 import type { Database } from "sql.js";
 
-const DROP_SENSITIVE_KEY = /^_*payment[-_]?session$|^(card[-_]?number|cvc|cvv|security[-_]?code)$/i;
+const DROP_SENSITIVE_KEY = /^_*payment[-_]?session$|^(card[-_]?number|pan|cvc|cvv|security[-_]?code)$/i;
 const SENSITIVE_KEY = /(api[-_]?key|authorization|cookie|password|secret|token)/i;
-const SENSITIVE_VALUE = /\b(api[-_]?key|authorization|cookie|password|secret|token|card[-_]?number|cvc|cvv|security[-_]?code)\s*[:=]\s*([^\s,;]+)/gi;
+const SENSITIVE_VALUE = /\b(api[-_]?key|authorization|cookie|password|secret|token|card[-_]?number|pan|cvc|cvv|security[-_]?code)\s*[:=]\s*([^\s,;]+)/gi;
+const PAN_LIKE_VALUE = /\b(?:\d[ -]?){12,19}\b/g;
 
 export function sanitizePersistedValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(item => sanitizePersistedValue(item));
@@ -17,7 +18,11 @@ export function sanitizePersistedValue(value: unknown): unknown {
 }
 
 export function sanitizePersistedMessage(message: string): string {
-  return message.replace(SENSITIVE_VALUE, (_match, label: string) => `${label}=[REDACTED]`);
+  const labeled = message.replace(SENSITIVE_VALUE, (_match, label: string) => `${label}=[REDACTED]`);
+  return labeled.replace(PAN_LIKE_VALUE, candidate => {
+    const digits = candidate.replace(/\D/g, "");
+    return digits.length >= 12 && digits.length <= 19 ? "[REDACTED_PAN]" : candidate;
+  });
 }
 
 function asString(value: unknown): string {
