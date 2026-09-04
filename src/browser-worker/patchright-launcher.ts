@@ -5,6 +5,7 @@ import type { BrowserContext, Page } from "patchright";
 import { BrowserLaunchError } from "./errors";
 import { collectBrowserEnvironment, failedBrowserEnvironmentAudit } from "./browser-environment-audit";
 import type { BrowserContextConfig, BrowserContextHandle, BrowserProxyConfig } from "./types";
+import { installWebRtcProxyPolicy } from "./webrtc/webrtc-proxy-policy";
 import { attachLiveChallengePageWatcher } from "../challenges/live-challenge-page-watcher";
 
 const WEBRTC_PROXY_POLICY = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp";
@@ -74,7 +75,7 @@ function buildChromiumArgs(config: BrowserContextConfig): string[] | undefined {
   const args = [...(config.args ?? [])];
   if (!config.proxy) return args.length ? args : undefined;
 
-  // A proxied browser must not open a parallel non-proxied WebRTC UDP route.
+  // Keep WebRTC enabled while forbidding a parallel direct UDP path outside the proxy.
   let hardened = args.filter(arg =>
     !arg.startsWith("--force-webrtc-ip-handling-policy=") && arg !== "--enable-async-dns"
   );
@@ -136,6 +137,11 @@ export async function launchBrowserContext(config: BrowserContextConfig): Promis
 
     context.setDefaultTimeout(config.actionTimeoutMs ?? 15_000);
     context.setDefaultNavigationTimeout(config.navigationTimeoutMs ?? 30_000);
+
+    // Proxy sessions keep RTCPeerConnection alive. Before any shop script runs,
+    // hide page-visible local/private ICE candidates; transport routing remains
+    // Chromium-owned and is separately constrained by disable_non_proxied_udp.
+    if (config.proxy) await installWebRtcProxyPolicy(context);
 
     const page = await initialPage(context);
     const environmentAudit = await collectBrowserEnvironment(page).catch(error => failedBrowserEnvironmentAudit(error));
