@@ -1,5 +1,6 @@
 import * as readline from "readline";
 import type { BrowserProxyConfig } from "./types";
+import type { ProfileCookieSnapshotCookie } from "../cookies/profile-cookie-snapshot-vault";
 import { PatchrightBrowserWorker } from "./patchright-browser-worker";
 
 interface ManualProfileBrowserStartRequest {
@@ -15,13 +16,23 @@ interface ManualProfileBrowserCloseRequest {
   type: "close";
 }
 
-type ManualProfileBrowserRequest = ManualProfileBrowserStartRequest | ManualProfileBrowserCloseRequest;
+interface ManualProfileBrowserExportCookiesRequest {
+  type: "export-cookies";
+  requestId: string;
+}
+
+type ManualProfileBrowserRequest =
+  | ManualProfileBrowserStartRequest
+  | ManualProfileBrowserCloseRequest
+  | ManualProfileBrowserExportCookiesRequest;
 
 interface ManualProfileBrowserMessage {
-  type: "ready" | "error";
+  type: "ready" | "cookies" | "error";
+  requestId?: string;
   profileId?: string;
   pid?: number;
   userDataDir?: string;
+  cookies?: ProfileCookieSnapshotCookie[];
   error?: string;
 }
 
@@ -40,6 +51,13 @@ async function closeAndExit(code = 0): Promise<void> {
   if (activeTaskId) await browser.closeContext(activeTaskId).catch(() => undefined);
   await browser.shutdown().catch(() => undefined);
   process.exit(code);
+}
+
+async function exportCookies(requestId: string): Promise<void> {
+  const handle = activeTaskId ? browser.getContext(activeTaskId) : undefined;
+  if (!handle) throw new Error("Profil-Browser ist nicht geöffnet.");
+  const cookies = await handle.context.cookies() as ProfileCookieSnapshotCookie[];
+  send({ type: "cookies", requestId, cookies });
 }
 
 async function start(request: ManualProfileBrowserStartRequest): Promise<void> {
@@ -87,6 +105,16 @@ rl.on("line", line => {
     const request = JSON.parse(line) as ManualProfileBrowserRequest;
     if (request.type === "close") {
       void closeAndExit(0);
+      return;
+    }
+    if (request.type === "export-cookies") {
+      void exportCookies(request.requestId).catch(error => {
+        send({
+          type: "error",
+          requestId: request.requestId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      });
       return;
     }
     if (request.type !== "start") throw new Error("Unknown manual profile browser request.");
