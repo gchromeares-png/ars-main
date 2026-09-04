@@ -7,7 +7,11 @@ import { collectBrowserEnvironment, failedBrowserEnvironmentAudit } from "./brow
 import type { BrowserContextConfig, BrowserContextHandle, BrowserProxyConfig } from "./types";
 import { attachLiveChallengePageWatcher } from "../challenges/live-challenge-page-watcher";
 
-const WEBRTC_PROXY_POLICY = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp";
+// Mullvad's Chromium guidance uses a forced WebRTC IP handling policy with
+// disable_non_proxied_udp so WebRTC cannot silently open a direct UDP path
+// alongside an explicit browser proxy.
+const FORCE_WEBRTC_IP_HANDLING_POLICY = "--force-webrtc-ip-handling-policy";
+const WEBRTC_IP_HANDLING_POLICY = "--webrtc-ip-handling-policy=disable_non_proxied_udp";
 const WEBRTC_PERMISSION_CHECK = "--enforce-webrtc-ip-permission-check";
 const DISABLE_ASYNC_DNS = "--disable-async-dns";
 const DISABLE_FEATURES_PREFIX = "--disable-features=";
@@ -74,12 +78,16 @@ function buildChromiumArgs(config: BrowserContextConfig): string[] | undefined {
   const args = [...(config.args ?? [])];
   if (!config.proxy) return args.length ? args : undefined;
 
-  // A proxied browser must not open a parallel non-proxied WebRTC UDP route.
+  // Fail closed for proxied WebRTC: normalize away caller-provided WebRTC policy
+  // variants and install one canonical non-proxied-UDP policy.
   let hardened = args.filter(arg =>
-    !arg.startsWith("--force-webrtc-ip-handling-policy=") && arg !== "--enable-async-dns"
+    arg !== FORCE_WEBRTC_IP_HANDLING_POLICY
+    && !arg.startsWith("--force-webrtc-ip-handling-policy=")
+    && !arg.startsWith("--webrtc-ip-handling-policy=")
+    && arg !== "--enable-async-dns"
   );
   if (!hardened.includes(WEBRTC_PERMISSION_CHECK)) hardened.push(WEBRTC_PERMISSION_CHECK);
-  hardened.push(WEBRTC_PROXY_POLICY);
+  hardened.push(FORCE_WEBRTC_IP_HANDLING_POLICY, WEBRTC_IP_HANDLING_POLICY);
 
   // Modern Chromium replaced the old dns-prefetch switch with NetworkPrediction.
   // Disable speculative network prediction, Secure DNS/DoH and the built-in async
