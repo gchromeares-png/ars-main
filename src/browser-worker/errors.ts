@@ -14,8 +14,9 @@ export class BrowserContextAlreadyExistsError extends BrowserWorkerError {
 }
 
 export class BrowserProfileInUseError extends BrowserWorkerError {
-  constructor(userDataDir: string) {
-    super(`Browser profile directory "${userDataDir}" is currently active and cannot be reused simultaneously.`, "PROFILE_IN_USE");
+  constructor(userDataDir: string, ownerId?: string) {
+    const owner = ownerId ? ` Owner: ${ownerId}.` : "";
+    super(`Browser profile directory "${userDataDir}" is currently active and cannot be reused simultaneously.${owner}`, "PROFILE_IN_USE");
     this.name = "BrowserProfileInUseError";
   }
 }

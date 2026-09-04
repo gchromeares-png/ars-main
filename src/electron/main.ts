@@ -5,6 +5,7 @@ import * as path from "path";
 import { TaskOrchestrator } from "../orchestrator";
 import { WorkerMock } from "../mocks";
 import { BrowserWorkerPoolClient } from "../browser-worker/client";
+import { removeProfileUserDataDir } from "../browser-worker/profile-session-manager";
 import { TaskConfig, TaskState } from "../models";
 import { ProfileRepository } from "../profiles/profile-repository";
 import { AresProfile } from "../profiles/models";
@@ -31,10 +32,13 @@ import {
   loadCapMonsterApiKeyFromEnvFiles,
   testCapMonsterApiKey
 } from "./capmonster-api-key-health";
+import { ProfileBrowserController } from "./profile-browser-controller";
 
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: TaskOrchestrator;
 let browserWorker: BrowserWorkerPoolClient;
+let profileBrowserController: ProfileBrowserController;
+let browserProfileRoot = "";
 let commerceExecutor: CommerceTaskExecutorRouter;
 let commerceMonitor: CommerceMonitorService;
 let autoCheckoutCoordinator: MonitorAutoCheckoutCoordinator;
@@ -183,13 +187,19 @@ async function createBackend(): Promise<void> {
   proxyRepository.setStoragePath(path.join(userData, "proxies.json"));
   loadShops();
 
+  browserProfileRoot = path.join(userData, "browser-profiles");
+  profileBrowserController = new ProfileBrowserController(
+    browserProfileRoot,
+    proxyId => proxyRepository.get(proxyId)
+  );
+
   // Hard runtime default: final purchase is never enabled by persisted/UI state.
   allowFinalPurchase = false;
   browserWorker = new BrowserWorkerPoolClient(
     shopId => shops.get(shopId),
     profileId => profileRepository.get(profileId),
     {
-      profileRoot: path.join(userData, "browser-profiles"),
+      profileRoot: browserProfileRoot,
       getProxy: proxyId => proxyRepository.get(proxyId)
     }
   );
@@ -311,6 +321,16 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
+function findActiveTaskForProfile(profileId: string) {
+  return orchestrator?.getAllTasks().find(task => {
+    if ([TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED].includes(task.state)) return false;
+    const data = task.config.data ?? {};
+    const action = data["monitorAction"] as { profileId?: string } | undefined;
+    const assigned = String(data["profileId"] ?? action?.profileId ?? "").trim();
+    return assigned === profileId;
+  });
+}
+
 ipcMain.handle("get-profiles", () => ({ success: true, profiles: profileRepository.getAll() }));
 
 ipcMain.handle("save-profile", (_event, profile: AresProfile) => {
@@ -324,9 +344,66 @@ ipcMain.handle("save-profile", (_event, profile: AresProfile) => {
   return { success: true, profile };
 });
 
-ipcMain.handle("delete-profile", (_event, profileId: string) => ({
-  success: profileRepository.delete(profileId)
-}));
+ipcMain.handle("get-profile-browser-status", (_event, profileId: string) => {
+  const id = String(profileId ?? "").trim();
+  if (!id || !profileRepository.get(id)) return { success: false, error: "Profil wurde nicht gefunden." };
+  return { success: true, status: profileBrowserController.status(id) };
+});
+
+ipcMain.handle("open-profile-browser", async (_event, profileId: string, startUrl?: string) => {
+  const id = String(profileId ?? "").trim();
+  const profile = profileRepository.get(id);
+  if (!profile) return { success: false, error: `Profil ${id || "(ohne ID)"} wurde nicht gefunden.` };
+
+  const activeTask = findActiveTaskForProfile(id);
+  if (activeTask) {
+    return { success: false, error: `Profil ist aktuell durch Task ${activeTask.config.name} belegt.` };
+  }
+
+  try {
+    const status = await profileBrowserController.open(profile, startUrl);
+    return { success: true, status };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle("close-profile-browser", async (_event, profileId: string) => {
+  const id = String(profileId ?? "").trim();
+  if (!id) return { success: false, error: "Profil-ID fehlt." };
+  try {
+    const status = await profileBrowserController.close(id);
+    return { success: true, status };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle("delete-profile", async (_event, profileId: string) => {
+  const id = String(profileId ?? "").trim();
+  const profile = profileRepository.get(id);
+  if (!profile) return { success: false, error: "Profil wurde nicht gefunden." };
+  if (profileBrowserController.isOpen(id)) {
+    return { success: false, error: "Profil-Browser ist noch geöffnet. Browser zuerst schließen." };
+  }
+
+  const activeTask = findActiveTaskForProfile(id);
+  if (activeTask) {
+    return { success: false, error: `Profil ist noch Task ${activeTask.config.name} zugeordnet.` };
+  }
+
+  if (!profileRepository.delete(id)) return { success: false, error: "Profil konnte nicht gelöscht werden." };
+  try {
+    removeProfileUserDataDir(id, browserProfileRoot);
+    return { success: true };
+  } catch (error) {
+    profileRepository.save(profile);
+    return {
+      success: false,
+      error: `Browserdaten konnten nicht sicher gelöscht werden: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+});
 
 ipcMain.handle("get-proxies", () => ({ success: true, proxies: proxyRepository.getAll() }));
 
@@ -659,6 +736,7 @@ app.on("before-quit", event => {
     allowFinalPurchase = false;
     await commerceExecutor?.setFinalPurchaseAllowed(false).catch(() => undefined);
     paymentSessions.clear();
+    await profileBrowserController?.closeAll().catch(() => undefined);
     await commerceExecutor?.close().catch(() => undefined);
     orchestrator?.cleanup();
     await persistenceCoordinator?.close().catch(() => undefined);
