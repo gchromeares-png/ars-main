@@ -35,6 +35,10 @@ export class PatchrightBrowserWorker implements BrowserWorker {
     this.taskProfileIds.set(normalizedTaskId, normalizedProfileId);
   }
 
+  unbindTaskProfile(taskId: string): void {
+    this.taskProfileIds.delete(taskId);
+  }
+
   getBoundProfileId(taskId: string): string | undefined {
     return this.taskProfileIds.get(taskId);
   }
@@ -89,7 +93,6 @@ export class PatchrightBrowserWorker implements BrowserWorker {
 
     this.contexts.delete(taskId);
     this.profileLeases.delete(taskId);
-    this.taskProfileIds.delete(taskId);
 
     if (!handle) {
       lease?.release();
