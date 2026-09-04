@@ -15,7 +15,7 @@ from typing import Any, Dict, Tuple
 RESULT_PREFIX = "ARES_SB_RESULT\t"
 WORKER_PATH = Path(__file__).with_name("worker.py")
 COOKIE_NAME = "ares_sb_profile_probe"
-WORKER_TIMEOUT_SECONDS = 45
+WORKER_TIMEOUT_SECONDS = 90
 KILL_TIMEOUT_SECONDS = 10
 
 
