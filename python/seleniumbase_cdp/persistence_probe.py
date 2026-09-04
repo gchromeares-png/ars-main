@@ -85,11 +85,13 @@ def _run_worker(
 
 
 def _assert_persisted(result: Dict[str, Any], token: str) -> None:
-    cookie_text = str(result.get("cookie_text", ""))
+    cookies = result.get("cookies")
+    if not isinstance(cookies, list):
+        raise AssertionError(f"Worker did not return a cookie list: {cookies!r}")
+    match = next((item for item in cookies if item.get("name") == COOKIE_NAME), None)
+    if not match or match.get("value") != token:
+        raise AssertionError(f"Persistent cookie missing after restart: {cookies!r}")
     storage_value = result.get("storage_value")
-    expected_cookie = f"{COOKIE_NAME}={token}"
-    if expected_cookie not in cookie_text:
-        raise AssertionError(f"Persistent cookie missing after restart: {cookie_text!r}")
     if storage_value != token:
         raise AssertionError(
             f"LocalStorage missing after restart: expected {token!r}, got {storage_value!r}"
