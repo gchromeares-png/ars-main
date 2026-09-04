@@ -35,14 +35,23 @@ describe("Smoke Tests for System Fixes", () => {
 
       const workerClient = (pool as any).leastLoadedClient();
       const readySpy = jest.spyOn(workerClient as any, "ensureReady").mockResolvedValue(undefined);
-      const requestSpy = jest.spyOn(workerClient as any, "request").mockResolvedValue({
-        type: "execute-result",
-        requestId: "req-1",
-        success: true,
-        taskPatch: {
-          config: {},
-          lastError: undefined
+      const requestSpy = jest.spyOn(workerClient as any, "request").mockImplementation(async (request: any) => {
+        if (request?.type === "set-final-purchase-permission") {
+          return {
+            type: "ack",
+            requestId: request.requestId
+          };
         }
+
+        return {
+          type: "execute-result",
+          requestId: request?.requestId ?? "req-1",
+          success: true,
+          taskPatch: {
+            config: {},
+            lastError: undefined
+          }
+        };
       });
 
       const task: any = {
@@ -176,6 +185,7 @@ describe("Smoke Tests for System Fixes", () => {
         path.resolve(__dirname, "../src/browser-worker/patchright-launcher.ts"),
         "utf8"
       );
+      expect(source).not.toContain('"User-Agent": "ARES/1.0"');
       expect(launcherSource).toContain('channel: "chrome"');
       expect(launcherSource).toContain("catch (channelError)");
       expect(launcherSource).toContain("chromium.launchPersistentContext(config.userDataDir, launchOptions)");
