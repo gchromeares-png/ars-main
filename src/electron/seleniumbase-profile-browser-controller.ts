@@ -110,7 +110,9 @@ export class SeleniumBaseProfileBrowserController {
     };
 
     try {
-      const message = await this.waitForMessage(child, requestId, "ready", 30_000, true);
+      const ready = this.waitForMessage(child, requestId, "ready", 30_000, true);
+      child.stdin.write(`${JSON.stringify(payload)}\n`);
+      const message = await ready;
       return {
         engine: "seleniumbase-cdp",
         profileId,
