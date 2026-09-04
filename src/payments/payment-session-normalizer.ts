@@ -14,19 +14,9 @@ function compactDigits(value: unknown, maxLength: number): string | undefined {
   return normalized || undefined;
 }
 
-function combinedExpiry(card: Record<string, unknown>): string | undefined {
-  const direct = text(card["expiry"], 12);
-  if (direct) return direct;
-
-  const month = text(card["expiryMonth"], 4)?.replace(/\D/g, "");
-  const year = text(card["expiryYear"], 6)?.replace(/\D/g, "");
-  if (!month || !year) return undefined;
-  return `${month.padStart(2, "0")}/${year.slice(-2)}`;
-}
-
 /**
  * Renderer/IPC input validation for the established checkout payment contract.
- * The same holderName/cardNumber/expiry/securityCode field names are used after this boundary.
+ * Runtime card fields stay holderName/cardNumber/expiry/securityCode end to end.
  */
 export function normalizePaymentSessionInput(input: unknown): CheckoutPaymentSession | undefined {
   if (!input || typeof input !== "object") return undefined;
@@ -48,7 +38,7 @@ export function normalizePaymentSessionInput(input: unknown): CheckoutPaymentSes
   session.card = {
     holderName: text(card["holderName"], 120),
     cardNumber: compactDigits(card["cardNumber"], 24),
-    expiry: combinedExpiry(card),
+    expiry: text(card["expiry"], 12),
     securityCode: text(card["securityCode"], 8)
   };
 
