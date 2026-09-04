@@ -1,5 +1,6 @@
 import * as path from "path";
 import type { BrowserWorker } from "./browser-worker";
+import type { ProfileCookieSnapshotCookie } from "../cookies/profile-cookie-snapshot-vault";
 import {
   BrowserContextAlreadyExistsError,
   BrowserProfileInUseError,
@@ -23,6 +24,7 @@ export class PatchrightBrowserWorker implements BrowserWorker {
   private readonly pendingCreations = new Set<string>();
   private readonly activeProfileDirs = new Set<string>();
   private readonly taskProfileIds = new Map<string, string>();
+  private readonly taskCookieSnapshots = new Map<string, ProfileCookieSnapshotCookie[]>();
   private readonly profileLeases = new Map<string, BrowserProfileLease>();
   private readonly startedAt = new Date();
   private state: BrowserWorkerState = "healthy";
@@ -35,8 +37,19 @@ export class PatchrightBrowserWorker implements BrowserWorker {
     this.taskProfileIds.set(normalizedTaskId, normalizedProfileId);
   }
 
+  setTaskCookieSnapshot(taskId: string, cookies: ProfileCookieSnapshotCookie[] | undefined): void {
+    const id = String(taskId ?? "").trim();
+    if (!id) throw new TypeError("taskId is required.");
+    if (!cookies?.length) {
+      this.taskCookieSnapshots.delete(id);
+      return;
+    }
+    this.taskCookieSnapshots.set(id, cookies.map(cookie => ({ ...cookie })));
+  }
+
   unbindTaskProfile(taskId: string): void {
     this.taskProfileIds.delete(taskId);
+    this.taskCookieSnapshots.delete(taskId);
   }
 
   getBoundProfileId(taskId: string): string | undefined {
@@ -73,6 +86,14 @@ export class PatchrightBrowserWorker implements BrowserWorker {
         ...config,
         userDataDir: normalizedDir
       });
+
+      const snapshot = this.taskCookieSnapshots.get(config.taskId);
+      if (snapshot?.length) {
+        // Explicit user-selected snapshot only. Cookie payload exists in RAM and
+        // is injected before the executor performs the first shop navigation.
+        await handle.context.addCookies(snapshot as any);
+      }
+
       this.contexts.set(config.taskId, handle);
       this.lastError = undefined;
       return handle;
@@ -103,8 +124,6 @@ export class PatchrightBrowserWorker implements BrowserWorker {
     this.activeProfileDirs.delete(normalizedDir);
 
     try {
-      // Let Chromium close the persistent profile directly so Cookies, History,
-      // Preferences and storage can be flushed coherently. Do not close pages first.
       await handle.context.close();
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
@@ -138,6 +157,7 @@ export class PatchrightBrowserWorker implements BrowserWorker {
     this.contexts.clear();
     this.activeProfileDirs.clear();
     this.taskProfileIds.clear();
+    this.taskCookieSnapshots.clear();
 
     const results = await Promise.allSettled(
       handles.map(async ([taskId, handle]) => {
