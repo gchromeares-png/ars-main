@@ -29,13 +29,8 @@ class Handler(BaseHTTPRequestHandler):
     recorder: RequestRecorder
 
     def do_GET(self) -> None:  # noqa: N802
-        self.recorder.requests.put(
-            {
-                "path": self.path,
-                "cookie": self.headers.get("Cookie", ""),
-            }
-        )
-        body = b"<!doctype html><html><body>ARES SeleniumBase manual probe</body></html>"
+        self.recorder.requests.put({"path": self.path, "cookie": self.headers.get("Cookie", "")})
+        body = b"<!doctype html><html><head><title>ARES SeleniumBase Manual Probe</title></head><body>probe</body></html>"
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -166,6 +161,14 @@ def _assert_cookie(header: str, name: str, value: str) -> None:
         raise AssertionError(f"Missing {expected!r} in request Cookie header: {header!r}")
 
 
+def _assert_playwright_cookie(cookies: List[Dict[str, Any]], name: str, value: str) -> None:
+    cookie = next((item for item in cookies if item.get("name") == name), None)
+    if not cookie or cookie.get("value") != value:
+        raise AssertionError(f"Stealthy Playwright did not see {name}: {cookies}")
+    if cookie.get("httpOnly") is not True:
+        raise AssertionError(f"Stealthy Playwright lost HttpOnly for {name}: {cookie}")
+
+
 def _run(profile_dir: Path) -> None:
     server, recorder, base_url = _start_server()
     token_a = secrets.token_hex(8)
@@ -200,6 +203,21 @@ def _run(profile_dir: Path) -> None:
         if cookie_a.get("httpOnly") is not True or cookie_b.get("httpOnly") is not True:
             raise AssertionError(f"HttpOnly attribute was not preserved: {cookies}")
 
+        first.send({"type": "attach-playwright", "requestId": "attach"})
+        attached = first.wait("playwright-attached", "attach", 25)
+        if attached.get("url") != f"{base_url}/same-session":
+            raise AssertionError(f"Playwright attached to wrong page: {attached}")
+        if attached.get("title") != "ARES SeleniumBase Manual Probe":
+            raise AssertionError(f"Playwright title mismatch: {attached}")
+        pw_cookies = attached.get("cookies") or []
+        _assert_playwright_cookie(pw_cookies, COOKIE_A, token_a)
+        _assert_playwright_cookie(pw_cookies, COOKIE_B, token_b)
+
+        first.send({"type": "inspect-playwright", "requestId": "inspect"})
+        inspected = first.wait("playwright-inspection", "inspect")
+        if inspected.get("url") != f"{base_url}/same-session":
+            raise AssertionError(f"Playwright session changed unexpectedly: {inspected}")
+
         first.close()
         first = None
 
@@ -229,7 +247,7 @@ def main() -> int:
     profile_dir = Path(temporary) / "profile" / ".ares-seleniumbase-cdp"
     try:
         _run(profile_dir)
-        print("SeleniumBase manual CDP process/session/cookie probe passed.")
+        print("SeleniumBase Pure CDP + Stealthy Playwright process/session/cookie probe passed.")
         return 0
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
