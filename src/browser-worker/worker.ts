@@ -39,14 +39,37 @@ const profiles = new Map<string, AresProfile>();
 const browserCore = new PatchrightBrowserWorker();
 const paymentPreparer = new ShopifyPaymentPreparer();
 const pokemonCenterJourney = new PokemonCenterReleaseJourney();
-const emitTaskUpdate = (task: any) => send({
-  type: "task-update",
-  taskId: task.id,
-  taskPatch: {
-    config: task.config,
-    lastError: task.lastError
-  }
-});
+
+function stampProfileOwnedBrowserSession(task: any): void {
+  const handle = browserCore.getContext(task.id);
+  const profileId = browserCore.getBoundProfileId(task.id);
+  if (!handle || !profileId) return;
+
+  const current = task.config?.data?.["browserSession"] as Record<string, unknown> | undefined;
+  task.config.data = {
+    ...(task.config.data ?? {}),
+    browserSession: {
+      ...(current ?? {}),
+      type: "patchright-chromium",
+      profileId,
+      isolatedPerTask: false,
+      isolatedPerProfile: true,
+      userDataDir: handle.userDataDir
+    }
+  };
+}
+
+const emitTaskUpdate = (task: any) => {
+  stampProfileOwnedBrowserSession(task);
+  send({
+    type: "task-update",
+    taskId: task.id,
+    taskPatch: {
+      config: task.config,
+      lastError: task.lastError
+    }
+  });
+};
 
 const shopifyExecutor = new PatchrightShopifyTaskExecutor(
   shopId => {
@@ -109,35 +132,49 @@ async function handle(request: BrowserWorkerRequest): Promise<void> {
       const paymentSession = takePaymentSession(request);
       shops.set(request.shop.id, request.shop);
       profiles.set(request.profile.id, request.profile);
+      browserCore.bindTaskProfile(request.task.id, request.profile.id);
 
-      const earlyGate = isEarlyGateChildTask(request.task);
-      if (!earlyGate && !isShopifyRuntimeShop(request.shop)) {
-        throw new Error(`Für ${request.shop.platform} ist kein regulärer Browser-Executor registriert.`);
+      try {
+        const earlyGate = isEarlyGateChildTask(request.task);
+        if (!earlyGate && !isShopifyRuntimeShop(request.shop)) {
+          throw new Error(`Für ${request.shop.platform} ist kein regulärer Browser-Executor registriert.`);
+        }
+
+        const success = earlyGate
+          ? await earlyGateExecutor.execute(request.task, paymentSession)
+          : await shopifyExecutor.execute(request.task);
+
+        if (success && !earlyGate) await preparePayment(request, paymentSession);
+        stampProfileOwnedBrowserSession(request.task);
+        request.task.config.data = {
+          ...(request.task.config.data ?? {}),
+          browserWorker: {
+            pid: process.pid,
+            nodeVersion: process.versions.node,
+            externalProcess: true
+          }
+        };
+
+        // Persisted browser data is flushed by closing the context. This also
+        // releases the profile-wide lease before another task can reuse it.
+        await browserCore.closeContext(request.task.id).catch(() => undefined);
+        browserCore.unbindTaskProfile(request.task.id);
+
+        send({
+          type: "execute-result",
+          requestId: request.requestId,
+          success,
+          taskPatch: {
+            config: request.task.config,
+            lastError: request.task.lastError
+          }
+        });
+        return;
+      } catch (error) {
+        await browserCore.closeContext(request.task.id).catch(() => undefined);
+        browserCore.unbindTaskProfile(request.task.id);
+        throw error;
       }
-
-      const success = earlyGate
-        ? await earlyGateExecutor.execute(request.task, paymentSession)
-        : await shopifyExecutor.execute(request.task);
-
-      if (success && !earlyGate) await preparePayment(request, paymentSession);
-      request.task.config.data = {
-        ...(request.task.config.data ?? {}),
-        browserWorker: {
-          pid: process.pid,
-          nodeVersion: process.versions.node,
-          externalProcess: true
-        }
-      };
-      send({
-        type: "execute-result",
-        requestId: request.requestId,
-        success,
-        taskPatch: {
-          config: request.task.config,
-          lastError: request.task.lastError
-        }
-      });
-      return;
     }
 
     if (request.type === "update-discovery-keywords") {
@@ -157,6 +194,7 @@ async function handle(request: BrowserWorkerRequest): Promise<void> {
         earlyGateExecutor.cancelTask(request.taskId),
         shopifyExecutor.closeTask(request.taskId)
       ]);
+      browserCore.unbindTaskProfile(request.taskId);
       send({ type: "ack", requestId: request.requestId });
       return;
     }
