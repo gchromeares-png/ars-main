@@ -12,4 +12,5 @@ export interface ReleaseJourney {
   discover(page: Page, shop: CommerceShop, input: ReleaseDiscoveryInput): Promise<ProductObservation | undefined>;
   addToCart(page: Page, shop: CommerceShop, product: ProductObservation): Promise<void>;
   openCheckout(page: Page, shop: CommerceShop): Promise<void>;
+  submitOrder(page: Page, shop: CommerceShop, allowFinalPurchase: () => boolean): Promise<boolean>;
 }
