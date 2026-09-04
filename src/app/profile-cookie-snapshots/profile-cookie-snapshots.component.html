@@ -1,0 +1,53 @@
+<section class="cookie-vault" [class.selector]="mode === 'select'">
+  <div class="cookie-head">
+    <div>
+      <div class="eyebrow">COOKIE SNAPSHOTS</div>
+      <strong>{{ mode === 'manage' ? 'Eigene Browser-Cookies speichern' : 'Cookie-Snapshot für diesen Run' }}</strong>
+      <small *ngIf="mode === 'manage'">Nur auf deine ausdrückliche Aktion. Cookies werden OS-verschlüsselt gespeichert.</small>
+      <small *ngIf="mode === 'select'">Optional. Ohne Auswahl nutzt ARES nur den normalen Browserprofil-State.</small>
+    </div>
+    <span class="vault-chip">ENCRYPTED</span>
+  </div>
+
+  <div *ngIf="!profileId" class="cookie-empty">Zuerst ein Profil auswählen.</div>
+
+  <ng-container *ngIf="profileId && mode === 'manage'">
+    <div class="browser-strip" [class.online]="browserOpen">
+      <div><span class="status-dot"></span><strong>{{ browserOpen ? 'Profil-Browser offen' : 'Profil-Browser geschlossen' }}</strong><small>Cookies werden aus genau diesem Profil gelesen.</small></div>
+      <div class="browser-actions">
+        <button class="btn btn-small btn-accent" type="button" *ngIf="!browserOpen" [disabled]="busy" (click)="openBrowser()">Browser öffnen</button>
+        <button class="btn btn-small btn-secondary" type="button" *ngIf="browserOpen" [disabled]="busy" (click)="closeBrowser()">Browser schließen</button>
+      </div>
+    </div>
+
+    <div class="snapshot-create">
+      <input [(ngModel)]="snapshotName" [disabled]="busy" placeholder="z. B. Pokémon Login · 04.09.">
+      <button class="btn btn-primary" type="button" [disabled]="busy || !browserOpen" (click)="saveSnapshot()">Aktuelle Cookies speichern</button>
+    </div>
+  </ng-container>
+
+  <div class="cookie-message error" *ngIf="error">{{ error }}</div>
+  <div class="cookie-message info" *ngIf="info && mode === 'manage'">{{ info }}</div>
+
+  <div class="snapshot-select" *ngIf="profileId && mode === 'select'">
+    <label>
+      <span>Cookie-Quelle</span>
+      <select [ngModel]="selectedId" (ngModelChange)="select($event)">
+        <option value="">Browserprofil normal verwenden</option>
+        <option *ngFor="let snapshot of snapshots" [value]="snapshot.id">{{ snapshot.name }} · {{ snapshot.cookieCount }} Cookies</option>
+      </select>
+    </label>
+    <button type="button" class="btn btn-small btn-secondary" (click)="refresh()">↻ Aktualisieren</button>
+  </div>
+
+  <div class="snapshot-list" *ngIf="profileId && mode === 'manage'">
+    <div class="cookie-empty" *ngIf="!snapshots.length">Noch kein Snapshot gespeichert.</div>
+    <article class="snapshot-card" *ngFor="let snapshot of snapshots" [class.selected]="snapshot.id === selectedId">
+      <button type="button" class="snapshot-main" (click)="select(snapshot.id)">
+        <span class="snapshot-orbit">◌</span>
+        <span><strong>{{ snapshot.name }}</strong><small>{{ snapshot.cookieCount }} Cookies · {{ formatDate(snapshot.updatedAt) }}</small></span>
+      </button>
+      <button type="button" class="delete-snapshot" [disabled]="busy" (click)="deleteSnapshot(snapshot)" aria-label="Snapshot löschen">×</button>
+    </article>
+  </div>
+</section>
