@@ -164,7 +164,7 @@ export async function collectBrowserEnvironment(page: Page): Promise<BrowserEnvi
       },
       webglVendor,
       webglRenderer
-    } satisfies BrowserEnvironmentSnapshot;
+    } as BrowserEnvironmentSnapshot;
   });
 
   return classifyBrowserEnvironment(snapshot);
