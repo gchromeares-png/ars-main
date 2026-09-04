@@ -399,7 +399,7 @@ export class BrowserWorkerProcessClient {
       pending.reject(error);
     }
     this.pending.clear();
-    if (shouldNotify) this.onExit(client, error);
+    if (shouldNotify) this.onExit(this, error);
     this.closing = false;
   }
 }
