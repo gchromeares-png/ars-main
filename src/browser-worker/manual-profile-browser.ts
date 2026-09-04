@@ -51,6 +51,7 @@ async function start(request: ManualProfileBrowserStartRequest): Promise<void> {
   if (!profileId || !userDataDir) throw new Error("profileId and userDataDir are required.");
 
   activeTaskId = `manual-profile:${profileId}`;
+  browser.bindTaskProfile(activeTaskId, profileId);
   const handle = await browser.createContext({
     taskId: activeTaskId,
     userDataDir,
@@ -58,6 +59,7 @@ async function start(request: ManualProfileBrowserStartRequest): Promise<void> {
     proxy: request.proxy,
     userAgent: request.userAgent || undefined,
     viewport: null,
+    args: ["--restore-last-session"],
     navigationTimeoutMs: 30_000,
     actionTimeoutMs: 15_000
   });
