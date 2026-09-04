@@ -14,7 +14,7 @@
   <div class="form-grid">
     <label class="wide">
       <span>Karteninhaber</span>
-      <input [(ngModel)]="cardholderName" autocomplete="cc-name" placeholder="Max Mustermann">
+      <input [(ngModel)]="holderName" autocomplete="cc-name" placeholder="Max Mustermann">
     </label>
     <label class="wide">
       <span>Kartennummer</span>
@@ -31,18 +31,16 @@
     </label>
     <label>
       <span>CVC / CVV</span>
-      <input [(ngModel)]="cvc" type="password" inputmode="numeric" autocomplete="cc-csc" placeholder="{{ configured ? 'gespeichert – leer lassen zum Beibehalten' : 'CVC' }}" maxlength="4">
+      <input [(ngModel)]="securityCode" type="password" inputmode="numeric" autocomplete="cc-csc" placeholder="{{ configured ? 'gespeichert – leer lassen zum Beibehalten' : 'CVC' }}" maxlength="4">
     </label>
   </div>
 
   <div class="payment-field-map">
-    <span>AutoFill:</span>
-    <code>cardholderName</code>
+    <span>Checkout:</span>
+    <code>holderName</code>
     <code>cardNumber</code>
-    <code>expiryMonth</code>
-    <code>expiryYear</code>
     <code>expiry</code>
-    <code>cvc</code>
+    <code>securityCode</code>
   </div>
 
   <div class="secure-payment-actions">
