@@ -1,6 +1,6 @@
 import type { Task } from "../models";
 import type { AresProfile } from "../profiles/models";
-import type { ShopifyRuntimeShop } from "./runtime-types";
+import type { RuntimeShop } from "./runtime-types";
 import type { BrowserWorkerHealth } from "./types";
 
 export type BrowserWorkerHealthWire = Omit<BrowserWorkerHealth, "startedAt"> & { startedAt: string };
@@ -9,7 +9,7 @@ export interface ExecuteTaskRequest {
   type: "execute";
   requestId: string;
   task: Task;
-  shop: ShopifyRuntimeShop;
+  shop: RuntimeShop;
   profile: AresProfile;
 }
 
@@ -17,6 +17,19 @@ export interface CancelTaskRequest {
   type: "cancel";
   requestId: string;
   taskId: string;
+}
+
+export interface UpdateDiscoveryKeywordsRequest {
+  type: "update-discovery-keywords";
+  requestId: string;
+  taskId: string;
+  keywords: string[];
+}
+
+export interface SetFinalPurchasePermissionRequest {
+  type: "set-final-purchase-permission";
+  requestId: string;
+  allowed: boolean;
 }
 
 export interface HealthRequest {
@@ -29,7 +42,13 @@ export interface ShutdownRequest {
   requestId: string;
 }
 
-export type BrowserWorkerRequest = ExecuteTaskRequest | CancelTaskRequest | HealthRequest | ShutdownRequest;
+export type BrowserWorkerRequest =
+  | ExecuteTaskRequest
+  | CancelTaskRequest
+  | UpdateDiscoveryKeywordsRequest
+  | SetFinalPurchasePermissionRequest
+  | HealthRequest
+  | ShutdownRequest;
 
 export interface ReadyMessage {
   type: "ready";
@@ -67,6 +86,8 @@ export interface HealthResponse {
 export interface AckResponse {
   type: "ack";
   requestId: string;
+  keywords?: string[];
+  allowFinalPurchase?: boolean;
 }
 
 export interface ErrorResponse {
