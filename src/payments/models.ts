@@ -6,13 +6,10 @@ export interface StoredPaymentPreference {
 }
 
 export interface CardPaymentSession {
-  /** Canonical AutoFill field names. Legacy aliases are normalized at the IPC boundary. */
-  cardholderName?: string;
+  holderName?: string;
   cardNumber?: string;
-  expiryMonth?: string;
-  expiryYear?: string;
   expiry?: string;
-  cvc?: string;
+  securityCode?: string;
 }
 
 /**
