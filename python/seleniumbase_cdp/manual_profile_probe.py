@@ -151,8 +151,19 @@ class WorkerClient:
         self.process.wait(timeout=10)
 
 
-def _next_request(recorder: RequestRecorder, timeout: float = 15) -> Dict[str, str]:
-    return recorder.requests.get(timeout=timeout)
+def _next_request(recorder: RequestRecorder, expected_path: str, timeout: float = 15) -> Dict[str, str]:
+    deadline = time.time() + timeout
+    seen: List[str] = []
+    while time.time() < deadline:
+        remaining = max(0.05, deadline - time.time())
+        try:
+            request = recorder.requests.get(timeout=min(0.5, remaining))
+        except queue.Empty:
+            continue
+        seen.append(request.get("path", ""))
+        if request.get("path") == expected_path:
+            return request
+    raise TimeoutError(f"Timed out waiting for request {expected_path!r}; saw {seen!r}")
 
 
 def _assert_cookie(header: str, name: str, value: str) -> None:
@@ -177,9 +188,7 @@ def _run(profile_dir: Path) -> None:
     second: WorkerClient | None = None
     try:
         first = WorkerClient(profile_dir, f"{base_url}/initial", [_cookie(COOKIE_A, token_a)])
-        first_request = _next_request(recorder)
-        if first_request["path"] != "/initial":
-            raise AssertionError(f"Unexpected first path: {first_request}")
+        first_request = _next_request(recorder, "/initial")
         _assert_cookie(first_request["cookie"], COOKIE_A, token_a)
 
         first.send({"type": "apply-cookies", "requestId": "apply", "cookies": [_cookie(COOKIE_B, token_b)]})
@@ -189,7 +198,7 @@ def _run(profile_dir: Path) -> None:
 
         first.send({"type": "navigate", "requestId": "navigate", "url": f"{base_url}/same-session"})
         first.wait("navigated", "navigate")
-        same_session_request = _next_request(recorder)
+        same_session_request = _next_request(recorder, "/same-session")
         _assert_cookie(same_session_request["cookie"], COOKIE_A, token_a)
         _assert_cookie(same_session_request["cookie"], COOKIE_B, token_b)
 
@@ -222,7 +231,7 @@ def _run(profile_dir: Path) -> None:
         first = None
 
         second = WorkerClient(profile_dir, f"{base_url}/restart")
-        restart_request = _next_request(recorder)
+        restart_request = _next_request(recorder, "/restart")
         _assert_cookie(restart_request["cookie"], COOKIE_A, token_a)
         _assert_cookie(restart_request["cookie"], COOKIE_B, token_b)
         second.close()
