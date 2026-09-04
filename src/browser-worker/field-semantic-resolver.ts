@@ -317,7 +317,7 @@ export class FieldSemanticResolver {
     // house-number semantics. A combined street + number field is address1 even
     // though the literal word "Hausnummer" is present.
     const combinedAddress = match(
-      /\b(?:stra(?:ß|ss)e|street)\s*(?:und|and|&|\/|\+)\s*(?:haus\s*(?:nummer|-?nr\.?|nr\.?)|hausnr\.?|(?:house\s*)?number|nr\.?)\b/i,
+      /\b(?:stra(?:ß|ss)e|street)\s*(?:und|and|&|\/|\+)\s*(?:haus(?:\s*nummer|\s*-\s*nr\.?|\s*nr\.?)|hausnr\.?|(?:house\s*)?number|nr\.?)/i,
       "address1",
       0.98
     );
@@ -327,8 +327,8 @@ export class FieldSemanticResolver {
       ?? match(/\b(vorname|rufname|given[ _-]?name|first[ _-]?name)\b/i, "firstName")
       ?? match(/\b(nachname|familienname|surname|family[ _-]?name|last[ _-]?name)\b/i, "lastName")
       ?? match(/\b(vollst[aä]ndiger? name|full[ _-]?name|recipient[ _-]?name|name des empf[aä]ngers|empf[aä]ngername)\b/i, "fullName", 0.94)
-      ?? match(/\b(street[ _-]?address|anschrift|address[ _-]?line[ _-]?1)\b/i, "address1", 0.95)
-      ?? match(/\b(haus\s*(?:nummer|-?nr\.?)|hausnr\.?|house[ _-]?number|street[ _-]?number)\b/i, "houseNumber")
+      ?? match(/\b(street(?:[ _-]+(?:delivery|shipping|billing))?[ _-]+address|delivery[ _-]+street[ _-]+address|street[ _-]?address|anschrift|address[ _-]?line[ _-]?1)\b/i, "address1", 0.95)
+      ?? match(/\b(haus(?:\s*nummer|\s*-\s*nr\.?|\s*nr\.?)|hausnr\.?|house[ _-]?number|street[ _-]?number)/i, "houseNumber")
       ?? (this.hasStrongBareNumberContext(field) && /\bnr\.?\b/i.test(text)
         ? { value: "houseNumber", confidence: 0.9, source: "lexical" as const }
         : undefined)
