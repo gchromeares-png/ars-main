@@ -6,7 +6,7 @@ import {
   type ProfilePaymentCardDraft
 } from "../payments/profile-payment-vault";
 
-let registered = false;
+let registeredVault: ProfilePaymentVault | undefined;
 
 function electronVaultCrypto(): PaymentVaultCrypto {
   return {
@@ -16,15 +16,15 @@ function electronVaultCrypto(): PaymentVaultCrypto {
   };
 }
 
-/** Register renderer-safe payment-vault IPC once for the running Electron app. */
-export function registerProfilePaymentIpc(userDataRoot: string): void {
-  if (registered) return;
-  registered = true;
+/** Register renderer-safe payment-vault IPC once and return the shared vault instance. */
+export function registerProfilePaymentIpc(userDataRoot: string): ProfilePaymentVault {
+  if (registeredVault) return registeredVault;
 
   const vault = new ProfilePaymentVault(
     path.join(userDataRoot, "payment-vault.json"),
     electronVaultCrypto()
   );
+  registeredVault = vault;
 
   ipcMain.handle("get-profile-payment", (_event, profileId: string) => {
     try {
@@ -68,4 +68,6 @@ export function registerProfilePaymentIpc(userDataRoot: string): void {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   });
+
+  return vault;
 }
