@@ -2,12 +2,34 @@
   <div class="runtime-header">
     <div>
       <div class="eyebrow">RUNTIME CONTROL</div>
-      <h3>Worker & Warteschlangen</h3>
-      <p>Live-Status für Browser-Worker, Watchdog-Recovery und aktive Queue-Sessions.</p>
+      <h3>Worker, Queue & Purchase Guard</h3>
+      <p>Live-Status für Browser-Worker, Queue-Telemetrie und die globale finale Kauf-Freigabe.</p>
     </div>
     <div class="runtime-summary" [class.ok]="healthyWorkerCount === workers.length && workers.length > 0">
       <strong>{{ healthyWorkerCount }}/{{ workers.length || 0 }}</strong>
       <span>Worker gesund</span>
+    </div>
+  </div>
+
+  <div class="purchase-guard" [class.armed]="finalPurchaseAllowed">
+    <div class="purchase-copy">
+      <div class="purchase-title-row">
+        <span class="purchase-orb"></span>
+        <div>
+          <small>GLOBAL PURCHASE GUARD</small>
+          <strong>{{ finalPurchaseAllowed ? 'FINALER KAUF FREIGEGEBEN' : 'FINALER KAUF GESPERRT' }}</strong>
+        </div>
+      </div>
+      <p *ngIf="!finalPurchaseAllowed">Backend-Default ist AUS. Alle geeigneten Checkout-Tasks stoppen unmittelbar vor dem finalen Submit.</p>
+      <p *ngIf="finalPurchaseAllowed">Freigabe gilt global für kaufbereite Early-Gate-Checkout-Tasks. Der Backend-Guard prüft direkt vor dem Submit erneut.</p>
+    </div>
+
+    <div class="purchase-actions">
+      <div class="purchase-metric"><span>KAUFBEREIT</span><strong>{{ checkoutReadyTasks.length }}</strong></div>
+      <button type="button" class="purchase-toggle" [class.armed]="finalPurchaseAllowed" [disabled]="purchaseChanging" (click)="setFinalPurchaseAllowed(!finalPurchaseAllowed)">
+        <span>{{ finalPurchaseAllowed ? 'AN' : 'AUS' }}</span>
+        <strong>{{ purchaseChanging ? 'SYNC…' : (finalPurchaseAllowed ? 'FÜR ALLE SPERREN' : 'FÜR ALLE FREIGEBEN') }}</strong>
+      </button>
     </div>
   </div>
 
@@ -65,19 +87,21 @@
           <div class="queue-topline">
             <div>
               <strong>{{ task.config?.name || task.id }}</strong>
-              <small>{{ task.config?.shopId || "Shop unbekannt" }} · {{ getQueue(task)?.source || "auto" }}</small>
+              <small>{{ task.config?.shopId || "Shop unbekannt" }} · Quelle {{ getQueue(task)?.source || "auto" }}</small>
             </div>
-            <span class="queue-state">WAITING QUEUE</span>
+            <span class="queue-state">WAITING_QUEUE</span>
           </div>
 
           <div class="queue-metrics">
             <div>
-              <span>Position</span>
+              <span>POS</span>
               <strong>{{ queuePosition(task) }}</strong>
+              <small>Queue-Position</small>
             </div>
             <div>
-              <span>Restzeit</span>
+              <span>TTW</span>
               <strong>{{ queueWait(task) }}</strong>
+              <small>Restzeit</small>
             </div>
             <div>
               <span>Gewartet</span>
