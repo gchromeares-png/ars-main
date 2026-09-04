@@ -28,8 +28,9 @@ describe("profile cookie snapshot architecture guard", () => {
 
   it("stores cookie payload only as OS-encrypted ciphertext", () => {
     expect(vault).toContain("encryptString(JSON.stringify(normalizedCookies))");
-    expect(vault).toContain('ciphertext: encrypted');
-    expect(vault).not.toContain('cookies: normalizedCookies');
+    expect(vault).toContain("const ciphertext = this.crypto.encryptString");
+    expect(vault).toContain("ciphertext\n    }");
+    expect(vault).not.toContain("cookies: normalizedCookies");
   });
 
   it("propagates only cookieSnapshotId to auto-checkout children", () => {
