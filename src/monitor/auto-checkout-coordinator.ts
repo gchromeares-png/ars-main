@@ -10,6 +10,7 @@ export interface AutoCheckoutActionConfig {
   profileId: string;
   proxySelection?: ProxySelection;
   headless?: boolean;
+  cookieSnapshotId?: string;
 }
 
 export interface MonitorOnlyActionConfig {
@@ -64,12 +65,14 @@ export function getMonitorAction(task: Task): MonitorActionConfig {
   if (raw?.["mode"] !== "auto-checkout") return { mode: "monitor-only" };
 
   const profileId = String(raw["profileId"] ?? "").trim();
+  const cookieSnapshotId = String(raw["cookieSnapshotId"] ?? "").trim();
   const proxySelection = asRecord(raw["proxySelection"]) as ProxySelection | undefined;
   return {
     mode: "auto-checkout",
     profileId,
     proxySelection,
-    headless: Boolean(raw["headless"])
+    headless: Boolean(raw["headless"]),
+    ...(cookieSnapshotId ? { cookieSnapshotId } : {})
   };
 }
 
@@ -116,6 +119,7 @@ export class MonitorAutoCheckoutCoordinator {
           browserConfig: { headless: action.headless ?? false },
           profileId: action.profileId,
           proxySelection: action.proxySelection ?? { mode: "profile-default" },
+          ...(action.cookieSnapshotId ? { cookieSnapshotId: action.cookieSnapshotId } : {}),
           triggerSource: {
             kind: "product",
             parentTaskId: parent.id,
@@ -184,6 +188,7 @@ export class MonitorAutoCheckoutCoordinator {
           },
           profileId: action.profileId,
           proxySelection: action.proxySelection ?? { mode: "profile-default" },
+          ...(action.cookieSnapshotId ? { cookieSnapshotId: action.cookieSnapshotId } : {}),
           triggerSource: {
             kind: "early-gate",
             parentTaskId: parent.id,

@@ -13,6 +13,9 @@ const api = {
   getProfileBrowserStatus: (profileId: string) => ipcRenderer.invoke("get-profile-browser-status", profileId),
   openProfileBrowser: (profileId: string, startUrl?: string) => ipcRenderer.invoke("open-profile-browser", profileId, startUrl),
   closeProfileBrowser: (profileId: string) => ipcRenderer.invoke("close-profile-browser", profileId),
+  listProfileCookieSnapshots: (profileId: string) => ipcRenderer.invoke("list-profile-cookie-snapshots", profileId),
+  saveProfileCookieSnapshot: (profileId: string, name: string, snapshotId?: string) => ipcRenderer.invoke("save-profile-cookie-snapshot", profileId, name, snapshotId),
+  deleteProfileCookieSnapshot: (profileId: string, snapshotId: string) => ipcRenderer.invoke("delete-profile-cookie-snapshot", profileId, snapshotId),
   getProxies: () => ipcRenderer.invoke("get-proxies"),
   saveProxy: (proxy: unknown) => ipcRenderer.invoke("save-proxy", proxy),
   testProxy: (proxyId: string) => ipcRenderer.invoke("test-proxy", proxyId),
@@ -77,5 +80,4 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld("ares", api);
-
 export type AresApi = typeof api;

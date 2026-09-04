@@ -1,5 +1,6 @@
 import type { Task } from "../models";
 import type { AresProfile } from "../profiles/models";
+import type { ProfileCookieSnapshotCookie } from "../cookies/profile-cookie-snapshot-vault";
 import type { RuntimeShop } from "./runtime-types";
 import type { BrowserWorkerHealth } from "./types";
 
@@ -11,6 +12,7 @@ export interface ExecuteTaskRequest {
   task: Task;
   shop: RuntimeShop;
   profile: AresProfile;
+  cookieSnapshot?: ProfileCookieSnapshotCookie[];
 }
 
 export interface CancelTaskRequest {

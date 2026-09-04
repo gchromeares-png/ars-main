@@ -6,6 +6,8 @@ import type { ITaskExecutor } from "../interfaces";
 import type { Task } from "../models";
 import type { AresProfile } from "../profiles/models";
 import type { AresProxy, ProxySelection } from "../proxies/models";
+import type { ProfileCookieSnapshotCookie } from "../cookies/profile-cookie-snapshot-vault";
+import { readRegisteredProfileCookieSnapshot } from "../cookies/profile-cookie-snapshot-registry";
 import type { RuntimeShop } from "./runtime-types";
 import type { BrowserWorkerHealth } from "./types";
 import type { BrowserWorkerRequest, BrowserWorkerResponse } from "./protocol";
@@ -77,19 +79,16 @@ export class BrowserWorkerProcessClient {
     private readonly executeTimeoutMs = 65 * 60_000
   ) {}
 
-  get load(): number {
-    return this.taskIds.size;
-  }
+  get load(): number { return this.taskIds.size; }
+  owns(taskId: string): boolean { return this.taskIds.has(taskId); }
+  async start(): Promise<void> { await this.ensureReady(); }
 
-  owns(taskId: string): boolean {
-    return this.taskIds.has(taskId);
-  }
-
-  async start(): Promise<void> {
-    await this.ensureReady();
-  }
-
-  async execute(task: Task, shop: RuntimeShop, profile: AresProfile): Promise<boolean> {
+  async execute(
+    task: Task,
+    shop: RuntimeShop,
+    profile: AresProfile,
+    cookieSnapshot?: ProfileCookieSnapshotCookie[]
+  ): Promise<boolean> {
     this.taskIds.add(task.id);
     this.taskRefs.set(task.id, task);
     try {
@@ -100,12 +99,10 @@ export class BrowserWorkerProcessClient {
         requestId: randomUUID(),
         task,
         shop,
-        profile
+        profile,
+        cookieSnapshot
       }, this.executeTimeoutFor(task));
-      if (response.type !== "execute-result") {
-        throw new Error(`Unerwartete Browser-Worker-Antwort: ${response.type}`);
-      }
-
+      if (response.type !== "execute-result") throw new Error(`Unerwartete Browser-Worker-Antwort: ${response.type}`);
       task.config = response.taskPatch.config;
       task.lastError = response.taskPatch.lastError;
       return response.success;
@@ -118,12 +115,7 @@ export class BrowserWorkerProcessClient {
   async updateDiscoveryKeywords(taskId: string, keywords: string[]): Promise<string[]> {
     if (!this.owns(taskId)) throw new Error(`Browser Worker besitzt Task ${taskId} nicht.`);
     await this.ensureReady();
-    const response = await this.request({
-      type: "update-discovery-keywords",
-      requestId: randomUUID(),
-      taskId,
-      keywords
-    }, 10_000);
+    const response = await this.request({ type: "update-discovery-keywords", requestId: randomUUID(), taskId, keywords }, 10_000);
     if (response.type !== "ack") throw new Error(`Unerwartete Keyword-Antwort: ${response.type}`);
     return response.keywords ?? [];
   }
@@ -141,11 +133,9 @@ export class BrowserWorkerProcessClient {
       this.taskRefs.delete(taskId);
       return;
     }
-
     await this.ensureReady();
-    try {
-      await this.request({ type: "cancel", requestId: randomUUID(), taskId }, 10_000);
-    } finally {
+    try { await this.request({ type: "cancel", requestId: randomUUID(), taskId }, 10_000); }
+    finally {
       this.taskIds.delete(taskId);
       this.taskRefs.delete(taskId);
     }
@@ -170,15 +160,7 @@ export class BrowserWorkerProcessClient {
   }
 
   snapshot(running = Boolean(this.child && !this.child.killed)): BrowserWorkerProcessHealth {
-    return {
-      pid: this.pid,
-      nodeVersion: this.nodeVersion,
-      activeTasks: this.taskIds.size,
-      running,
-      lastHeartbeatAt: this.lastHeartbeatAt,
-      restartCount: this.restartCount,
-      lastFailure: this.lastFailure
-    };
+    return { pid: this.pid, nodeVersion: this.nodeVersion, activeTasks: this.taskIds.size, running, lastHeartbeatAt: this.lastHeartbeatAt, restartCount: this.restartCount, lastFailure: this.lastFailure };
   }
 
   async close(): Promise<void> {
@@ -186,31 +168,18 @@ export class BrowserWorkerProcessClient {
     if (!child || child.killed) return;
     this.closing = true;
     this.stopHeartbeat();
-    try {
-      await this.request({ type: "shutdown", requestId: randomUUID() }, 4_000);
-    } catch {
-      if (!child.killed) child.kill("SIGKILL");
-    }
+    try { await this.request({ type: "shutdown", requestId: randomUUID() }, 4_000); }
+    catch { if (!child.killed) child.kill("SIGKILL"); }
   }
 
   private executeTimeoutFor(task: Task): number {
     if (!isEarlyGateExecution(task)) return this.executeTimeoutMs;
-
     const data = task.config.data ?? {};
     const browserConfig = data["browserConfig"] as Record<string, unknown> | undefined;
-    const queueMs = boundedMs(
-      browserConfig?.["queueMaxWaitMs"] ?? data["queueMaxWaitMs"],
-      60 * 60_000,
-      1_000,
-      60 * 60_000
-    );
+    const queueMs = boundedMs(browserConfig?.["queueMaxWaitMs"] ?? data["queueMaxWaitMs"], 60 * 60_000, 1_000, 60 * 60_000);
     const discoveryMs = boundedMs(data["discoveryMaxMs"], 45 * 60_000, 60_000, 60 * 60_000);
     const checkoutPreparationMs = boundedMs(data["checkoutPreparationMaxMs"], 10 * 60_000, 30_000, 30 * 60_000);
-    const safetyMarginMs = 10 * 60_000;
-
-    // Early Gate legitimately spans queue + post-queue discovery + checkout preparation.
-    // A fixed 65-minute RPC timeout would otherwise recycle a healthy worker mid-release.
-    return Math.max(this.executeTimeoutMs, queueMs + discoveryMs + checkoutPreparationMs + safetyMarginMs);
+    return Math.max(this.executeTimeoutMs, queueMs + discoveryMs + checkoutPreparationMs + 10 * 60_000);
   }
 
   private async ensureReady(): Promise<void> {
@@ -220,11 +189,7 @@ export class BrowserWorkerProcessClient {
   }
 
   private async syncFinalPurchasePermission(): Promise<void> {
-    const response = await this.request({
-      type: "set-final-purchase-permission",
-      requestId: randomUUID(),
-      allowed: this.desiredFinalPurchaseAllowed
-    }, 10_000);
+    const response = await this.request({ type: "set-final-purchase-permission", requestId: randomUUID(), allowed: this.desiredFinalPurchaseAllowed }, 10_000);
     if (response.type !== "ack") throw new Error(`Unerwartete Purchase-Permission-Antwort: ${response.type}`);
   }
 
@@ -233,38 +198,22 @@ export class BrowserWorkerProcessClient {
     const nodeExecutable = process.env.ARES_NODE_EXECUTABLE?.trim() || "node";
     const workerScript = path.join(__dirname, "worker.js");
     const child = spawn(nodeExecutable, [workerScript], {
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      env: {
-        ...process.env,
-        ARES_BROWSER_WORKER: "1",
-        ...(this.profileRoot ? { ARES_BROWSER_PROFILE_ROOT: this.profileRoot } : {})
-      }
+      stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+      env: { ...process.env, ARES_BROWSER_WORKER: "1", ...(this.profileRoot ? { ARES_BROWSER_PROFILE_ROOT: this.profileRoot } : {}) }
     });
-
     this.child = child;
     this.stdoutBuffer = "";
     this.stderrBuffer = "";
     this.lastHeartbeatAt = undefined;
-    this.ready = new Promise<void>((resolve, reject) => {
-      this.readyResolve = resolve;
-      this.readyReject = reject;
-    });
-
+    this.ready = new Promise<void>((resolve, reject) => { this.readyResolve = resolve; this.readyReject = reject; });
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", chunk => this.handleStdout(String(chunk)));
     child.stderr.setEncoding("utf8");
-    child.stderr.on("data", chunk => {
-      this.stderrBuffer = `${this.stderrBuffer}${String(chunk)}`.slice(-8_000);
-    });
-    child.on("error", error => this.handleWorkerExit(new Error(
-      `Browser Worker konnte nicht mit Node-Executable "${nodeExecutable}" gestartet werden: ${error.message}`
-    ), child));
+    child.stderr.on("data", chunk => { this.stderrBuffer = `${this.stderrBuffer}${String(chunk)}`.slice(-8_000); });
+    child.on("error", error => this.handleWorkerExit(new Error(`Browser Worker konnte nicht mit Node-Executable "${nodeExecutable}" gestartet werden: ${error.message}`), child));
     child.on("exit", (code, signal) => {
       const details = this.stderrBuffer.trim();
-      this.handleWorkerExit(new Error(
-        `Browser Worker beendet (code=${String(code)}, signal=${String(signal)}).${details ? ` ${details}` : ""}`
-      ), child);
+      this.handleWorkerExit(new Error(`Browser Worker beendet (code=${String(code)}, signal=${String(signal)}).${details ? ` ${details}` : ""}`), child);
     });
   }
 
@@ -272,13 +221,10 @@ export class BrowserWorkerProcessClient {
     this.stdoutBuffer += chunk;
     const lines = this.stdoutBuffer.split(/\r?\n/);
     this.stdoutBuffer = lines.pop() ?? "";
-
     for (const line of lines) {
       if (!line.trim()) continue;
       let message: BrowserWorkerResponse;
-      try { message = JSON.parse(line) as BrowserWorkerResponse; }
-      catch { continue; }
-
+      try { message = JSON.parse(line) as BrowserWorkerResponse; } catch { continue; }
       if (message.type === "ready") {
         this.pid = message.pid;
         this.nodeVersion = message.nodeVersion;
@@ -289,7 +235,6 @@ export class BrowserWorkerProcessClient {
         this.startHeartbeat();
         continue;
       }
-
       if (message.type === "task-update") {
         const task = this.taskRefs.get(message.taskId);
         if (task) {
@@ -299,7 +244,6 @@ export class BrowserWorkerProcessClient {
         }
         continue;
       }
-
       const requestId = "requestId" in message ? message.requestId : undefined;
       if (!requestId) continue;
       const pending = this.pending.get(requestId);
@@ -314,7 +258,6 @@ export class BrowserWorkerProcessClient {
   private request(request: BrowserWorkerRequest, timeoutMs = this.requestTimeoutMs): Promise<BrowserWorkerResponse> {
     const child = this.child;
     if (!child || child.killed) return Promise.reject(new Error("Browser Worker ist nicht aktiv."));
-
     return new Promise<BrowserWorkerResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
         const error = new Error(`Browser Worker Timeout für ${request.type}.`);
@@ -323,7 +266,6 @@ export class BrowserWorkerProcessClient {
         this.recycleWorker(error, child);
       }, timeoutMs);
       timeout.unref();
-
       this.pending.set(request.requestId, { resolve, reject, timeout });
       child.stdin.write(`${JSON.stringify(request)}\n`, error => {
         if (!error) return;
@@ -341,13 +283,11 @@ export class BrowserWorkerProcessClient {
     this.heartbeatTimer = setInterval(() => void this.runHeartbeat(), this.heartbeatIntervalMs);
     this.heartbeatTimer.unref();
   }
-
   private stopHeartbeat(): void {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = undefined;
     this.heartbeatInFlight = false;
   }
-
   private async runHeartbeat(): Promise<void> {
     if (this.closing || this.heartbeatInFlight || !this.child || this.child.killed) return;
     const child = this.child;
@@ -364,11 +304,8 @@ export class BrowserWorkerProcessClient {
         const reason = error instanceof Error ? error : new Error(String(error));
         this.recycleWorker(new Error(`Browser Worker Heartbeat fehlgeschlagen: ${reason.message}`), child);
       }
-    } finally {
-      this.heartbeatInFlight = false;
-    }
+    } finally { this.heartbeatInFlight = false; }
   }
-
   private recycleWorker(error: Error, child = this.child): void {
     if (!child || this.child !== child) return;
     const shouldReplace = !this.closing;
@@ -378,7 +315,6 @@ export class BrowserWorkerProcessClient {
     this.handleWorkerExit(error, child);
     if (shouldReplace && !this.child) this.spawnWorker();
   }
-
   private handleWorkerExit(error: Error, child = this.child): void {
     if (!child || this.child !== child) return;
     const shouldNotify = !this.closing;
@@ -393,11 +329,7 @@ export class BrowserWorkerProcessClient {
     this.nodeVersion = undefined;
     this.taskIds.clear();
     this.taskRefs.clear();
-
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timeout);
-      pending.reject(error);
-    }
+    for (const pending of this.pending.values()) { clearTimeout(pending.timeout); pending.reject(error); }
     this.pending.clear();
     if (shouldNotify) this.onExit(this, error);
     this.closing = false;
@@ -413,6 +345,7 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
   private readonly heartbeatTimeoutMs: number;
   private readonly executeTimeoutMs: number;
   private readonly getProxy: (proxyId: string) => AresProxy | undefined;
+  private readonly getCookieSnapshot: (profileId: string, snapshotId: string) => ProfileCookieSnapshotCookie[] | undefined;
   private allowFinalPurchase = false;
 
   constructor(
@@ -427,9 +360,11 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
       profileRoot?: string;
       onTaskUpdate?: (task: Task) => void;
       getProxy?: (proxyId: string) => AresProxy | undefined;
+      getCookieSnapshot?: (profileId: string, snapshotId: string) => ProfileCookieSnapshotCookie[] | undefined;
     } = {}
   ) {
     this.getProxy = options.getProxy ?? (() => undefined);
+    this.getCookieSnapshot = options.getCookieSnapshot ?? readRegisteredProfileCookieSnapshot;
     // @ts-ignore
     const requestedCount = options.processCount ?? Number(process.env.ARES_BROWSER_WORKER_PROCESSES ?? "1");
     const processCount = Number.isFinite(requestedCount) ? Math.min(4, Math.max(1, Math.floor(requestedCount))) : 1;
@@ -437,20 +372,13 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     this.executeTimeoutMs = options.executeTimeoutMs ?? 65 * 60_000;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 10_000;
-
     const emitTaskUpdate = (task: Task) => {
       options.onTaskUpdate?.(task);
       for (const listener of this.runtimeListeners) listener(task);
     };
-
     this.clients = Array.from({ length: processCount }, () => new BrowserWorkerProcessClient(
-      requestTimeoutMs,
-      options.profileRoot,
-      (client, error) => this.handleClientExit(client, error),
-      emitTaskUpdate,
-      this.heartbeatIntervalMs,
-      this.heartbeatTimeoutMs,
-      this.executeTimeoutMs
+      requestTimeoutMs, options.profileRoot, (client, error) => this.handleClientExit(client, error), emitTaskUpdate,
+      this.heartbeatIntervalMs, this.heartbeatTimeoutMs, this.executeTimeoutMs
     ));
   }
 
@@ -461,47 +389,36 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
 
   async execute(task: Task): Promise<boolean> {
     const shopId = task.config.shopId;
-    if (!shopId) {
-      task.lastError = "Task hat keine shopId.";
-      return false;
-    }
-
+    if (!shopId) { task.lastError = "Task hat keine shopId."; return false; }
     const profileId = String((task.config.data ?? {})["profileId"] ?? "");
-    if (!profileId) {
-      task.lastError = "Kein Profil für den Task ausgewählt.";
-      return false;
-    }
-
+    if (!profileId) { task.lastError = "Kein Profil für den Task ausgewählt."; return false; }
     const shop = this.getShop(shopId);
-    if (!shop) {
-      task.lastError = `Shop ${shopId} ist nicht registriert.`;
-      return false;
-    }
-
+    if (!shop) { task.lastError = `Shop ${shopId} ist nicht registriert.`; return false; }
     const profile = this.getProfile(profileId);
-    if (!profile) {
-      task.lastError = `Profil ${profileId} ist nicht registriert.`;
-      return false;
-    }
+    if (!profile) { task.lastError = `Profil ${profileId} ist nicht registriert.`; return false; }
 
     let effectiveProfile: AresProfile;
     try { effectiveProfile = this.resolveEffectiveProfile(task, profile); }
-    catch (error) {
-      task.lastError = error instanceof Error ? error.message : String(error);
-      return false;
+    catch (error) { task.lastError = error instanceof Error ? error.message : String(error); return false; }
+
+    let cookieSnapshot: ProfileCookieSnapshotCookie[] | undefined;
+    const snapshotId = String(task.config.data?.["cookieSnapshotId"] ?? "").trim();
+    if (snapshotId) {
+      try {
+        cookieSnapshot = this.getCookieSnapshot(profileId, snapshotId);
+        if (!cookieSnapshot?.length) throw new Error("Snapshot ist leer oder nicht vorhanden.");
+      } catch (error) {
+        task.lastError = `Cookie-Snapshot konnte nicht geladen werden: ${error instanceof Error ? error.message : String(error)}`;
+        return false;
+      }
     }
 
     const client = this.taskOwners.get(task.id) ?? this.leastLoadedClient();
     this.taskOwners.set(task.id, client);
     await client.setFinalPurchaseAllowed(this.allowFinalPurchase);
-    try {
-      return await client.execute(task, shop, effectiveProfile);
-    } catch (error) {
-      task.lastError = error instanceof Error ? error.message : String(error);
-      return false;
-    } finally {
-      this.taskOwners.delete(task.id);
-    }
+    try { return await client.execute(task, shop, effectiveProfile, cookieSnapshot); }
+    catch (error) { task.lastError = error instanceof Error ? error.message : String(error); return false; }
+    finally { this.taskOwners.delete(task.id); }
   }
 
   async updateDiscoveryKeywords(taskId: string, keywords: string[]): Promise<string[]> {
@@ -509,32 +426,19 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     if (!owner) throw new Error(`Laufender Browser-Child ${taskId} wurde nicht gefunden.`);
     return owner.updateDiscoveryKeywords(taskId, keywords);
   }
-
   async setFinalPurchaseAllowed(allowed: boolean): Promise<void> {
     this.allowFinalPurchase = allowed === true;
     await Promise.all(this.clients.map(client => client.setFinalPurchaseAllowed(this.allowFinalPurchase)));
   }
-
   async cancelTask(taskId: string): Promise<void> {
     const owner = this.taskOwners.get(taskId);
     if (!owner) return;
-    try { await owner.cancelTask(taskId); }
-    finally { this.taskOwners.delete(taskId); }
+    try { await owner.cancelTask(taskId); } finally { this.taskOwners.delete(taskId); }
   }
-
   async health(): Promise<BrowserWorkerPoolHealth> {
     const workers = await Promise.all(this.clients.map(client => client.health().catch(() => client.snapshot(false))));
-    return {
-      workers,
-      lastError: this.lastWorkerError,
-      watchdog: {
-        heartbeatIntervalMs: this.heartbeatIntervalMs,
-        heartbeatTimeoutMs: this.heartbeatTimeoutMs,
-        executeTimeoutMs: this.executeTimeoutMs
-      }
-    };
+    return { workers, lastError: this.lastWorkerError, watchdog: { heartbeatIntervalMs: this.heartbeatIntervalMs, heartbeatTimeoutMs: this.heartbeatTimeoutMs, executeTimeoutMs: this.executeTimeoutMs } };
   }
-
   async close(): Promise<void> {
     this.allowFinalPurchase = false;
     this.taskOwners.clear();
@@ -546,47 +450,30 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     const data = task.config.data ?? {};
     const selection = data["proxySelection"] as ProxySelection | undefined;
     const mode = selection?.mode ?? "profile-default";
-
     if (mode === "direct") {
       data["proxyRuntime"] = { mode: "direct" };
       task.config.data = data;
       return { ...profile, proxy: undefined };
     }
-
     const proxyId = mode === "proxy" ? selection?.proxyId : profile.preferredProxyId;
     if (mode === "proxy" && !proxyId) throw new Error("Proxy-Modus gewählt, aber keine Proxy-ID zugeordnet.");
-
     if (proxyId) {
       const proxy = this.getProxy(proxyId);
       if (!proxy) throw new Error(`Zugeordneter Proxy ${proxyId} ist nicht mehr vorhanden.`);
       data["proxyRuntime"] = { mode, proxyId: proxy.id, proxyName: proxy.name };
       task.config.data = data;
-      return {
-        ...profile,
-        proxy: {
-          protocol: proxy.protocol,
-          host: proxy.host,
-          port: proxy.port,
-          username: proxy.username,
-          password: proxy.password
-        }
-      };
+      return { ...profile, proxy: { protocol: proxy.protocol, host: proxy.host, port: proxy.port, username: proxy.username, password: proxy.password } };
     }
-
     data["proxyRuntime"] = profile.proxy?.host ? { mode: "legacy-profile" } : { mode: "direct" };
     task.config.data = data;
     return profile;
   }
-
   private leastLoadedClient(): BrowserWorkerProcessClient {
     return this.clients.reduce((best, current) => current.load < best.load ? current : best);
   }
-
   private handleClientExit(client: BrowserWorkerProcessClient, error: Error): void {
     this.lastWorkerError = error.message;
-    for (const [taskId, owner] of this.taskOwners) {
-      if (owner === client) this.taskOwners.delete(taskId);
-    }
+    for (const [taskId, owner] of this.taskOwners) if (owner === client) this.taskOwners.delete(taskId);
   }
 }
 
