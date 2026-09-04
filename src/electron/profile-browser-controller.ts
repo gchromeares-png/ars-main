@@ -5,6 +5,7 @@ import type { AresProfile } from "../profiles/models";
 import type { AresProxy } from "../proxies/models";
 import type { BrowserProxyConfig } from "../browser-worker/types";
 import { resolveProfileUserDataDir } from "../browser-worker/profile-session-manager";
+import { registerProfilePaymentIpc } from "./profile-payment-controller";
 
 interface ManualBrowserSession {
   profileId: string;
@@ -35,7 +36,9 @@ export class ProfileBrowserController {
   constructor(
     private readonly profileRoot: string,
     private readonly getProxy: (proxyId: string) => AresProxy | undefined
-  ) {}
+  ) {
+    registerProfilePaymentIpc(path.dirname(profileRoot));
+  }
 
   async open(profile: AresProfile, startUrl?: string): Promise<ProfileBrowserStatus> {
     const profileId = String(profile.id ?? "").trim();
