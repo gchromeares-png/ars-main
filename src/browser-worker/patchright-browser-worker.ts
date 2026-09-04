@@ -18,8 +18,6 @@ import type {
   BrowserWorkerState
 } from "./types";
 
-const RESTORE_LAST_SESSION_ARG = "--restore-last-session";
-
 export class PatchrightBrowserWorker implements BrowserWorker {
   private readonly contexts = new Map<string, BrowserContextHandle>();
   private readonly pendingCreations = new Set<string>();
@@ -71,12 +69,8 @@ export class PatchrightBrowserWorker implements BrowserWorker {
       lease = acquireBrowserProfileLease(normalizedDir, `worker:${process.pid}:${config.taskId}`);
       this.profileLeases.set(config.taskId, lease);
 
-      const args = [...(config.args ?? [])];
-      if (profileId && !args.includes(RESTORE_LAST_SESSION_ARG)) args.push(RESTORE_LAST_SESSION_ARG);
-
       const handle = await launchBrowserContext({
         ...config,
-        args,
         userDataDir: normalizedDir
       });
       this.contexts.set(config.taskId, handle);
@@ -109,10 +103,8 @@ export class PatchrightBrowserWorker implements BrowserWorker {
     this.activeProfileDirs.delete(normalizedDir);
 
     try {
-      // Persistent Chromium owns Cookies, History, Preferences and the last-session
-      // files. Close the context directly so Chromium can flush that profile as one
-      // coherent browser session. Closing every page first would intentionally save
-      // an empty tab/session set and causes the next profile start to land on blank.
+      // Let Chromium close the persistent profile directly so Cookies, History,
+      // Preferences and storage can be flushed coherently. Do not close pages first.
       await handle.context.close();
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
@@ -150,8 +142,6 @@ export class PatchrightBrowserWorker implements BrowserWorker {
     const results = await Promise.allSettled(
       handles.map(async ([taskId, handle]) => {
         try {
-          // Same persistence rule as closeContext(): let Chromium close the
-          // persistent profile directly and flush its complete browser state.
           await handle.context.close();
         } finally {
           this.profileLeases.get(taskId)?.release();
