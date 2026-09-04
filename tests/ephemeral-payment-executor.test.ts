@@ -1,6 +1,18 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { EphemeralPaymentExecutor } from "../src/payments/ephemeral-payment-executor";
+import { ProfilePaymentVault, type PaymentVaultCrypto } from "../src/payments/profile-payment-vault";
 import type { Task } from "../src/models";
 import { TaskState } from "../src/models";
+
+function testCrypto(): PaymentVaultCrypto {
+  return {
+    isEncryptionAvailable: () => true,
+    encryptString: value => Buffer.from(`enc:${Buffer.from(value, "utf8").toString("base64")}`, "utf8"),
+    decryptString: value => Buffer.from(value.toString("utf8").replace(/^enc:/, ""), "base64").toString("utf8")
+  };
+}
 
 describe("EphemeralPaymentExecutor", () => {
   it("passes payment session data only to the delegated task copy and strips it from runtime/persistent task state", async () => {
@@ -64,5 +76,109 @@ describe("EphemeralPaymentExecutor", () => {
     expect((original.config.data as any).__paymentSession).toBeUndefined();
     expect((updates[0]?.config.data as any).__paymentSession).toBeUndefined();
     expect((original.config.data as any).paymentPreparation).toBeDefined();
+  });
+
+  it("loads canonical card fields from the profile vault only for the delegated worker task", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ares-ephemeral-card-"));
+    const vaultPath = path.join(root, "payment-vault.json");
+    const pan = Array.from({ length: 16 }, () => "4").join("");
+    const cvc = ["1", "2", "3"].join("");
+
+    try {
+      const vault = new ProfilePaymentVault(vaultPath, testCrypto());
+      vault.save("profile-card", {
+        cardholderName: "Vault Holder",
+        cardNumber: pan,
+        expiryMonth: "12",
+        expiryYear: "2030",
+        cvc
+      });
+
+      let delegatedSnapshot = "";
+      let runtimeListener: ((task: Task) => void) | undefined;
+      const delegate: any = {
+        onTaskUpdate: (callback: (task: Task) => void) => {
+          runtimeListener = callback;
+          return () => { runtimeListener = undefined; };
+        },
+        execute: async (task: Task) => {
+          delegatedSnapshot = JSON.stringify(task.config.data);
+          const session = (task.config.data as any).__paymentSession;
+          expect(session.card).toEqual({
+            cardholderName: "Vault Holder",
+            cardNumber: pan,
+            expiryMonth: "12",
+            expiryYear: "2030",
+            expiry: "12/30",
+            cvc
+          });
+
+          runtimeListener?.({
+            ...task,
+            config: {
+              ...task.config,
+              data: {
+                ...(task.config.data ?? {}),
+                paymentPreparation: {
+                  selectedMethod: "card",
+                  filledFields: ["cardholderName", "cardNumber", "expiry", "cvc"],
+                  missingFields: [],
+                  requiresUserAction: true
+                }
+              }
+            }
+          });
+          return true;
+        }
+      };
+
+      const original: Task = {
+        id: "task-card-1",
+        config: {
+          id: "task-card-1",
+          name: "Vault Card Test",
+          shopId: "shop-1",
+          data: { profileId: "profile-card" }
+        },
+        state: TaskState.RUNNING,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        retries: 0,
+        maxRetries: 0
+      };
+
+      const executor = new EphemeralPaymentExecutor(
+        delegate,
+        () => ({
+          method: "card",
+          card: {
+            cardholderName: "Ignored Manual Holder",
+            cardNumber: Array.from({ length: 16 }, () => "5").join(""),
+            expiry: "01/29",
+            cvc: "999"
+          }
+        }),
+        (profileId, preference) => vault.toCheckoutPaymentSession(profileId, preference)
+      );
+
+      const runtimeSnapshots: string[] = [];
+      executor.onTaskUpdate(task => runtimeSnapshots.push(JSON.stringify(task.config.data)));
+
+      expect(await executor.execute(original)).toBe(true);
+      expect(delegatedSnapshot).toContain(pan);
+      expect(delegatedSnapshot).toContain(cvc);
+
+      const persistentSnapshot = JSON.stringify(original.config.data);
+      expect(persistentSnapshot).not.toContain("__paymentSession");
+      expect(persistentSnapshot).not.toContain(pan);
+      expect(persistentSnapshot).not.toContain(cvc);
+      for (const snapshot of runtimeSnapshots) {
+        expect(snapshot).not.toContain("__paymentSession");
+        expect(snapshot).not.toContain(pan);
+        expect(snapshot).not.toContain(cvc);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
