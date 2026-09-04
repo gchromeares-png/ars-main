@@ -28,6 +28,7 @@ declare global {
       getTaskLogs(taskId: string, limit?: number): Promise<any>;
       getProductMonitorEvents(taskId: string, limit?: number): Promise<any>;
       getSystemStatus(): Promise<any>;
+      testCapmonsterApiKey(): Promise<any>;
       onTaskStatusUpdate(callback: (task: unknown) => void): () => void;
       onProductMonitorUpdate(callback: (payload: unknown) => void): () => void;
       removeTaskStatusListener?(callback?: (task: unknown) => void): void;

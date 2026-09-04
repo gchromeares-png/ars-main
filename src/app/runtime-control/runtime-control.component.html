@@ -33,6 +33,27 @@
     </div>
   </div>
 
+  <div class="purchase-guard" [class.armed]="apiKeyConfigured">
+    <div class="purchase-copy">
+      <div class="purchase-title-row">
+        <span class="purchase-orb"></span>
+        <div>
+          <small>CAPMONSTER API</small>
+          <strong>{{ apiKeyConfigured ? 'API-KEY GESETZT' : 'API-KEY NICHT GESETZT' }}</strong>
+        </div>
+      </div>
+      <p>Datenschutz: Der API-Key wird niemals in der UI angezeigt oder in Testmeldungen ausgegeben.</p>
+    </div>
+
+    <div class="purchase-actions">
+      <div class="purchase-metric"><span>CHECK</span><strong>{{ apiKeyCheckLabel }}</strong></div>
+      <button type="button" class="purchase-toggle" [class.armed]="apiKeyCheck?.valid === true" [disabled]="apiKeyTesting || !apiKeyConfigured" (click)="testCapmonsterApiKey()">
+        <span>{{ apiKeyCheck?.valid === true ? 'OK' : 'API' }}</span>
+        <strong>{{ apiKeyTesting ? 'TEST…' : 'KEY TESTEN' }}</strong>
+      </button>
+    </div>
+  </div>
+
   <div class="runtime-grid">
     <article class="runtime-card watchdog-card">
       <div class="card-title-row">

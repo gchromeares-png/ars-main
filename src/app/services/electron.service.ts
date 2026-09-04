@@ -294,6 +294,17 @@ export class ElectronService {
     });
   }
 
+  testCapmonsterApiKey(): Promise<any> {
+    if (this.api?.testCapmonsterApiKey) return this.api.testCapmonsterApiKey();
+    return Promise.resolve({
+      provider: "CapMonster",
+      configured: false,
+      success: false,
+      checkedAt: new Date().toISOString(),
+      error: "API-Key-Check ist nur in der Electron-App verfügbar."
+    });
+  }
+
   onTaskStatusUpdate(callback: (task: unknown) => void): () => void {
     if (this.api?.onTaskStatusUpdate) {
       const unsub = this.api.onTaskStatusUpdate(callback);
