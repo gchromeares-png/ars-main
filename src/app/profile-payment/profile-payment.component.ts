@@ -2,11 +2,11 @@ import { Component, Input, OnChanges, SimpleChanges } from "@angular/core";
 
 interface PaymentView {
   configured: boolean;
-  cardholderName?: string;
+  holderName?: string;
   maskedCardNumber?: string;
   expiryMonth?: string;
   expiryYear?: string;
-  cvcStored?: boolean;
+  securityCodeStored?: boolean;
   updatedAt?: string;
 }
 
@@ -18,11 +18,11 @@ interface PaymentView {
 export class ProfilePaymentComponent implements OnChanges {
   @Input() profileId = "";
 
-  cardholderName = "";
+  holderName = "";
   cardNumber = "";
   expiryMonth = "";
   expiryYear = "";
-  cvc = "";
+  securityCode = "";
 
   configured = false;
   encryptionAvailable = true;
@@ -52,11 +52,11 @@ export class ProfilePaymentComponent implements OnChanges {
     this.saving = true;
     try {
       const result = await api.saveProfilePayment(id, {
-        cardholderName: this.cardholderName,
+        holderName: this.holderName,
         cardNumber: this.cardNumber,
         expiryMonth: this.expiryMonth,
         expiryYear: this.expiryYear,
-        cvc: this.cvc
+        securityCode: this.securityCode
       });
       this.encryptionAvailable = result.encryptionAvailable !== false;
       if (!result.success) {
@@ -64,7 +64,7 @@ export class ProfilePaymentComponent implements OnChanges {
         return;
       }
       this.applyView(result.payment as PaymentView);
-      this.cvc = "";
+      this.securityCode = "";
       this.info = "Zahlungsdaten verschlüsselt gespeichert.";
     } finally {
       this.saving = false;
@@ -75,11 +75,11 @@ export class ProfilePaymentComponent implements OnChanges {
     this.error = "";
     this.info = "";
     this.configured = false;
-    this.cardholderName = "";
+    this.holderName = "";
     this.cardNumber = "";
     this.expiryMonth = "";
     this.expiryYear = "";
-    this.cvc = "";
+    this.securityCode = "";
 
     const id = this.profileId.trim();
     if (!id) return;
@@ -101,7 +101,7 @@ export class ProfilePaymentComponent implements OnChanges {
       return;
     }
     this.configured = true;
-    this.cardholderName = payment.cardholderName || "";
+    this.holderName = payment.holderName || "";
     this.cardNumber = payment.maskedCardNumber || "";
     this.expiryMonth = payment.expiryMonth || "";
     this.expiryYear = payment.expiryYear || "";
