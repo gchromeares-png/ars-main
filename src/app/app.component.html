@@ -130,6 +130,8 @@
               <label class="switch-row"><input type="checkbox" [(ngModel)]="headless"><span>Headless Browser</span></label>
             </div>
 
+            <app-profile-cookie-snapshots [profileId]="selectedProfileId" mode="select"></app-profile-cookie-snapshots>
+
             <div class="assignment-preview">
               <div><span>Profil</span><strong>{{ selectedProfileId || 'nicht gewählt' }}</strong></div>
               <div><span>Proxy</span><strong>{{ taskProxyMode === 'direct' ? 'Direkt' : taskProxyMode === 'proxy' ? (selectedTaskProxyId ? getProxyName(selectedTaskProxyId) : 'Proxy fehlt') : 'Profilstandard' }}</strong></div>
@@ -257,11 +259,14 @@
             </ng-container>
           </ng-container>
 
-          <div class="form-grid" *ngIf="profileTab === 'browser'">
-            <label><span>Standard-Proxy</span><select [(ngModel)]="newProfile.preferredProxyId"><option value="">Direkt / kein Standardproxy</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select></label>
-            <label class="wide"><span>User-Agent</span><input [(ngModel)]="newProfile.browser!.userAgent" placeholder="optional"></label>
-            <label class="switch-row"><input type="checkbox" [(ngModel)]="newProfile.browser!.kiAutofill"><span>KI AutoFill</span><small>Semantische Feldauflösung aktivieren.</small></label>
-          </div>
+          <ng-container *ngIf="profileTab === 'browser'">
+            <div class="form-grid">
+              <label><span>Standard-Proxy</span><select [(ngModel)]="newProfile.preferredProxyId"><option value="">Direkt / kein Standardproxy</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select></label>
+              <label class="wide"><span>User-Agent</span><input [(ngModel)]="newProfile.browser!.userAgent" placeholder="optional"></label>
+              <label class="switch-row"><input type="checkbox" [(ngModel)]="newProfile.browser!.kiAutofill"><span>KI AutoFill</span><small>Semantische Feldauflösung aktivieren.</small></label>
+            </div>
+            <app-profile-cookie-snapshots [profileId]="newProfile.id" mode="manage"></app-profile-cookie-snapshots>
+          </ng-container>
 
           <div class="payment-preference" *ngIf="profileTab === 'payment'">
             <div class="panel-header"><div><div class="eyebrow">PAYMENT</div><h3>Zahlungsprofil</h3></div></div>
