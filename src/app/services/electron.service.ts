@@ -1,5 +1,6 @@
 import { Injectable } from "@angular/core";
 import { COMMERCE_PLATFORMS } from "../../commerce/platforms";
+import { getSelectedCookieSnapshot } from "./profile-cookie-snapshot-selection";
 
 interface BrowserPreviewTask {
   id: string;
@@ -138,8 +139,9 @@ export class ElectronService {
   }
 
   createTask(config: unknown): Promise<any> {
-    if (this.api) return this.api.createTask(config);
-    const taskConfig = config as { id?: string; name?: string; shopId?: string; data?: Record<string, unknown> };
+    const enriched = this.attachCookieSnapshotSelection(config);
+    if (this.api) return this.api.createTask(enriched);
+    const taskConfig = enriched as { id?: string; name?: string; shopId?: string; data?: Record<string, unknown> };
     const task: BrowserPreviewTask = {
       id: taskConfig.id || `preview_task_${Date.now()}`,
       config: {
@@ -326,6 +328,29 @@ export class ElectronService {
       };
     }
     return () => undefined;
+  }
+
+  private attachCookieSnapshotSelection(config: unknown): unknown {
+    if (!config || typeof config !== "object") return config;
+    const taskConfig = config as { data?: Record<string, unknown> };
+    const data = taskConfig.data;
+    if (!data) return config;
+    const action = data["monitorAction"] as Record<string, unknown> | undefined;
+    if (!action || action["mode"] !== "auto-checkout") return config;
+    const profileId = String(action["profileId"] ?? "").trim();
+    if (!profileId) return config;
+    const cookieSnapshotId = getSelectedCookieSnapshot(profileId);
+    if (!cookieSnapshotId) return config;
+    return {
+      ...(config as Record<string, unknown>),
+      data: {
+        ...data,
+        monitorAction: {
+          ...action,
+          cookieSnapshotId
+        }
+      }
+    };
   }
 
   private async ensureProfilePaymentSession(taskId: string): Promise<void> {
