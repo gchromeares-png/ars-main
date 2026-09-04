@@ -82,16 +82,16 @@ describe("EphemeralPaymentExecutor", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "ares-ephemeral-card-"));
     const vaultPath = path.join(root, "payment-vault.json");
     const pan = Array.from({ length: 16 }, () => "4").join("");
-    const cvc = ["1", "2", "3"].join("");
+    const securityCode = ["1", "2", "3"].join("");
 
     try {
       const vault = new ProfilePaymentVault(vaultPath, testCrypto());
       vault.save("profile-card", {
-        cardholderName: "Vault Holder",
+        holderName: "Vault Holder",
         cardNumber: pan,
         expiryMonth: "12",
         expiryYear: "2030",
-        cvc
+        securityCode
       });
 
       let delegatedSnapshot = "";
@@ -108,7 +108,7 @@ describe("EphemeralPaymentExecutor", () => {
             holderName: "Vault Holder",
             cardNumber: pan,
             expiry: "12/30",
-            securityCode: cvc
+            securityCode
           });
 
           runtimeListener?.({
@@ -164,16 +164,16 @@ describe("EphemeralPaymentExecutor", () => {
 
       expect(await executor.execute(original)).toBe(true);
       expect(delegatedSnapshot).toContain(pan);
-      expect(delegatedSnapshot).toContain(cvc);
+      expect(delegatedSnapshot).toContain(securityCode);
 
       const persistentSnapshot = JSON.stringify(original.config.data);
       expect(persistentSnapshot).not.toContain("__paymentSession");
       expect(persistentSnapshot).not.toContain(pan);
-      expect(persistentSnapshot).not.toContain(cvc);
+      expect(persistentSnapshot).not.toContain(securityCode);
       for (const snapshot of runtimeSnapshots) {
         expect(snapshot).not.toContain("__paymentSession");
         expect(snapshot).not.toContain(pan);
-        expect(snapshot).not.toContain(cvc);
+        expect(snapshot).not.toContain(securityCode);
       }
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

@@ -14,20 +14,9 @@ function compactDigits(value: unknown, maxLength: number): string | undefined {
   return normalized || undefined;
 }
 
-function combinedExpiry(card: Record<string, unknown>): string | undefined {
-  const direct = text(card["expiry"], 12);
-  if (direct) return direct;
-
-  const month = text(card["expiryMonth"], 4)?.replace(/\D/g, "");
-  const year = text(card["expiryYear"], 6)?.replace(/\D/g, "");
-  if (!month || !year) return undefined;
-  return `${month.padStart(2, "0")}/${year.slice(-2)}`;
-}
-
 /**
- * Compatibility boundary for renderer/profile payloads.
- * The established checkout runtime contract remains holderName/securityCode.
- * UI/vault aliases such as cardholderName/cvc are translated only here.
+ * Renderer/IPC input validation for the established checkout payment contract.
+ * Runtime card fields stay holderName/cardNumber/expiry/securityCode end to end.
  */
 export function normalizePaymentSessionInput(input: unknown): CheckoutPaymentSession | undefined {
   if (!input || typeof input !== "object") return undefined;
@@ -47,10 +36,10 @@ export function normalizePaymentSessionInput(input: unknown): CheckoutPaymentSes
   const card = rawCard as Record<string, unknown>;
 
   session.card = {
-    holderName: text(card["holderName"], 120) ?? text(card["cardholderName"], 120),
+    holderName: text(card["holderName"], 120),
     cardNumber: compactDigits(card["cardNumber"], 24),
-    expiry: combinedExpiry(card),
-    securityCode: text(card["securityCode"], 8) ?? text(card["cvc"], 8) ?? text(card["cvv"], 8)
+    expiry: text(card["expiry"], 12),
+    securityCode: text(card["securityCode"], 8)
   };
 
   return session;

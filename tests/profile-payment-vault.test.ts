@@ -21,7 +21,7 @@ describe("ProfilePaymentVault", () => {
   let root: string;
   let filePath: string;
   const pan = Array.from({ length: 16 }, () => "4").join("");
-  const cvc = ["1", "2", "3"].join("");
+  const securityCode = ["1", "2", "3"].join("");
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "ares-payment-vault-"));
@@ -35,55 +35,55 @@ describe("ProfilePaymentVault", () => {
   test("stores card secrets encrypted and returns only a masked renderer view", () => {
     const vault = new ProfilePaymentVault(filePath, testCrypto());
     const view = vault.save("profile-a", {
-      cardholderName: "Test Holder",
+      holderName: "Test Holder",
       cardNumber: pan,
       expiryMonth: "7",
       expiryYear: "2030",
-      cvc
+      securityCode
     });
 
     expect(view.configured).toBe(true);
-    expect(view.cardholderName).toBe("Test Holder");
+    expect(view.holderName).toBe("Test Holder");
     expect(view.maskedCardNumber).toMatch(/4444$/);
     expect(view.expiryMonth).toBe("07");
     expect(view.expiryYear).toBe("2030");
-    expect(view.cvcStored).toBe(true);
+    expect(view.securityCodeStored).toBe(true);
 
     const onDisk = fs.readFileSync(filePath, "utf8");
     expect(onDisk).not.toContain(pan);
     expect(onDisk).not.toContain("Test Holder");
-    expect(onDisk).not.toContain(cvc);
+    expect(onDisk).not.toContain(securityCode);
 
     const session = vault.toCheckoutPaymentSession("profile-a", { method: "card" });
     expect(session.card?.holderName).toBe("Test Holder");
     expect(session.card?.cardNumber).toBe(pan);
     expect(session.card?.expiry).toBe("07/30");
-    expect(session.card?.securityCode).toBe(cvc);
+    expect(session.card?.securityCode).toBe(securityCode);
     expect(session.card).not.toHaveProperty("cardholderName");
     expect(session.card).not.toHaveProperty("cvc");
   });
 
-  test("preserves encrypted PAN and CVC when the UI resaves masked values", () => {
+  test("preserves encrypted PAN and securityCode when the UI resaves masked values", () => {
     const vault = new ProfilePaymentVault(filePath, testCrypto());
     const first = vault.save("profile-a", {
-      cardholderName: "Test Holder",
+      holderName: "Test Holder",
       cardNumber: pan,
       expiryMonth: "07",
       expiryYear: "2030",
-      cvc
+      securityCode
     });
 
     vault.save("profile-a", {
-      cardholderName: "Updated Holder",
+      holderName: "Updated Holder",
       cardNumber: first.maskedCardNumber,
       expiryMonth: "08",
       expiryYear: "2031",
-      cvc: ""
+      securityCode: ""
     });
 
     const session = vault.toCheckoutPaymentSession("profile-a", { method: "card" });
     expect(session.card?.cardNumber).toBe(pan);
-    expect(session.card?.securityCode).toBe(cvc);
+    expect(session.card?.securityCode).toBe(securityCode);
     expect(session.card?.holderName).toBe("Updated Holder");
     expect(session.card?.expiry).toBe("08/31");
   });
@@ -91,11 +91,11 @@ describe("ProfilePaymentVault", () => {
   test("fails closed when OS encryption is unavailable", () => {
     const vault = new ProfilePaymentVault(filePath, testCrypto(false));
     expect(() => vault.save("profile-a", {
-      cardholderName: "Test Holder",
+      holderName: "Test Holder",
       cardNumber: pan,
       expiryMonth: "07",
       expiryYear: "2030",
-      cvc
+      securityCode
     })).toThrow(/Verschlüsselung/);
     expect(fs.existsSync(filePath)).toBe(false);
   });

@@ -3,29 +3,28 @@ import * as path from "path";
 import type { CheckoutPaymentSession, StoredPaymentPreference } from "./models";
 
 export interface ProfileCardAutofill {
-  cardholderName: string;
+  holderName: string;
   cardNumber: string;
   expiryMonth: string;
   expiryYear: string;
-  expiry: string;
-  cvc: string;
+  securityCode: string;
 }
 
 export interface ProfilePaymentCardDraft {
-  cardholderName?: string;
+  holderName?: string;
   cardNumber?: string;
   expiryMonth?: string;
   expiryYear?: string;
-  cvc?: string;
+  securityCode?: string;
 }
 
 export interface ProfilePaymentCardView {
   configured: boolean;
-  cardholderName?: string;
+  holderName?: string;
   maskedCardNumber?: string;
   expiryMonth?: string;
   expiryYear?: string;
-  cvcStored?: boolean;
+  securityCodeStored?: boolean;
   updatedAt?: string;
 }
 
@@ -74,7 +73,7 @@ function normalizeExpiryYear(value: string): string {
   throw new Error("Ablaufjahr muss zweistellig oder vierstellig angegeben werden.");
 }
 
-function normalizeCvc(value: string): string {
+function normalizeSecurityCode(value: string): string {
   const digits = value.replace(/\D/g, "");
   if (digits.length < 3 || digits.length > 4) {
     throw new Error("CVC/CVV muss 3 oder 4 Ziffern enthalten.");
@@ -82,7 +81,7 @@ function normalizeCvc(value: string): string {
   return digits;
 }
 
-function toExpiry(month: string, year: string): string {
+function materializeExpiry(month: string, year: string): string {
   return `${month}/${year.slice(-2)}`;
 }
 
@@ -120,27 +119,28 @@ export class ProfilePaymentVault {
       ? existing?.cardNumber ?? ""
       : normalizeCardNumber(requestedCardNumber);
 
-    const cardholderName = clean(draft.cardholderName) || existing?.cardholderName || "";
+    const holderName = clean(draft.holderName) || existing?.holderName || "";
     const expiryMonth = clean(draft.expiryMonth)
       ? normalizeExpiryMonth(clean(draft.expiryMonth))
       : existing?.expiryMonth ?? "";
     const expiryYear = clean(draft.expiryYear)
       ? normalizeExpiryYear(clean(draft.expiryYear))
       : existing?.expiryYear ?? "";
-    const requestedCvc = clean(draft.cvc);
-    const cvc = requestedCvc ? normalizeCvc(requestedCvc) : existing?.cvc ?? "";
+    const requestedSecurityCode = clean(draft.securityCode);
+    const securityCode = requestedSecurityCode
+      ? normalizeSecurityCode(requestedSecurityCode)
+      : existing?.securityCode ?? "";
 
-    if (!cardholderName || !cardNumber || !expiryMonth || !expiryYear || !cvc) {
+    if (!holderName || !cardNumber || !expiryMonth || !expiryYear || !securityCode) {
       throw new Error("Karteninhaber, Kartennummer, Ablaufmonat, Ablaufjahr und CVC/CVV sind erforderlich.");
     }
 
     const secret: ProfileCardAutofill = {
-      cardholderName,
+      holderName,
       cardNumber,
       expiryMonth,
       expiryYear,
-      expiry: toExpiry(expiryMonth, expiryYear),
-      cvc
+      securityCode
     };
     const updatedAt = new Date().toISOString();
     const encrypted = this.crypto.encryptString(JSON.stringify(secret));
@@ -172,10 +172,10 @@ export class ProfilePaymentVault {
     this.assertEncryptionAvailable();
     const secret = this.decrypt(entry);
     session.card = {
-      holderName: secret.cardholderName,
+      holderName: secret.holderName,
       cardNumber: secret.cardNumber,
-      expiry: secret.expiry,
-      securityCode: secret.cvc
+      expiry: materializeExpiry(secret.expiryMonth, secret.expiryYear),
+      securityCode: secret.securityCode
     };
     return session;
   }
@@ -202,16 +202,15 @@ export class ProfilePaymentVault {
   private decrypt(entry: PaymentVaultEntry): ProfileCardAutofill {
     const plaintext = this.crypto.decryptString(Buffer.from(entry.ciphertext, "base64"));
     const parsed = JSON.parse(plaintext) as Partial<ProfileCardAutofill>;
-    if (!parsed.cardholderName || !parsed.cardNumber || !parsed.expiryMonth || !parsed.expiryYear || !parsed.cvc) {
+    if (!parsed.holderName || !parsed.cardNumber || !parsed.expiryMonth || !parsed.expiryYear || !parsed.securityCode) {
       throw new Error("Gespeicherte Zahlungsdaten sind unvollständig oder beschädigt.");
     }
     return {
-      cardholderName: String(parsed.cardholderName),
+      holderName: String(parsed.holderName),
       cardNumber: String(parsed.cardNumber),
       expiryMonth: String(parsed.expiryMonth),
       expiryYear: String(parsed.expiryYear),
-      expiry: String(parsed.expiry || toExpiry(String(parsed.expiryMonth), String(parsed.expiryYear))),
-      cvc: String(parsed.cvc)
+      securityCode: String(parsed.securityCode)
     };
   }
 
@@ -225,11 +224,11 @@ export class ProfilePaymentVault {
   private toView(secret: ProfileCardAutofill, updatedAt: string): ProfilePaymentCardView {
     return {
       configured: true,
-      cardholderName: secret.cardholderName,
+      holderName: secret.holderName,
       maskedCardNumber: maskCardNumber(secret.cardNumber),
       expiryMonth: secret.expiryMonth,
       expiryYear: secret.expiryYear,
-      cvcStored: Boolean(secret.cvc),
+      securityCodeStored: Boolean(secret.securityCode),
       updatedAt
     };
   }
