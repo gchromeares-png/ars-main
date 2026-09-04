@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="de">
+<body>
+  <main>
+    <section aria-label="Lieferanschrift">
+      <label>Vorname <input data-slot="shipping-first" autocomplete="shipping given-name"></label>
+      <label>Nachname <input data-slot="shipping-last" autocomplete="shipping family-name"></label>
+      <label>Straße <input data-slot="shipping-street" autocomplete="shipping address-line1"></label>
+      <label>PLZ <input data-slot="shipping-postal" autocomplete="shipping postal-code"></label>
+      <label>Ort <input data-slot="shipping-city" autocomplete="shipping address-level2"></label>
+    </section>
+    <section aria-label="Rechnungsanschrift">
+      <label>Straße <input data-slot="billing-street" autocomplete="billing address-line1"></label>
+      <label>PLZ <input data-slot="billing-postal" autocomplete="billing postal-code"></label>
+      <label>Ort <input data-slot="billing-city" autocomplete="billing address-level2"></label>
+    </section>
+  </main>
+</body>
+</html>

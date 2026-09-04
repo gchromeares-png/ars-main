@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "synthetic-shipping-billing",
+  "source": "synthetic",
+  "description": "Shipping and billing visible at the same time; Hamburg/Berlin regression case.",
+  "stages": [
+    {
+      "id": "checkout",
+      "htmlFile": "shipping-billing.html",
+      "requiredTargets": [
+        { "intent": "firstName", "context": "shipping" },
+        { "intent": "lastName", "context": "shipping" },
+        { "intent": "address1", "context": "shipping" },
+        { "intent": "postalCode", "context": "shipping" },
+        { "intent": "city", "context": "shipping" },
+        { "intent": "address1", "context": "billing" },
+        { "intent": "postalCode", "context": "billing" },
+        { "intent": "city", "context": "billing" }
+      ]
+    }
+  ]
+}

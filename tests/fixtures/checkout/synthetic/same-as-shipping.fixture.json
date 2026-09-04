@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "synthetic-same-as-shipping",
+  "source": "synthetic",
+  "description": "Shipping-only form with a same-as-shipping control detected by the planner.",
+  "stages": [
+    {
+      "id": "checkout",
+      "htmlFile": "same-as-shipping.html",
+      "requiredTargets": [
+        { "intent": "firstName", "context": "shipping" },
+        { "intent": "lastName", "context": "shipping" },
+        { "intent": "address1", "context": "shipping" },
+        { "intent": "postalCode", "context": "shipping" },
+        { "intent": "city", "context": "shipping" }
+      ]
+    }
+  ]
+}
