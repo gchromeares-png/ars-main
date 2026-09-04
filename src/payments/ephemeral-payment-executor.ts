@@ -1,12 +1,15 @@
-import * as path from "path";
 import type { ITaskExecutor } from "../interfaces";
 import type { Task } from "../models";
-import type { CheckoutPaymentSession } from "./models";
-import { ProfilePaymentVault } from "./profile-payment-vault";
+import type { CheckoutPaymentSession, StoredPaymentPreference } from "./models";
 
 type RuntimeUpdateSource = ITaskExecutor & {
   onTaskUpdate?: (callback: (task: Task) => void) => () => void;
 };
+
+type ProfilePaymentSessionResolver = (
+  profileId: string,
+  preference?: StoredPaymentPreference
+) => CheckoutPaymentSession;
 
 const SESSION_KEY = "__paymentSession";
 
@@ -29,7 +32,8 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
 
   constructor(
     private readonly delegate: ITaskExecutor,
-    private readonly getPaymentSession: (taskId: string) => CheckoutPaymentSession | undefined
+    private readonly getPaymentSession: (taskId: string) => CheckoutPaymentSession | undefined,
+    private readonly getProfilePaymentSession?: ProfilePaymentSessionResolver
   ) {
     const runtimeSource = delegate as RuntimeUpdateSource;
     this.unsubscribe = runtimeSource.onTaskUpdate?.(workerTask => {
@@ -104,31 +108,18 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
       label: session.label
     };
 
-    // Profile-backed card data is authoritative. Any card secret that may still
-    // exist in an old/manual task payload is deliberately ignored.
-    if (!profileId) return profileOnlySession;
+    // Profile-backed card data is authoritative. Any card secret supplied by a
+    // legacy/manual task payload is ignored and never gets a fallback path.
+    if (!profileId || !this.getProfilePaymentSession) return profileOnlySession;
 
     try {
-      // This wrapper runs in Electron main. Decryption remains out of Angular and
-      // the external browser worker receives plaintext only for this one task.
-      const electron = require("electron") as typeof import("electron");
-      if (!electron.safeStorage?.isEncryptionAvailable?.()) return profileOnlySession;
-      const userDataRoot = electron.app.getPath("userData");
-      const vault = new ProfilePaymentVault(
-        path.join(userDataRoot, "payment-vault.json"),
-        {
-          isEncryptionAvailable: () => electron.safeStorage.isEncryptionAvailable(),
-          encryptString: value => electron.safeStorage.encryptString(value),
-          decryptString: value => electron.safeStorage.decryptString(value)
-        }
-      );
-      return vault.toCheckoutPaymentSession(profileId, {
+      return this.getProfilePaymentSession(profileId, {
         method: "card",
         label: session.label
       });
     } catch {
-      // Fail closed: no plaintext/manual fallback. Payment preparation will report
-      // missing card fields and leave the checkout waiting for user action.
+      // Fail closed: payment preparation reports missing fields instead of using
+      // plaintext task payloads when the encrypted profile vault is unavailable.
       return profileOnlySession;
     }
   }
