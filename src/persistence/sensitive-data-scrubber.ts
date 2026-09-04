@@ -1,7 +1,7 @@
 import type { Database } from "sql.js";
 
-const DROP_SENSITIVE_KEY = /^_*payment[-_]?session$/i;
-const SENSITIVE_KEY = /(api[-_]?key|authorization|cookie|password|secret|token|card[-_]?number|cvc|cvv|security[-_]?code)/i;
+const DROP_SENSITIVE_KEY = /^_*payment[-_]?session$|^(card[-_]?number|cvc|cvv|security[-_]?code)$/i;
+const SENSITIVE_KEY = /(api[-_]?key|authorization|cookie|password|secret|token)/i;
 const SENSITIVE_VALUE = /\b(api[-_]?key|authorization|cookie|password|secret|token|card[-_]?number|cvc|cvv|security[-_]?code)\s*[:=]\s*([^\s,;]+)/gi;
 
 export function sanitizePersistedValue(value: unknown): unknown {
