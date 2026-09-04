@@ -38,6 +38,16 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     }
   });
 
+  it("keeps the manual SeleniumBase test path SeleniumBase-owned end to end", () => {
+    expect(adapter).toContain("self._sb.goto(url)");
+    expect(adapter).toContain("self._sb.sleep(2)");
+    expect(adapter).toContain("self._sb.solve_captcha()");
+    expect(manualWorker).toContain("adapter.goto(start_url)");
+    expect(manualWorker).toContain("adapter.goto(url)");
+    expect(manualController.toLowerCase()).not.toContain("patchright");
+    expect(manualController).not.toContain("connectOverCDP");
+  });
+
   it("implements SeleniumBase Stealthy Playwright Mode on the existing context/page only", () => {
     expect(adapter).toContain("self._sb.get_endpoint_url()");
     expect(adapter).toContain("playwright.chromium.connect_over_cdp(endpoint_url)");

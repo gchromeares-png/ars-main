@@ -57,6 +57,8 @@ class SeleniumBaseCdpAdapter:
 
     def goto(self, url: str) -> None:
         self._sb.goto(url)
+        self._sb.sleep(2)
+        self._sb.solve_captcha()
 
     def execute_script(self, script: str) -> Any:
         return self._sb.execute_script(script)
