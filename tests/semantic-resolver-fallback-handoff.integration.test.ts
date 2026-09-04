@@ -111,6 +111,17 @@ describeBrowser("resolver -> Shopify deterministic fallback handoff", () => {
         expect.objectContaining({ intent: "city", context: "unknown" })
       ]));
       expect(result.requiredTargetsSatisfied).toBe(true);
+      expect(result.trace?.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          intent: "city",
+          context: "unknown",
+          resolverSource: { intent: "fallback", context: "fallback" },
+          valueAvailable: true,
+          action: "fallback-write",
+          result: "fallback-filled"
+        })
+      ]));
+      expect(JSON.stringify(result.trace)).not.toContain("Hamburg");
     } finally {
       await browser.close();
     }
