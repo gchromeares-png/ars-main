@@ -17,6 +17,8 @@ declare global {
       closeSeleniumBaseProfileBrowser(profileId: string): Promise<any>;
       applySeleniumBaseCookieSnapshot(profileId: string, snapshotId: string): Promise<any>;
       saveSeleniumBaseProfileCookieSnapshot(profileId: string, name: string, snapshotId?: string): Promise<any>;
+      attachSeleniumBasePatchright(profileId: string): Promise<any>;
+      navigateSeleniumBasePatchright(profileId: string, url: string): Promise<any>;
       listProfileCookieSnapshots(profileId: string): Promise<any>;
       saveProfileCookieSnapshot(profileId: string, name: string, snapshotId?: string): Promise<any>;
       deleteProfileCookieSnapshot(profileId: string, snapshotId: string): Promise<any>;

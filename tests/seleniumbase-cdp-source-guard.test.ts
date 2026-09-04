@@ -8,6 +8,7 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
   const worker = read("python/seleniumbase_cdp/worker.py");
   const manualWorker = read("python/seleniumbase_cdp/manual_profile_browser.py");
   const manualController = read("src/electron/seleniumbase-profile-browser-controller.ts");
+  const patchrightBridge = read("src/electron/seleniumbase-patchright-bridge.ts");
   const profileController = read("src/electron/profile-browser-controller.ts");
   const preload = read("src/electron/preload.ts");
   const probe = read("python/seleniumbase_cdp/persistence_probe.py");
@@ -59,12 +60,36 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     expect(manualController).toContain("resolveUserDataDir(profileId)");
   });
 
+  it("bridges Patchright to the existing SeleniumBase browser over CDP without creating a second context", () => {
+    expect(adapter).toContain("def get_cdp_endpoint(self) -> str:");
+    expect(adapter).toContain("def solve_captcha(self) -> None:");
+    expect(adapter).toContain("self._sb.solve_captcha()");
+    expect(manualWorker).toContain('command_type == "get-cdp-endpoint"');
+    expect(manualWorker).toContain('command_type == "solve-captcha"');
+    expect(manualController).toContain('type: "get-cdp-endpoint"');
+    expect(manualController).toContain('type: "solve-captcha"');
+    expect(patchrightBridge).toContain('import { chromium } from "patchright"');
+    expect(patchrightBridge).toContain("chromium.connectOverCDP(endpointUrl)");
+    expect(patchrightBridge).toContain("browser.contexts()");
+    expect(patchrightBridge).toContain("context.pages()");
+    expect(patchrightBridge).not.toContain("newContext(");
+    expect(patchrightBridge).not.toContain("launchPersistentContext(");
+    expect(patchrightBridge).toContain("session.page.goto(target)");
+    expect(patchrightBridge).toContain("session.page.waitForTimeout(2_000)");
+    expect(patchrightBridge).toContain("this.seleniumBase.solveCaptcha(session.profileId)");
+    expect(patchrightBridge).not.toContain("src/challenges");
+  });
+
   it("exposes SeleniumBase only as an explicit manual experimental browser path", () => {
     expect(profileController).toContain('engine: "seleniumbase-cdp"');
     expect(profileController).toContain("this.seleniumBase.open(");
+    expect(profileController).toContain("this.seleniumBasePatchright.attach(");
+    expect(profileController).toContain("this.seleniumBasePatchright.navigateAndSolve(");
     expect(preload).toContain("openSeleniumBaseProfileBrowser");
     expect(preload).toContain("applySeleniumBaseCookieSnapshot");
     expect(preload).toContain("saveSeleniumBaseProfileCookieSnapshot");
+    expect(preload).toContain("attachSeleniumBasePatchright");
+    expect(preload).toContain("navigateSeleniumBasePatchright");
   });
 
   it("verifies persistence through two separate worker processes using one SeleniumBase profile", () => {

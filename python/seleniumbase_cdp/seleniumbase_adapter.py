@@ -58,6 +58,15 @@ class SeleniumBaseCdpAdapter:
     def goto(self, url: str) -> None:
         self._sb.goto(url)
 
+    def get_cdp_endpoint(self) -> str:
+        endpoint = str(self._sb.get_endpoint_url() or "").strip()
+        if not endpoint:
+            raise RuntimeError("SeleniumBase returned no CDP endpoint URL.")
+        return endpoint
+
+    def solve_captcha(self) -> None:
+        self._sb.solve_captcha()
+
     def execute_script(self, script: str) -> Any:
         return self._sb.execute_script(script)
 
@@ -86,7 +95,7 @@ class SeleniumBaseCdpAdapter:
 
         from playwright.sync_api import sync_playwright
 
-        endpoint_url = self._sb.get_endpoint_url()
+        endpoint_url = self.get_cdp_endpoint()
         playwright = sync_playwright().start()
         try:
             browser = playwright.chromium.connect_over_cdp(endpoint_url)
