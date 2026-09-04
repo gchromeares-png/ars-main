@@ -7,6 +7,7 @@ export class StateMachine {
     [TaskState.STARTING, new Set([TaskState.RUNNING, TaskState.FAILED, TaskState.CANCELLED, TaskState.PAUSED])],
     [TaskState.RUNNING, new Set([
       TaskState.WAITING_QUEUE,
+      TaskState.POST_QUEUE_DISCOVERY,
       TaskState.PRODUCT_FOUND,
       TaskState.CART,
       TaskState.CHECKOUT,
@@ -17,6 +18,13 @@ export class StateMachine {
     ])],
     [TaskState.WAITING_QUEUE, new Set([
       TaskState.RUNNING,
+      TaskState.POST_QUEUE_DISCOVERY,
+      TaskState.FAILED,
+      TaskState.CANCELLED,
+      TaskState.PAUSED
+    ])],
+    [TaskState.POST_QUEUE_DISCOVERY, new Set([
+      TaskState.PRODUCT_FOUND,
       TaskState.FAILED,
       TaskState.CANCELLED,
       TaskState.PAUSED

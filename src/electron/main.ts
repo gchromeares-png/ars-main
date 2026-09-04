@@ -5,7 +5,6 @@ import * as path from "path";
 import { TaskOrchestrator } from "../orchestrator";
 import { WorkerMock } from "../mocks";
 import { BrowserWorkerPoolClient } from "../browser-worker/client";
-import type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
 import { TaskConfig, TaskState } from "../models";
 import { ProfileRepository } from "../profiles/profile-repository";
 import { AresProfile } from "../profiles/models";
@@ -25,6 +24,8 @@ import { CommerceTaskExecutorRouter } from "../commerce/task-executor-router";
 import { CommerceProductApiRouter } from "../commerce/product-api/router";
 import { CommerceMonitorService, isCommerceMonitorTask } from "../monitor/commerce-monitor-service";
 import { MonitorAutoCheckoutCoordinator } from "../monitor/auto-checkout-coordinator";
+import { PassiveHttpPreCheckoutGate } from "../monitor/pre-checkout-gate";
+import { isEarlyGateChildTask, normalizeDiscoveryKeywords } from "../monitor/early-gate";
 
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: TaskOrchestrator;
@@ -35,6 +36,7 @@ let autoCheckoutCoordinator: MonitorAutoCheckoutCoordinator;
 let taskStore: SqliteTaskStore;
 let persistenceCoordinator: TaskPersistenceCoordinator;
 let quitting = false;
+let allowFinalPurchase = false;
 
 interface SystemNodeStatus {
   executable: string;
@@ -176,11 +178,10 @@ async function createBackend(): Promise<void> {
   proxyRepository.setStoragePath(path.join(userData, "proxies.json"));
   loadShops();
 
+  // Hard runtime default: final purchase is never enabled by persisted/UI state.
+  allowFinalPurchase = false;
   browserWorker = new BrowserWorkerPoolClient(
-    shopId => {
-      const shop = shops.get(shopId);
-      return shop?.platform === "shopify" ? shop as ShopifyRuntimeShop : undefined;
-    },
+    shopId => shops.get(shopId),
     profileId => profileRepository.get(profileId),
     {
       profileRoot: path.join(userData, "browser-profiles"),
@@ -196,9 +197,20 @@ async function createBackend(): Promise<void> {
     productApiRouter,
     taskStore,
     {
+      preCheckoutGate: new PassiveHttpPreCheckoutGate(),
       onEvent: (taskId, event) => {
         broadcastMonitorUpdate({ taskId, event });
         void autoCheckoutCoordinator?.handleProductEvent(taskId, event).catch(error => {
+          const task = orchestrator?.getTask(taskId);
+          if (task) {
+            task.lastError = error instanceof Error ? error.message : String(error);
+            broadcastTaskUpdate(task);
+          }
+        });
+      },
+      onGateEvent: (taskId, event) => {
+        broadcastMonitorUpdate({ taskId, gateEvent: event });
+        void autoCheckoutCoordinator?.handleGateEvent(taskId, event).catch(error => {
           const task = orchestrator?.getTask(taskId);
           if (task) {
             task.lastError = error instanceof Error ? error.message : String(error);
@@ -217,6 +229,8 @@ async function createBackend(): Promise<void> {
   commerceExecutor = new CommerceTaskExecutorRouter(shopId => shops.get(shopId));
   commerceExecutor.register("shopify", paymentAwareBrowserWorker);
   commerceExecutor.registerMonitorExecutor(commerceMonitor);
+  commerceExecutor.registerEarlyGateExecutor(paymentAwareBrowserWorker);
+  await commerceExecutor.setFinalPurchaseAllowed(false);
 
   orchestrator = new TaskOrchestrator(taskStore, commerceExecutor);
   autoCheckoutCoordinator = new MonitorAutoCheckoutCoordinator(orchestrator, {
@@ -227,6 +241,15 @@ async function createBackend(): Promise<void> {
         taskId: parent.id,
         event,
         autoCheckout: { childTaskId: child.id, status: "triggered" }
+      });
+      broadcastTaskUpdate(parent);
+      broadcastTaskUpdate(child);
+    },
+    onGateTriggered: (parent, child, event) => {
+      broadcastMonitorUpdate({
+        taskId: parent.id,
+        gateEvent: event,
+        earlyGate: { childTaskId: child.id, status: "triggered" }
       });
       broadcastTaskUpdate(parent);
       broadcastTaskUpdate(child);
@@ -383,7 +406,8 @@ ipcMain.handle("get-shops", () => ({
   shops: [...shops.values()],
   platforms: COMMERCE_PLATFORMS,
   executorPlatforms: commerceExecutor?.listExecutorPlatforms() ?? [],
-  monitorReady: commerceExecutor?.hasMonitorExecutor() ?? false
+  monitorReady: commerceExecutor?.hasMonitorExecutor() ?? false,
+  earlyGateReady: commerceExecutor?.hasEarlyGateExecutor() ?? false
 }));
 
 ipcMain.handle("register-shop", (_event, input) => {
@@ -414,7 +438,8 @@ ipcMain.handle("register-shop", (_event, input) => {
     success: true,
     shop,
     executorReady: commerceExecutor.hasExecutor(platform),
-    monitorReady: commerceExecutor.hasMonitorExecutor()
+    monitorReady: commerceExecutor.hasMonitorExecutor(),
+    earlyGateReady: commerceExecutor.hasEarlyGateExecutor()
   };
 });
 
@@ -492,6 +517,58 @@ ipcMain.handle("stop-task", async (_event, taskId: string) => {
   }
 });
 
+ipcMain.handle("update-discovery-keywords", async (_event, taskId: string, input: unknown) => {
+  try {
+    const id = String(taskId ?? "").trim();
+    const task = orchestrator.getTask(id);
+    if (!task || !isEarlyGateChildTask(task)) {
+      return { success: false, error: "Early-Gate-Browser-Child wurde nicht gefunden." };
+    }
+    if (task.state !== TaskState.POST_QUEUE_DISCOVERY) {
+      return { success: false, error: "Discovery-Keywords können nur während POST_QUEUE_DISCOVERY geändert werden." };
+    }
+
+    const requested = normalizeDiscoveryKeywords(input);
+    const keywords = await commerceExecutor.updateDiscoveryKeywords(id, requested);
+    const postQueue = task.config.data?.["postQueueDiscovery"] as Record<string, unknown> | undefined;
+    task.config.data = {
+      ...(task.config.data ?? {}),
+      postQueueDiscovery: {
+        ...(postQueue ?? {}),
+        keywords,
+        updatedAt: new Date().toISOString()
+      }
+    };
+    broadcastTaskUpdate(task);
+    return { success: true, taskId: id, keywords };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle("get-final-purchase-setting", () => ({
+  success: true,
+  allowFinalPurchase
+}));
+
+ipcMain.handle("set-final-purchase-allowed", async (_event, input: unknown) => {
+  const requested = input === true;
+  allowFinalPurchase = requested;
+  try {
+    await commerceExecutor.setFinalPurchaseAllowed(requested);
+    return { success: true, allowFinalPurchase };
+  } catch (error) {
+    // Fail closed if any worker cannot confirm the global setting.
+    allowFinalPurchase = false;
+    await commerceExecutor.setFinalPurchaseAllowed(false).catch(() => undefined);
+    return {
+      success: false,
+      allowFinalPurchase: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+});
+
 ipcMain.handle("get-task-status", (_event, taskId: string) => {
   const task = orchestrator.getTask(taskId);
   return task
@@ -532,6 +609,8 @@ ipcMain.handle("get-system-status", async () => {
     commercePlatforms: COMMERCE_PLATFORMS,
     commerceExecutorPlatforms: commerceExecutor.listExecutorPlatforms(),
     commerceMonitorReady: commerceExecutor.hasMonitorExecutor(),
+    earlyGateReady: commerceExecutor.hasEarlyGateExecutor(),
+    allowFinalPurchase,
     captchaProvider: "CapMonster",
     captchaApiKeyConfigured: Boolean(process.env["CAPMONSTER_API_KEY"]?.trim()),
     liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],
@@ -569,6 +648,8 @@ app.on("before-quit", event => {
   quitting = true;
 
   void (async () => {
+    allowFinalPurchase = false;
+    await commerceExecutor?.setFinalPurchaseAllowed(false).catch(() => undefined);
     paymentSessions.clear();
     await commerceExecutor?.close().catch(() => undefined);
     orchestrator?.cleanup();

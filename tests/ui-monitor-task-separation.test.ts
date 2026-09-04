@@ -35,12 +35,13 @@ describe("ARES unified task control UX", () => {
     expect(html).toContain(">Zahlung</button>");
   });
 
-  it("exposes monitor-only and one-shot auto-checkout as task modes", () => {
+  it("exposes monitor-only, auto-checkout and Early Gate with global purchase control", () => {
     expect(html).toContain("Nur überwachen");
     expect(html).toContain("Bei Treffer Checkout vorbereiten");
-    expect(html).toContain("ONE-SHOT");
-    expect(html).toContain("einzigartig pro Checkout-Run");
-    expect(html).toContain("Finaler Kauf</span><strong>manuell");
+    expect(html).toContain("Early Gate");
+    expect(html).toContain("ONE CHILD");
+    expect(html).toContain("GLOBAL AUS");
+    expect(html).toContain("globalen Backend-Guard");
   });
 
   it("uses the compact graphite/lime control theme with minimal responsive behavior", () => {

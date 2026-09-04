@@ -62,6 +62,17 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
     }
   }
 
+  async updateDiscoveryKeywords(taskId: string, keywords: string[]): Promise<string[]> {
+    if (!this.delegate.updateDiscoveryKeywords) {
+      throw new Error("Dieser Browser-Executor unterstützt keine Live-Discovery-Keywords.");
+    }
+    return this.delegate.updateDiscoveryKeywords(taskId, keywords);
+  }
+
+  async setFinalPurchaseAllowed(allowed: boolean): Promise<void> {
+    await this.delegate.setFinalPurchaseAllowed?.(allowed === true);
+  }
+
   async cancelTask(taskId: string): Promise<void> {
     await this.delegate.cancelTask?.(taskId);
   }

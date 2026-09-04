@@ -34,6 +34,7 @@ export class ElectronService {
   private readonly previewMonitorEvents = new Map<string, any[]>();
   private readonly previewPaymentSessions = new Map<string, unknown>();
   private previewLogId = 0;
+  private previewAllowFinalPurchase = false;
 
   private get api(): any | undefined {
     return (window as any).ares;
@@ -115,7 +116,8 @@ export class ElectronService {
       shops: this.previewShops,
       platforms: COMMERCE_PLATFORMS,
       executorPlatforms: ["shopify"],
-      monitorReady: true
+      monitorReady: true,
+      earlyGateReady: true
     });
   }
 
@@ -130,7 +132,8 @@ export class ElectronService {
       success: true,
       shop: normalizedShop,
       executorReady: normalizedShop.platform === "shopify",
-      monitorReady: true
+      monitorReady: true,
+      earlyGateReady: true
     });
   }
 
@@ -213,6 +216,32 @@ export class ElectronService {
     return Promise.resolve({ success: true, task });
   }
 
+  updateDiscoveryKeywords(taskId: string, keywords: string[]): Promise<any> {
+    if (this.api) return this.api.updateDiscoveryKeywords(taskId, keywords);
+    const task = this.previewTasks.find(item => item.id === taskId);
+    if (!task || task.state !== "POST_QUEUE_DISCOVERY") {
+      return Promise.resolve({ success: false, error: "Discovery-Keywords können nur während POST_QUEUE_DISCOVERY geändert werden." });
+    }
+    const normalized = [...new Set(keywords.map(value => String(value).trim()).filter(Boolean))];
+    const postQueue = task.config.data?.["postQueueDiscovery"] as Record<string, unknown> | undefined;
+    task.config.data = {
+      ...(task.config.data ?? {}),
+      postQueueDiscovery: { ...(postQueue ?? {}), keywords: normalized, updatedAt: new Date().toISOString() }
+    };
+    return Promise.resolve({ success: true, taskId, keywords: normalized });
+  }
+
+  getFinalPurchaseSetting(): Promise<any> {
+    if (this.api) return this.api.getFinalPurchaseSetting();
+    return Promise.resolve({ success: true, allowFinalPurchase: this.previewAllowFinalPurchase });
+  }
+
+  setFinalPurchaseAllowed(allowed: boolean): Promise<any> {
+    if (this.api) return this.api.setFinalPurchaseAllowed(allowed);
+    this.previewAllowFinalPurchase = allowed === true;
+    return Promise.resolve({ success: true, allowFinalPurchase: this.previewAllowFinalPurchase });
+  }
+
   getTaskStatus(taskId: string): Promise<any> {
     if (this.api) return this.api.getTaskStatus(taskId);
     const task = this.previewTasks.find(item => item.id === taskId);
@@ -252,6 +281,8 @@ export class ElectronService {
       commercePlatforms: COMMERCE_PLATFORMS,
       commerceExecutorPlatforms: ["shopify"],
       commerceMonitorReady: true,
+      earlyGateReady: true,
+      allowFinalPurchase: this.previewAllowFinalPurchase,
       captchaProvider: "CapMonster",
       captchaApiKeyConfigured: false,
       liveChallengeSupport: ["turnstile", "recaptcha", "shopify-checkpoint"],

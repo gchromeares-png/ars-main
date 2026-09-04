@@ -4,6 +4,8 @@ import type { ProductMonitorEvent } from "../monitor/models";
 export interface ITaskExecutor {
   execute(task: Task): Promise<boolean>;
   cancelTask?(taskId: string): Promise<void>;
+  updateDiscoveryKeywords?(taskId: string, keywords: string[]): Promise<string[]>;
+  setFinalPurchaseAllowed?(allowed: boolean): Promise<void>;
   close?(): void | Promise<void>;
 }
 
