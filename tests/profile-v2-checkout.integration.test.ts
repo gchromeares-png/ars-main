@@ -102,7 +102,7 @@ describeBrowser("Profile V2 checkout mapping", () => {
     }
   });
 
-  it("maps Hamburg shipping and Berlin billing independently end-to-end", async () => {
+  it("maps Hamburg shipping and Berlin billing independently end-to-end with a PII-safe trace", async () => {
     const browser = await chromium.launch({ headless: true, channel: "chrome" }).catch(() => chromium.launch({ headless: true }));
     try {
       const page = await browser.newPage();
@@ -115,6 +115,45 @@ describeBrowser("Profile V2 checkout mapping", () => {
       expect(output.result.missing).toEqual([]);
       expect(output.result.writeCounts[targetKey(output.shippingTarget)]).toBe(1);
       expect(output.result.writeCounts[targetKey(output.billingTarget)]).toBe(1);
+
+      const trace = output.result.trace;
+      expect(trace?.schemaVersion).toBe(1);
+      expect(trace?.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          targetKey: targetKey(output.shippingTarget),
+          context: "shipping",
+          intent: "city",
+          resolverSource: { intent: "standard-metadata", context: "standard-metadata" },
+          confidence: 1,
+          billingMode: "explicit-billing",
+          valueAvailable: true,
+          action: "write",
+          result: "filled"
+        }),
+        expect.objectContaining({
+          targetKey: targetKey(output.billingTarget),
+          context: "billing",
+          intent: "city",
+          resolverSource: { intent: "standard-metadata", context: "standard-metadata" },
+          confidence: 1,
+          billingMode: "explicit-billing",
+          valueAvailable: true,
+          action: "write",
+          result: "filled"
+        })
+      ]));
+
+      const serializedTrace = JSON.stringify(trace);
+      for (const pii of [
+        "Hamburg",
+        "Berlin",
+        "Mönckebergstraße",
+        "Alexanderplatz",
+        "max@example.test",
+        "Mustermann"
+      ]) {
+        expect(serializedTrace).not.toContain(pii);
+      }
     } finally {
       await browser.close();
     }
