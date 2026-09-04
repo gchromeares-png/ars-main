@@ -13,7 +13,7 @@ function fakeLocator(initialValue = "", enabled = true): MutableFakeLocator {
     isVisible: async () => true,
     isEnabled: async () => enabled,
     inputValue: async () => value,
-    __set: next => { value = next; }
+    __set: (next: string) => { value = next; }
   } as unknown as MutableFakeLocator;
 }
 
