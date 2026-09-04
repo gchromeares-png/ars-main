@@ -48,6 +48,15 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     expect(manualController).not.toContain("connectOverCDP");
   });
 
+  it("sends the SeleniumBase start payload after installing the ready listener", () => {
+    const waitIndex = manualController.indexOf('const ready = this.waitForMessage(child, requestId, "ready", 30_000, true);');
+    const writeIndex = manualController.indexOf('child.stdin.write(`${JSON.stringify(payload)}\\n`);');
+    const awaitIndex = manualController.indexOf("const message = await ready;");
+    expect(waitIndex).toBeGreaterThanOrEqual(0);
+    expect(writeIndex).toBeGreaterThan(waitIndex);
+    expect(awaitIndex).toBeGreaterThan(writeIndex);
+  });
+
   it("implements SeleniumBase Stealthy Playwright Mode on the existing context/page only", () => {
     expect(adapter).toContain("self._sb.get_endpoint_url()");
     expect(adapter).toContain("playwright.chromium.connect_over_cdp(endpoint_url)");
