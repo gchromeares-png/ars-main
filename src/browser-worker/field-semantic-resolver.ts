@@ -341,11 +341,17 @@ export class FieldSemanticResolver {
   }
 
   private hasStrongBareNumberContext(field: FieldDescriptor): boolean {
-    const metadata = normalizeLower([field.name, field.id, field.autocomplete, field.placeholder, field.ariaLabel].filter(Boolean).join(" "));
-    if (/\b(house|street)[ _-]?(?:number|no|nr)\b|\bhaus(?:nummer|-?nr|nr)\b/i.test(metadata)) return true;
+    const metadata = normalizeLower([
+      field.name,
+      field.id,
+      field.autocomplete,
+      field.placeholder,
+      field.ariaLabel
+    ].filter(Boolean).join(" ")).replace(/[^a-z0-9äöüß]+/gi, " ");
+    if (/\b(?:house|street)\s*(?:number|no|nr)\b|\bhaus\s*(?:nummer|nr)\b/i.test(metadata)) return true;
 
-    const nearby = normalizeLower(field.nearbyText);
-    return /\b(hausnummer|haus\s*-?\s*nr\.?|hausnr\.?|house[ _-]?number|street[ _-]?number)\b/i.test(nearby);
+    const nearby = normalizeLower(field.nearbyText).replace(/[^a-z0-9äöüß]+/gi, " ");
+    return /\b(?:haus\s*(?:nummer|nr)|house\s*number|street\s*number)\b/i.test(nearby);
   }
 
   private resolveContextLexically(field: FieldDescriptor): ResolutionPart<AddressContext> | undefined {
