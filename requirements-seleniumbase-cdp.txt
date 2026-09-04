@@ -1,0 +1,4 @@
+# ARES SeleniumBase CDP / Stealthy Playwright Mode dependency.
+# SeleniumBase itself stays unmodified and is consumed as an external package.
+# The official SeleniumBase `playwright` extra provides its compatible Playwright floor.
+seleniumbase[playwright]==4.53.7

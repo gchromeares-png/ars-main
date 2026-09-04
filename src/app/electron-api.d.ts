@@ -12,6 +12,11 @@ declare global {
       getProfileBrowserStatus(profileId: string): Promise<any>;
       openProfileBrowser(profileId: string, startUrl?: string): Promise<any>;
       closeProfileBrowser(profileId: string): Promise<any>;
+      getSeleniumBaseProfileBrowserStatus(profileId: string): Promise<any>;
+      openSeleniumBaseProfileBrowser(profileId: string, startUrl?: string, cookieSnapshotId?: string): Promise<any>;
+      closeSeleniumBaseProfileBrowser(profileId: string): Promise<any>;
+      applySeleniumBaseCookieSnapshot(profileId: string, snapshotId: string): Promise<any>;
+      saveSeleniumBaseProfileCookieSnapshot(profileId: string, name: string, snapshotId?: string): Promise<any>;
       listProfileCookieSnapshots(profileId: string): Promise<any>;
       saveProfileCookieSnapshot(profileId: string, name: string, snapshotId?: string): Promise<any>;
       deleteProfileCookieSnapshot(profileId: string, snapshotId: string): Promise<any>;
