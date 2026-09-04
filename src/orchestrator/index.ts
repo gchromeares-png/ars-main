@@ -15,6 +15,7 @@ import { TaskRegistry } from "../task-registry";
 import { Task, TaskConfig, TaskState } from "../models";
 import { TaskExecutor } from "../task-executor";
 import { WorkerPool } from "../worker-pool";
+import { isEarlyGateChildTask, setEarlyGateRuntime } from "../monitor/early-gate";
 
 type RuntimeUpdateSource = ITaskExecutor & {
   onTaskUpdate?: (callback: (task: Task) => void) => () => void;
@@ -132,8 +133,7 @@ export class TaskOrchestrator {
       }
 
       if (success) {
-        this.transition(task, TaskState.CHECKOUT);
-        this.transition(task, TaskState.SUCCESS);
+        this.completeSuccessfulTask(task);
       } else {
         this.transition(task, TaskState.FAILED);
         this.eventBus.emit("taskFailed", task);
@@ -206,14 +206,32 @@ export class TaskOrchestrator {
   setTaskQueueWaiting(taskId: string, waiting: boolean): void {
     const task = this.registry.getTask(taskId);
     if (!task) return;
+    const queueStatus = task.config.data?.["queueStatus"] as Record<string, unknown> | undefined;
 
     if (waiting && task.state === TaskState.RUNNING) {
+      if (isEarlyGateChildTask(task)) {
+        setEarlyGateRuntime(task, {
+          activeArea: "browser-child",
+          queueEnteredAt: String(queueStatus?.["detectedAt"] ?? new Date().toISOString())
+        });
+      }
       this.transition(task, TaskState.WAITING_QUEUE);
       return;
     }
 
     if (!waiting && task.state === TaskState.WAITING_QUEUE) {
-      this.transition(task, TaskState.RUNNING);
+      const released = queueStatus?.["phase"] === "released";
+      if (isEarlyGateChildTask(task) && released) {
+        setEarlyGateRuntime(task, {
+          activeArea: "browser-child",
+          stage: "post-queue-discovery",
+          queueReleasedAt: String(queueStatus?.["releasedAt"] ?? queueStatus?.["updatedAt"] ?? new Date().toISOString()),
+          postQueueDiscoveryAt: String(queueStatus?.["releasedAt"] ?? queueStatus?.["updatedAt"] ?? new Date().toISOString())
+        });
+        this.transition(task, TaskState.POST_QUEUE_DISCOVERY);
+      } else if (!isEarlyGateChildTask(task) && queueStatus?.["phase"] !== "timed-out") {
+        this.transition(task, TaskState.RUNNING);
+      }
     }
   }
 
@@ -255,15 +273,54 @@ export class TaskOrchestrator {
     const current = this.registry.getTask(task.id);
     if (!current) return;
 
+    const before = current.state;
     const queueStatus = current.config.data?.["queueStatus"] as Record<string, unknown> | undefined;
     const waiting = Boolean(queueStatus?.["active"]);
-    const before = current.state;
     this.setTaskQueueWaiting(current.id, waiting);
+
+    if (!waiting) this.applyEarlyGateFlowState(current);
 
     if (current.state === before) {
       current.updatedAt = new Date();
       this.eventBus.emit("taskUpdated", current);
     }
+  }
+
+  private applyEarlyGateFlowState(task: Task): void {
+    if (!isEarlyGateChildTask(task)) return;
+    const flow = task.config.data?.["earlyGateFlow"] as Record<string, unknown> | undefined;
+    const stage = String(flow?.["stage"] ?? "");
+    const desired =
+      stage === "post-queue-discovery" ? TaskState.POST_QUEUE_DISCOVERY :
+      stage === "product-found" ? TaskState.PRODUCT_FOUND :
+      stage === "cart" ? TaskState.CART :
+      stage === "checkout" ? TaskState.CHECKOUT :
+      undefined;
+
+    if (!desired || task.state === desired) return;
+    if (this.stateMachine.canTransition(task.state, desired)) {
+      this.transition(task, desired);
+    }
+  }
+
+  private completeSuccessfulTask(task: Task): void {
+    if (task.state === TaskState.CHECKOUT) {
+      this.transition(task, TaskState.SUCCESS);
+      return;
+    }
+
+    if (this.stateMachine.canTransition(task.state, TaskState.CHECKOUT)) {
+      this.transition(task, TaskState.CHECKOUT);
+      this.transition(task, TaskState.SUCCESS);
+      return;
+    }
+
+    if (this.stateMachine.canTransition(task.state, TaskState.SUCCESS)) {
+      this.transition(task, TaskState.SUCCESS);
+      return;
+    }
+
+    throw new Error(`Task ${task.id} kann aus ${task.state} nicht erfolgreich abgeschlossen werden.`);
   }
 
   private enqueueTask(taskId: string): void {
@@ -299,6 +356,7 @@ export class TaskOrchestrator {
       TaskState.STARTING,
       TaskState.RUNNING,
       TaskState.WAITING_QUEUE,
+      TaskState.POST_QUEUE_DISCOVERY,
       TaskState.PRODUCT_FOUND,
       TaskState.CART,
       TaskState.CHECKOUT
