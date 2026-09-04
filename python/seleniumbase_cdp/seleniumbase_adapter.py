@@ -170,7 +170,7 @@ class SeleniumBaseCdpAdapter:
         """
         if chrome_pid:
             try:
-                psutil.Process(chrome_pid).wait(timeout=2.0)
+                psutil.Process(chrome_pid).wait(timeout=5.0)
             except (psutil.NoSuchProcess, psutil.TimeoutExpired):
                 pass
         time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
