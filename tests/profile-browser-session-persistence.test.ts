@@ -14,6 +14,10 @@ describe("profile-owned browser session persistence", () => {
     path.resolve(__dirname, "../src/browser-worker/worker.ts"),
     "utf8"
   );
+  const protocol = fs.readFileSync(
+    path.resolve(__dirname, "../src/browser-worker/protocol.ts"),
+    "utf8"
+  );
   const electronMain = fs.readFileSync(
     path.resolve(__dirname, "../src/electron/main.ts"),
     "utf8"
@@ -36,5 +40,15 @@ describe("profile-owned browser session persistence", () => {
   it("lets Chromium flush the persistent profile without closing all pages first", () => {
     expect(browserWorker).toContain("await handle.context.close()");
     expect(browserWorker).not.toContain("pages.map(p => p.close()");
+  });
+
+  it("does not synthesize or persist session cookies outside Chromium", () => {
+    for (const source of [browserWorker, manualBrowser, workerRuntime, protocol, electronMain]) {
+      expect(source).not.toMatch(/session[-_ ]?cookie[-_ ]?vault/i);
+      expect(source).not.toMatch(/sessionCookies/i);
+    }
+    expect(browserWorker).not.toContain("context.addCookies");
+    expect(manualBrowser).not.toContain("context.addCookies");
+    expect(workerRuntime).not.toContain("context.addCookies");
   });
 });
