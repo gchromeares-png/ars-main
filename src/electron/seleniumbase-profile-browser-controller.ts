@@ -3,8 +3,6 @@ import type { ChildProcessWithoutNullStreams } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
-import { chromium } from "patchright";
-import type { Browser, BrowserContext, Page } from "patchright";
 import type { AresProfile } from "../profiles/models";
 import type { AresProxy } from "../proxies/models";
 import type { BrowserProxyConfig } from "../browser-worker/types";
@@ -17,7 +15,6 @@ import { resolveProfileUserDataDir } from "../browser-worker/profile-session-man
 
 const WIRE_PREFIX = "ARES_SB_MANUAL\t";
 const SELENIUMBASE_PROFILE_DIR = ".ares-seleniumbase-cdp";
-const POST_NAVIGATION_CAPTCHA_DELAY_MS = 2_000;
 
 interface SeleniumBaseManualSession {
   profileId: string;
@@ -25,10 +22,6 @@ interface SeleniumBaseManualSession {
   userDataDir: string;
   startedAt: string;
   appliedSnapshotId?: string;
-  cdpEndpoint?: string;
-  patchrightBrowser?: Browser;
-  patchrightContext?: BrowserContext;
-  patchrightPage?: Page;
 }
 
 interface SeleniumBaseWireMessage {
@@ -41,7 +34,6 @@ interface SeleniumBaseWireMessage {
   count?: number;
   appliedCookieCount?: number;
   cookies?: ProfileCookieSnapshotCookie[];
-  endpointUrl?: string;
   error?: string;
 }
 
@@ -53,12 +45,6 @@ export interface SeleniumBaseProfileBrowserStatus {
   userDataDir: string;
   startedAt?: string;
   appliedSnapshotId?: string;
-}
-
-export interface SeleniumBasePatchrightNavigationResult {
-  endpointUrl: string;
-  url: string;
-  title: string;
 }
 
 export class SeleniumBaseProfileBrowserController {
@@ -99,9 +85,6 @@ export class SeleniumBaseProfileBrowserController {
     this.sessions.set(profileId, session);
     child.once("exit", () => {
       if (this.sessions.get(profileId)?.child === child) this.sessions.delete(profileId);
-      session.patchrightBrowser = undefined;
-      session.patchrightContext = undefined;
-      session.patchrightPage = undefined;
     });
 
     const snapshotId = String(cookieSnapshotId ?? "").trim();
@@ -114,37 +97,20 @@ export class SeleniumBaseProfileBrowserController {
       throw new Error("Cookie-Snapshot konnte für SeleniumBase nicht geladen werden.");
     }
 
-    const requestedStartUrl = startUrl?.trim() || "";
-    const proxy = this.resolveProxy(profile);
-    const bootstrapWithSeleniumBase = Boolean(requestedStartUrl && proxy?.username);
     const requestId = randomUUID();
     const payload = {
       type: "start",
       requestId,
       profileId,
       profileDir: userDataDir,
-      startUrl: bootstrapWithSeleniumBase ? requestedStartUrl : undefined,
-      proxy: this.toSeleniumBaseProxy(proxy),
+      startUrl: startUrl?.trim() || undefined,
+      proxy: this.toSeleniumBaseProxy(this.resolveProxy(profile)),
       userAgent: profile.browser?.userAgent || undefined,
       cookies
     };
 
     try {
       const message = await this.waitForMessage(child, requestId, "ready", 30_000, true);
-
-      if (requestedStartUrl) {
-        if (bootstrapWithSeleniumBase) {
-          await this.attachPatchright(profileId);
-          const activeSession = this.requireOpenSession(profileId);
-          const page = activeSession.patchrightPage;
-          if (!page) throw new Error("Patchright-Page fehlt nach dem CDP-Attach.");
-          await page.waitForTimeout(POST_NAVIGATION_CAPTCHA_DELAY_MS);
-          await this.requestCaptchaAttempt(activeSession);
-        } else {
-          await this.navigateWithPatchright(profileId, requestedStartUrl);
-        }
-      }
-
       return {
         engine: "seleniumbase-cdp",
         profileId,
@@ -159,69 +125,6 @@ export class SeleniumBaseProfileBrowserController {
       if (child.exitCode == null) child.kill("SIGTERM");
       throw error;
     }
-  }
-
-  async attachPatchright(profileId: string): Promise<{ endpointUrl: string; url: string }> {
-    const id = String(profileId ?? "").trim();
-    const session = this.requireOpenSession(id);
-    const existingPage = session.patchrightPage;
-    if (session.patchrightBrowser?.isConnected() && existingPage && !existingPage.isClosed()) {
-      return { endpointUrl: session.cdpEndpoint || "", url: existingPage.url() };
-    }
-
-    const requestId = randomUUID();
-    session.child.stdin.write(`${JSON.stringify({ type: "get-cdp-endpoint", requestId })}\n`);
-    const message = await this.waitForMessage(session.child, requestId, "cdp-endpoint", 10_000);
-    const endpointUrl = String(message.endpointUrl ?? "").trim();
-    if (!endpointUrl) throw new Error("SeleniumBase-CDP-Endpunkt fehlt.");
-
-    const browser = await chromium.connectOverCDP(endpointUrl);
-    const contexts = browser.contexts();
-    if (!contexts.length) throw new Error("Patchright fand keinen SeleniumBase Browser-Context.");
-    const context = contexts[0];
-    const pages = context.pages();
-    if (!pages.length) throw new Error("Patchright fand keine SeleniumBase Browser-Page.");
-    const page = pages[0];
-
-    session.cdpEndpoint = endpointUrl;
-    session.patchrightBrowser = browser;
-    session.patchrightContext = context;
-    session.patchrightPage = page;
-    browser.once("disconnected", () => {
-      if (session.patchrightBrowser === browser) {
-        session.patchrightBrowser = undefined;
-        session.patchrightContext = undefined;
-        session.patchrightPage = undefined;
-      }
-    });
-
-    return { endpointUrl, url: page.url() };
-  }
-
-  async navigateWithPatchright(
-    profileId: string,
-    url: string
-  ): Promise<SeleniumBasePatchrightNavigationResult> {
-    const target = String(url ?? "").trim();
-    if (!target) throw new Error("Navigation-URL fehlt.");
-
-    const attached = await this.attachPatchright(profileId);
-    const session = this.requireOpenSession(profileId);
-    const page = session.patchrightPage;
-    if (!page || page.isClosed()) throw new Error("Patchright-Page ist nicht verfügbar.");
-
-    await page.goto(target, {
-      waitUntil: "domcontentloaded",
-      timeout: 30_000
-    });
-    await page.waitForTimeout(POST_NAVIGATION_CAPTCHA_DELAY_MS);
-    await this.requestCaptchaAttempt(session);
-
-    return {
-      endpointUrl: attached.endpointUrl,
-      url: page.url(),
-      title: await page.title()
-    };
   }
 
   async applySnapshot(profileId: string, snapshotId: string): Promise<{ count: number; snapshotId: string }> {
@@ -262,11 +165,6 @@ export class SeleniumBaseProfileBrowserController {
     const session = this.sessions.get(id);
     if (!session) return this.status(id);
 
-    session.patchrightBrowser = undefined;
-    session.patchrightContext = undefined;
-    session.patchrightPage = undefined;
-    session.cdpEndpoint = undefined;
-
     const child = session.child;
     if (child.exitCode == null) {
       const requestId = randomUUID();
@@ -304,12 +202,6 @@ export class SeleniumBaseProfileBrowserController {
 
   async closeAll(): Promise<void> {
     await Promise.allSettled([...this.sessions.keys()].map(profileId => this.close(profileId)));
-  }
-
-  private async requestCaptchaAttempt(session: SeleniumBaseManualSession): Promise<void> {
-    const requestId = randomUUID();
-    session.child.stdin.write(`${JSON.stringify({ type: "solve-captcha", requestId })}\n`);
-    await this.waitForMessage(session.child, requestId, "captcha-attempted", 15_000);
   }
 
   private requireOpenSession(profileId: string): SeleniumBaseManualSession {
