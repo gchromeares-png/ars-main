@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -23,6 +26,7 @@ class SeleniumBaseCdpAdapter:
         headless: bool,
         proxy: str | None = None,
         user_agent: str | None = None,
+        restore_last_session: bool = False,
     ) -> None:
         self.profile_dir = Path(profile_dir).expanduser().resolve()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -31,6 +35,8 @@ class SeleniumBaseCdpAdapter:
             "user_data_dir": str(self.profile_dir),
             "headless": bool(headless),
         }
+        if restore_last_session:
+            kwargs["browser_args"] = ["--restore-last-session"]
         if proxy:
             kwargs["proxy"] = proxy
         if user_agent:
@@ -141,6 +147,7 @@ class SeleniumBaseCdpAdapter:
         if self._closed:
             return
         self._closed = True
+        chrome_pid = self.chrome_pid
         if self._playwright is not None:
             try:
                 self._playwright.stop()
@@ -150,6 +157,26 @@ class SeleniumBaseCdpAdapter:
                 self._playwright_context = None
                 self._playwright_page = None
         self._sb.quit()
+        self._wait_for_profile_flush(chrome_pid)
+
+    @staticmethod
+    def _wait_for_profile_flush(chrome_pid: int | None) -> None:
+        """Do not reopen a persistent profile while Chrome is still settling.
+
+        SeleniumBase already performs a graceful Pure-CDP browser close. Windows
+        can still need a short disk-settle window before the same user-data-dir is
+        opened by a new process. Waiting here keeps the lifecycle SeleniumBase-owned
+        while preventing an immediate reopen from racing cookie/session persistence.
+        """
+        if chrome_pid:
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(chrome_pid, 0)
+                except OSError:
+                    break
+                time.sleep(0.05)
+        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
 
     @staticmethod
     def _cookie_param(cookie: Dict[str, Any]) -> mycdp.network.CookieParam:
