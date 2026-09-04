@@ -1,10 +1,13 @@
-import { mkdir, rm } from "fs/promises";
+import { mkdir } from "fs/promises";
 import * as path from "path";
 import { chromium } from "patchright";
 import type { BrowserContext, Page } from "patchright";
 import { BrowserLaunchError } from "./errors";
 import type { BrowserContextConfig, BrowserContextHandle, BrowserProxyConfig } from "./types";
 import { attachLiveChallengePageWatcher } from "../challenges/live-challenge-page-watcher";
+
+const WEBRTC_PROXY_POLICY = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp";
+const WEBRTC_PERMISSION_CHECK = "--enforce-webrtc-ip-permission-check";
 
 function assertTaskId(taskId: string): void {
   if (!taskId || !taskId.trim()) {
@@ -34,24 +37,31 @@ function toProxy(proxy?: BrowserProxyConfig): {
   };
 }
 
+function buildChromiumArgs(config: BrowserContextConfig): string[] | undefined {
+  const args = [...(config.args ?? [])];
+  if (!config.proxy) return args.length ? args : undefined;
+
+  // A proxied browser must not open a parallel non-proxied WebRTC UDP route.
+  const hardened = args.filter(arg => !arg.startsWith("--force-webrtc-ip-handling-policy="));
+  if (!hardened.includes(WEBRTC_PERMISSION_CHECK)) {
+    hardened.push(WEBRTC_PERMISSION_CHECK);
+  }
+  hardened.push(WEBRTC_PROXY_POLICY);
+  return hardened;
+}
+
 async function initialPage(context: BrowserContext): Promise<Page> {
   const pages = context.pages();
   return pages[0] ?? context.newPage();
 }
 
-async function clearStaleChromeLocks(userDataDir: string): Promise<void> {
-  const staleLockFiles = ["SingletonLock", "SingletonCookie", "SingletonSocket"];
-  await Promise.all(
-    staleLockFiles.map(name =>
-      rm(path.join(userDataDir, name), { force: true }).catch(() => undefined)
-    )
-  );
-}
-
 export async function launchBrowserContext(config: BrowserContextConfig): Promise<BrowserContextHandle> {
   assertTaskId(config.taskId);
   await mkdir(config.userDataDir, { recursive: true });
-  await clearStaleChromeLocks(config.userDataDir);
+
+  // Never unlink Chromium Singleton* files blindly. Chromium owns stale-profile
+  // recovery; deleting a live lock can allow two persistent contexts to touch
+  // the same cookie/history SQLite files after an unclean worker shutdown.
 
   let context: BrowserContext | undefined;
   const launchOptions = {
@@ -61,7 +71,7 @@ export async function launchBrowserContext(config: BrowserContextConfig): Promis
     locale: config.locale,
     timezoneId: config.timezoneId,
     viewport: config.viewport === undefined ? null : config.viewport,
-    args: config.args ? [...config.args] : undefined
+    args: buildChromiumArgs(config)
   };
 
   try {
