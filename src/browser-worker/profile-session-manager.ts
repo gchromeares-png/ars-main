@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { deleteRegisteredProfileCookieSnapshots } from "../cookies/profile-cookie-snapshot-registry";
 import { BrowserProfileInUseError } from "./errors";
 
 const PROFILE_LOCK_FILE = ".ares-profile.lock";
@@ -41,38 +42,23 @@ function lockPathFor(userDataDir: string): string {
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  try { process.kill(pid, 0); return true; }
+  catch { return false; }
 }
 
 function readLock(lockPath: string): BrowserProfileLockRecord | undefined {
   try {
     const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8")) as Partial<BrowserProfileLockRecord>;
     if (!parsed.ownerId || !parsed.pid || !parsed.acquiredAt) return undefined;
-    return {
-      ownerId: String(parsed.ownerId),
-      pid: Number(parsed.pid),
-      acquiredAt: String(parsed.acquiredAt)
-    };
-  } catch {
-    return undefined;
-  }
+    return { ownerId: String(parsed.ownerId), pid: Number(parsed.pid), acquiredAt: String(parsed.acquiredAt) };
+  } catch { return undefined; }
 }
 
 function removeStaleLock(lockPath: string): boolean {
   const current = readLock(lockPath);
   if (current && isProcessAlive(current.pid)) return false;
-  try {
-    fs.unlinkSync(lockPath);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === "ENOENT";
-  }
+  try { fs.unlinkSync(lockPath); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
 }
 
 export function inspectBrowserProfileLease(userDataDir: string): BrowserProfileLockRecord | undefined {
@@ -96,19 +82,12 @@ export function acquireBrowserProfileLease(userDataDir: string, ownerId: string)
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const acquiredAt = new Date().toISOString();
-    const record: BrowserProfileLockRecord = {
-      ownerId: normalizedOwner,
-      pid: process.pid,
-      acquiredAt
-    };
+    const record: BrowserProfileLockRecord = { ownerId: normalizedOwner, pid: process.pid, acquiredAt };
 
     try {
       const fd = fs.openSync(lockPath, "wx");
-      try {
-        fs.writeFileSync(fd, JSON.stringify(record), "utf8");
-      } finally {
-        fs.closeSync(fd);
-      }
+      try { fs.writeFileSync(fd, JSON.stringify(record), "utf8"); }
+      finally { fs.closeSync(fd); }
 
       let released = false;
       return {
@@ -123,9 +102,7 @@ export function acquireBrowserProfileLease(userDataDir: string, ownerId: string)
           const current = readLock(lockPath);
           if (current && current.ownerId === normalizedOwner && current.pid === process.pid) {
             try { fs.unlinkSync(lockPath); }
-            catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            }
+            catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
           }
         }
       };
@@ -143,12 +120,11 @@ export function acquireBrowserProfileLease(userDataDir: string, ownerId: string)
 
 export function removeProfileUserDataDir(profileId: string, configuredRoot?: string): void {
   const userDataDir = resolveProfileUserDataDir(profileId, configuredRoot);
-  if (!fs.existsSync(userDataDir)) return;
-
-  const lease = acquireBrowserProfileLease(userDataDir, `delete:${profileId}`);
-  try {
-    fs.rmSync(userDataDir, { recursive: true, force: true });
-  } finally {
-    lease.release();
+  const exists = fs.existsSync(userDataDir);
+  if (exists) {
+    const lease = acquireBrowserProfileLease(userDataDir, `delete:${profileId}`);
+    try { fs.rmSync(userDataDir, { recursive: true, force: true }); }
+    finally { lease.release(); }
   }
+  deleteRegisteredProfileCookieSnapshots(profileId);
 }
