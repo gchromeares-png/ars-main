@@ -1,4 +1,4 @@
-import type { Page } from "patchright";
+import type { Locator, Page } from "patchright";
 import type { CommerceShop } from "../platforms";
 import { ProductMatcher } from "../../monitor/product-matcher";
 import type { ProductObservation } from "../../monitor/models";
@@ -55,6 +55,7 @@ function inStock(availability: unknown): boolean {
 }
 
 const FINAL_PURCHASE_TEXT = /(?:zahlungspflichtig\s+bestellen|jetzt\s+(?:kaufen|bezahlen)|bestellung\s+(?:aufgeben|abschließen)|place\s+order|pay\s+now|complete\s+(?:order|purchase)|submit\s+order)/i;
+const SAFE_CONTINUE_TEXT = /(?:^|\s)(?:weiter|fortfahren|weiter\s+zur\s+(?:lieferung|versand|zahlung|bezahlung|übersicht)|zur\s+übersicht|continue|continue\s+to\s+(?:shipping|delivery|payment|review)|review\s+order|save\s+and\s+continue)(?:\s|$)/i;
 
 export class PokemonCenterReleaseJourney implements ReleaseJourney {
   private readonly matcher = new ProductMatcher();
@@ -146,7 +147,31 @@ export class PokemonCenterReleaseJourney implements ReleaseJourney {
     }
   }
 
+  async isReadyForFinalSubmit(page: Page, _shop: CommerceShop): Promise<boolean> {
+    return Boolean(await this.findButton(page, FINAL_PURCHASE_TEXT));
+  }
+
+  async advanceCheckout(page: Page, _shop: CommerceShop): Promise<boolean> {
+    const candidate = await this.findButton(page, SAFE_CONTINUE_TEXT, FINAL_PURCHASE_TEXT);
+    if (!candidate) return false;
+    await candidate.click();
+    await page.waitForLoadState("domcontentloaded", { timeout: 12_000 }).catch(() => undefined);
+    await page.waitForTimeout(350).catch(() => undefined);
+    return true;
+  }
+
   async submitOrder(page: Page, _shop: CommerceShop, allowFinalPurchase: () => boolean): Promise<boolean> {
+    const candidate = await this.findButton(page, FINAL_PURCHASE_TEXT);
+    if (!candidate) return false;
+
+    // Hard backend-side guard immediately before the irreversible submit click.
+    if (!allowFinalPurchase()) return false;
+    await candidate.click();
+    await page.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => undefined);
+    return true;
+  }
+
+  private async findButton(page: Page, include: RegExp, exclude?: RegExp): Promise<Locator | undefined> {
     const candidates = page.locator('button, input[type="submit"], [role="button"]');
     const count = Math.min(await candidates.count().catch(() => 0), 120);
     for (let index = 0; index < count; index++) {
@@ -159,14 +184,10 @@ export class PokemonCenterReleaseJourney implements ReleaseJourney {
         element.getAttribute("data-test") || "",
         element.getAttribute("data-testid") || ""
       ].join(" ").replace(/\s+/g, " ").trim()).catch(() => "");
-      if (!FINAL_PURCHASE_TEXT.test(text)) continue;
-
-      // Hard backend-side guard immediately before the irreversible submit click.
-      if (!allowFinalPurchase()) return false;
-      await candidate.click();
-      await page.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => undefined);
-      return true;
+      if (!include.test(text)) continue;
+      if (exclude?.test(text)) continue;
+      return candidate;
     }
-    return false;
+    return undefined;
   }
 }
