@@ -6,7 +6,7 @@ import type { ITaskExecutor } from "../interfaces";
 import type { Task } from "../models";
 import type { AresProfile } from "../profiles/models";
 import type { AresProxy, ProxySelection } from "../proxies/models";
-import type { ShopifyRuntimeShop } from "./runtime-types";
+import type { RuntimeShop } from "./runtime-types";
 import type { BrowserWorkerHealth } from "./types";
 import type { BrowserWorkerRequest, BrowserWorkerResponse } from "./protocol";
 
@@ -55,6 +55,7 @@ export class BrowserWorkerProcessClient {
   private lastHeartbeatAt?: Date;
   private restartCount = 0;
   private lastFailure?: string;
+  private desiredFinalPurchaseAllowed = false;
 
   constructor(
     private readonly requestTimeoutMs: number,
@@ -78,11 +79,12 @@ export class BrowserWorkerProcessClient {
     await this.ensureReady();
   }
 
-  async execute(task: Task, shop: ShopifyRuntimeShop, profile: AresProfile): Promise<boolean> {
+  async execute(task: Task, shop: RuntimeShop, profile: AresProfile): Promise<boolean> {
     this.taskIds.add(task.id);
     this.taskRefs.set(task.id, task);
     try {
       await this.ensureReady();
+      await this.syncFinalPurchasePermission();
       const response = await this.request({
         type: "execute",
         requestId: randomUUID(),
@@ -103,6 +105,26 @@ export class BrowserWorkerProcessClient {
     }
   }
 
+  async updateDiscoveryKeywords(taskId: string, keywords: string[]): Promise<string[]> {
+    if (!this.owns(taskId)) throw new Error(`Browser Worker besitzt Task ${taskId} nicht.`);
+    await this.ensureReady();
+    const response = await this.request({
+      type: "update-discovery-keywords",
+      requestId: randomUUID(),
+      taskId,
+      keywords
+    }, 10_000);
+    if (response.type !== "ack") throw new Error(`Unerwartete Keyword-Antwort: ${response.type}`);
+    return response.keywords ?? [];
+  }
+
+  async setFinalPurchaseAllowed(allowed: boolean): Promise<void> {
+    this.desiredFinalPurchaseAllowed = allowed === true;
+    if (!this.child || this.child.killed) return;
+    await this.ensureReady();
+    await this.syncFinalPurchasePermission();
+  }
+
   async cancelTask(taskId: string): Promise<void> {
     if (!this.child) {
       this.taskIds.delete(taskId);
@@ -120,16 +142,10 @@ export class BrowserWorkerProcessClient {
   }
 
   async health(): Promise<BrowserWorkerProcessHealth> {
-    if (!this.child || this.child.killed) {
-      return this.snapshot(false);
-    }
-
+    if (!this.child || this.child.killed) return this.snapshot(false);
     await this.ensureReady();
     const response = await this.request({ type: "health", requestId: randomUUID() }, this.heartbeatTimeoutMs);
-    if (response.type !== "health-result") {
-      throw new Error(`Unerwartete Health-Antwort: ${response.type}`);
-    }
-
+    if (response.type !== "health-result") throw new Error(`Unerwartete Health-Antwort: ${response.type}`);
     this.lastHeartbeatAt = new Date();
     return {
       pid: response.pid,
@@ -160,7 +176,6 @@ export class BrowserWorkerProcessClient {
     if (!child || child.killed) return;
     this.closing = true;
     this.stopHeartbeat();
-
     try {
       await this.request({ type: "shutdown", requestId: randomUUID() }, 4_000);
     } catch {
@@ -172,6 +187,15 @@ export class BrowserWorkerProcessClient {
     if (!this.child || this.child.killed) this.spawnWorker();
     if (!this.ready) throw new Error("Browser Worker konnte nicht initialisiert werden.");
     return this.ready;
+  }
+
+  private async syncFinalPurchasePermission(): Promise<void> {
+    const response = await this.request({
+      type: "set-final-purchase-permission",
+      requestId: randomUUID(),
+      allowed: this.desiredFinalPurchaseAllowed
+    }, 10_000);
+    if (response.type !== "ack") throw new Error(`Unerwartete Purchase-Permission-Antwort: ${response.type}`);
   }
 
   private spawnWorker(): void {
@@ -222,11 +246,8 @@ export class BrowserWorkerProcessClient {
     for (const line of lines) {
       if (!line.trim()) continue;
       let message: BrowserWorkerResponse;
-      try {
-        message = JSON.parse(line) as BrowserWorkerResponse;
-      } catch {
-        continue;
-      }
+      try { message = JSON.parse(line) as BrowserWorkerResponse; }
+      catch { continue; }
 
       if (message.type === "ready") {
         this.pid = message.pid;
@@ -255,7 +276,6 @@ export class BrowserWorkerProcessClient {
       if (!pending) continue;
       clearTimeout(pending.timeout);
       this.pending.delete(requestId);
-
       if (message.type === "error") pending.reject(new Error(message.error));
       else pending.resolve(message);
     }
@@ -288,10 +308,7 @@ export class BrowserWorkerProcessClient {
   private startHeartbeat(): void {
     this.stopHeartbeat();
     if (this.heartbeatIntervalMs <= 0) return;
-
-    this.heartbeatTimer = setInterval(() => {
-      void this.runHeartbeat();
-    }, this.heartbeatIntervalMs);
+    this.heartbeatTimer = setInterval(() => void this.runHeartbeat(), this.heartbeatIntervalMs);
     this.heartbeatTimer.unref();
   }
 
@@ -305,7 +322,6 @@ export class BrowserWorkerProcessClient {
     if (this.closing || this.heartbeatInFlight || !this.child || this.child.killed) return;
     const child = this.child;
     this.heartbeatInFlight = true;
-
     try {
       const response = await this.request({ type: "health", requestId: randomUUID() }, this.heartbeatTimeoutMs);
       if (response.type !== "health-result") {
@@ -330,10 +346,7 @@ export class BrowserWorkerProcessClient {
     this.lastFailure = error.message;
     if (!child.killed) child.kill("SIGKILL");
     this.handleWorkerExit(error, child);
-
-    if (shouldReplace && !this.child) {
-      this.spawnWorker();
-    }
+    if (shouldReplace && !this.child) this.spawnWorker();
   }
 
   private handleWorkerExit(error: Error, child = this.child): void {
@@ -349,6 +362,7 @@ export class BrowserWorkerProcessClient {
     this.pid = undefined;
     this.nodeVersion = undefined;
     this.taskIds.clear();
+    this.taskRefs.clear();
 
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
@@ -369,9 +383,10 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
   private readonly heartbeatTimeoutMs: number;
   private readonly executeTimeoutMs: number;
   private readonly getProxy: (proxyId: string) => AresProxy | undefined;
+  private allowFinalPurchase = false;
 
   constructor(
-    private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
+    private readonly getShop: (shopId: string) => RuntimeShop | undefined,
     private readonly getProfile: (profileId: string) => AresProfile | undefined,
     options: {
       processCount?: number;
@@ -387,9 +402,7 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     this.getProxy = options.getProxy ?? (() => undefined);
     // @ts-ignore
     const requestedCount = options.processCount ?? Number(process.env.ARES_BROWSER_WORKER_PROCESSES ?? "1");
-    const processCount = Number.isFinite(requestedCount)
-      ? Math.min(4, Math.max(1, Math.floor(requestedCount)))
-      : 1;
+    const processCount = Number.isFinite(requestedCount) ? Math.min(4, Math.max(1, Math.floor(requestedCount))) : 1;
     const requestTimeoutMs = options.requestTimeoutMs ?? 120_000;
     this.executeTimeoutMs = options.executeTimeoutMs ?? 65 * 60_000;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
@@ -442,15 +455,15 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     }
 
     let effectiveProfile: AresProfile;
-    try {
-      effectiveProfile = this.resolveEffectiveProfile(task, profile);
-    } catch (error) {
+    try { effectiveProfile = this.resolveEffectiveProfile(task, profile); }
+    catch (error) {
       task.lastError = error instanceof Error ? error.message : String(error);
       return false;
     }
 
     const client = this.taskOwners.get(task.id) ?? this.leastLoadedClient();
     this.taskOwners.set(task.id, client);
+    await client.setFinalPurchaseAllowed(this.allowFinalPurchase);
     try {
       return await client.execute(task, shop, effectiveProfile);
     } catch (error) {
@@ -461,14 +474,22 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     }
   }
 
+  async updateDiscoveryKeywords(taskId: string, keywords: string[]): Promise<string[]> {
+    const owner = this.taskOwners.get(taskId);
+    if (!owner) throw new Error(`Laufender Browser-Child ${taskId} wurde nicht gefunden.`);
+    return owner.updateDiscoveryKeywords(taskId, keywords);
+  }
+
+  async setFinalPurchaseAllowed(allowed: boolean): Promise<void> {
+    this.allowFinalPurchase = allowed === true;
+    await Promise.all(this.clients.map(client => client.setFinalPurchaseAllowed(this.allowFinalPurchase)));
+  }
+
   async cancelTask(taskId: string): Promise<void> {
     const owner = this.taskOwners.get(taskId);
     if (!owner) return;
-    try {
-      await owner.cancelTask(taskId);
-    } finally {
-      this.taskOwners.delete(taskId);
-    }
+    try { await owner.cancelTask(taskId); }
+    finally { this.taskOwners.delete(taskId); }
   }
 
   async health(): Promise<BrowserWorkerPoolHealth> {
@@ -485,6 +506,7 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
   }
 
   async close(): Promise<void> {
+    this.allowFinalPurchase = false;
     this.taskOwners.clear();
     this.runtimeListeners.clear();
     await Promise.allSettled(this.clients.map(client => client.close()));
@@ -502,15 +524,11 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     }
 
     const proxyId = mode === "proxy" ? selection?.proxyId : profile.preferredProxyId;
-    if (mode === "proxy" && !proxyId) {
-      throw new Error("Proxy-Modus gewählt, aber keine Proxy-ID zugeordnet.");
-    }
+    if (mode === "proxy" && !proxyId) throw new Error("Proxy-Modus gewählt, aber keine Proxy-ID zugeordnet.");
 
     if (proxyId) {
       const proxy = this.getProxy(proxyId);
-      if (!proxy) {
-        throw new Error(`Zugeordneter Proxy ${proxyId} ist nicht mehr vorhanden.`);
-      }
+      if (!proxy) throw new Error(`Zugeordneter Proxy ${proxyId} ist nicht mehr vorhanden.`);
       data["proxyRuntime"] = { mode, proxyId: proxy.id, proxyName: proxy.name };
       task.config.data = data;
       return {
@@ -525,9 +543,7 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
       };
     }
 
-    data["proxyRuntime"] = profile.proxy?.host
-      ? { mode: "legacy-profile" }
-      : { mode: "direct" };
+    data["proxyRuntime"] = profile.proxy?.host ? { mode: "legacy-profile" } : { mode: "direct" };
     task.config.data = data;
     return profile;
   }
