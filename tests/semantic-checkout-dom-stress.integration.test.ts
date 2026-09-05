@@ -171,18 +171,15 @@ describeBrowser("semantic checkout DOM stress guard", () => {
     expect(await value(page, "billing-postal")).toBe("10178");
   });
 
-  it("handles a Mozilla-style shipping/billing autocomplete corpus and ignores unsupported fields", async () => {
+  it("handles standards-compliant Mozilla-style shipping/billing autocomplete alternatives and ignores unsupported fields", async () => {
     const html = `<!doctype html><html><body><form>
       <h2>Shipping</h2>
       <label>given-name <input data-slot="s-first" autocomplete="shipping given-name"></label>
       <label>family-name <input data-slot="s-last" autocomplete="shipping family-name"></label>
       <label>name <input data-slot="s-name" autocomplete="shipping name"></label>
       <label>street-address <input data-slot="s-street-address" autocomplete="shipping street-address"></label>
-      <label>address-line1 <input data-slot="s-line1" autocomplete="shipping address-line1"></label>
-      <label>address-line2 <input data-slot="s-line2" autocomplete="shipping address-line2"></label>
       <label>address-level2 <input data-slot="s-city" autocomplete="shipping address-level2"></label>
       <label>postal-code <input data-slot="s-postal" autocomplete="shipping postal-code"></label>
-      <label>country <input data-slot="s-country" autocomplete="shipping country"></label>
       <label>country-name <input data-slot="s-country-name" autocomplete="shipping country-name"></label>
       <label>email <input data-slot="s-email" autocomplete="shipping email"></label>
       <label>tel <input data-slot="s-tel" autocomplete="shipping tel"></label>
@@ -190,7 +187,6 @@ describeBrowser("semantic checkout DOM stress guard", () => {
       <label>address-level1 <input data-slot="s-level1" autocomplete="shipping address-level1"></label>
 
       <h2>Billing</h2>
-      <label>street-address <input data-slot="b-street-address" autocomplete="billing street-address"></label>
       <label>address-line1 <input data-slot="b-line1" autocomplete="billing address-line1"></label>
       <label>address-line2 <input data-slot="b-line2" autocomplete="billing address-line2"></label>
       <label>address-level2 <input data-slot="b-city" autocomplete="billing address-level2"></label>
@@ -208,16 +204,12 @@ describeBrowser("semantic checkout DOM stress guard", () => {
     expect(await value(page, "s-last")).toBe("Mustermann");
     expect(await value(page, "s-name")).toBe("Max Mustermann");
     expect(await value(page, "s-street-address")).toBe("Mönckebergstraße 7");
-    expect(await value(page, "s-line1")).toBe("Mönckebergstraße 7");
-    expect(await value(page, "s-line2")).toBe("3. OG");
     expect(await value(page, "s-city")).toBe("Hamburg");
     expect(await value(page, "s-postal")).toBe("20095");
-    expect(await value(page, "s-country")).toBe("DE");
     expect(await value(page, "s-country-name")).toBe("DE");
     expect(await value(page, "s-email")).toBe("max@example.test");
     expect(await value(page, "s-tel")).toBe("+491701234567");
 
-    expect(await value(page, "b-street-address")).toBe("Alexanderplatz 1");
     expect(await value(page, "b-line1")).toBe("Alexanderplatz 1");
     expect(await value(page, "b-line2")).toBe("Büro 4");
     expect(await value(page, "b-city")).toBe("Berlin");
