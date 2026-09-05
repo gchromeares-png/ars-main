@@ -4,7 +4,7 @@ import * as path from "path";
 
 const repoRoot = path.resolve(__dirname, "..");
 const pythonDir = path.join(repoRoot, "python", "seleniumbase_cdp");
-const registryPath = path.join(pythonDir, "task_browser_worker_oopif.py");
+const registryPath = path.join(pythonDir, "task_browser_worker_oopif_impl.py");
 const workerPath = path.join(repoRoot, "src", "browser-worker", "seleniumbase-browser-worker.ts");
 
 function pythonExecutable(): string {
