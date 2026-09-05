@@ -16,7 +16,7 @@ class CompositeSliderGrounder:
 
     def ground(self, state: Dict[str, Any]) -> Dict[str, Any]:
         primary = self._primary.ground(state)
-        if bool(primary.get("found")):
+        if bool(primary.get("grounded")):
             return {**primary, "fallbackProvider": self._ddddocr.status()}
 
         optional = self._ddddocr.ground(state)
