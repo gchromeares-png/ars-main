@@ -1,6 +1,8 @@
 import { Component, Input, OnDestroy, OnInit } from "@angular/core";
 import { ElectronService } from "../services/electron.service";
 import { ProfileBrowserService, type ProfileBrowserStatusView } from "../services/profile-browser.service";
+import type { AresProfile } from "../../profiles/models";
+import { clearProfileBrowserUserAgent } from "../../profiles/profile-browser-reset";
 
 interface QueueView {
   active?: boolean;
@@ -222,7 +224,43 @@ export class RuntimeControlComponent implements OnInit, OnDestroy {
         return;
       }
       this.profileBrowserStatuses[profileId] = result.status;
-      this.actionMessage = `Profil-Browser ${profile?.name || profileId} geschlossen.`;
+      this.actionMessage = `Profil-Browser ${profile?.name || profileId} geschlossen. Session bleibt erhalten.`;
+    } finally {
+      this.profileBrowserBusyIds.delete(profileId);
+    }
+  }
+
+  async resetProfileBrowserSession(profile: AresProfile): Promise<void> {
+    const profileId = String(profile?.id ?? "").trim();
+    if (!profileId || this.profileBrowserBusyIds.has(profileId)) return;
+    const confirmed = typeof window === "undefined" || window.confirm(
+      `Browser-Session für ${profile.name || profileId} vollständig löschen?\n\n` +
+      "Browserdaten, Cookies, Storage, Cache, Cookie-Snapshots und der gespeicherte User-Agent werden entfernt. Adresse, Proxy und Zahlung bleiben erhalten."
+    );
+    if (!confirmed) return;
+
+    this.profileBrowserBusyIds.add(profileId);
+    this.actionMessage = "";
+    const profileWithoutUserAgent = clearProfileBrowserUserAgent(profile);
+    try {
+      const saveResult = await this.electron.saveProfile(profileWithoutUserAgent);
+      if (!saveResult?.success) {
+        this.actionMessage = saveResult?.error || "User-Agent konnte vor dem Session-Reset nicht sicher zurückgesetzt werden.";
+        return;
+      }
+
+      const resetResult = await this.profileBrowser.resetSession(profileId);
+      if (!resetResult?.success) {
+        const rollback = await this.electron.saveProfile(profile).catch(() => undefined);
+        this.actionMessage = rollback?.success
+          ? (resetResult?.error || "Browser-Session konnte nicht gelöscht werden; User-Agent wurde wiederhergestellt.")
+          : `${resetResult?.error || "Browser-Session konnte nicht gelöscht werden."} User-Agent-Rollback ebenfalls fehlgeschlagen.`;
+        return;
+      }
+
+      this.profileBrowserStatuses[profileId] = resetResult.status;
+      this.actionMessage = `Profil ${profile.name || profileId}: Browserdaten, Cookie-Snapshots und User-Agent vollständig gelöscht.`;
+      await this.refreshRuntime();
     } finally {
       this.profileBrowserBusyIds.delete(profileId);
     }
