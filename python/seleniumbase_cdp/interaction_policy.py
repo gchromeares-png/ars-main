@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
 POLICY_FILENAME = ".ares-interaction-policy.json"
@@ -19,6 +19,25 @@ _DEFAULTS: Dict[str, Any] = {
     "captureOnCanvas": True,
     "captureOnVerificationFailure": True,
     "maxSavedCaptures": 40,
+    "textHints": [
+        "verify", "verification", "challenge", "security", "secure", "gate", "check", "confirm",
+        "prüfen", "bestätigen", "sicherheit", "verifizieren",
+    ],
+    "fingerprintSelectors": [
+        "iframe",
+        "dialog",
+        "[role=dialog]",
+        "canvas",
+        "input[type=range]",
+        "[role=slider]",
+        "[aria-valuenow]",
+        "[class*=slider i]",
+        "[class*=grid i]",
+        "[class*=tile i]",
+        "[class*=modal i]",
+        "[class*=overlay i]",
+    ],
+    "prioritySelectors": [],
 }
 
 
@@ -36,6 +55,9 @@ class InteractionPolicy:
         for key in _DEFAULTS:
             if key.startswith("captureOn"):
                 merged[key] = bool(merged[key])
+        merged["textHints"] = self._strings(merged.get("textHints"), max_items=64, max_len=80)
+        merged["fingerprintSelectors"] = self._strings(merged.get("fingerprintSelectors"), max_items=64, max_len=180)
+        merged["prioritySelectors"] = self._strings(merged.get("prioritySelectors"), max_items=32, max_len=180)
         self._values = merged
 
     @classmethod
@@ -57,6 +79,18 @@ class InteractionPolicy:
     def max_saved_captures(self) -> int:
         return int(self._values["maxSavedCaptures"])
 
+    @property
+    def text_hints(self) -> List[str]:
+        return list(self._values["textHints"])
+
+    @property
+    def fingerprint_selectors(self) -> List[str]:
+        return list(self._values["fingerprintSelectors"])
+
+    @property
+    def priority_selectors(self) -> List[str]:
+        return list(self._values["prioritySelectors"])
+
     def capture_enabled(self, event: str) -> bool:
         mapping = {
             "page-load": "captureOnPageLoad",
@@ -74,3 +108,19 @@ class InteractionPolicy:
 
     def status(self) -> Dict[str, Any]:
         return {**self._values, "filename": POLICY_FILENAME}
+
+    @staticmethod
+    def _strings(value: Any, *, max_items: int, max_len: int) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        result: List[str] = []
+        seen = set()
+        for item in value:
+            text = str(item or "").strip()
+            if not text or len(text) > max_len or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+            if len(result) >= max_items:
+                break
+        return result
