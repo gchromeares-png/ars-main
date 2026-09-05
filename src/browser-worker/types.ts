@@ -45,13 +45,14 @@ export interface BrowserPage extends BrowserFrame {
   title(): Promise<string>;
   isClosed(): boolean;
   frames(): BrowserFrame[];
+  mainFrame(): BrowserFrame;
   frameLocator(selector: string): BrowserFrameLocator;
   evaluate<T = unknown>(fn: ((...args: any[]) => T) | string, ...args: any[]): Promise<T>;
   waitForTimeout(ms: number): Promise<void>;
   waitForLoadState(state?: string, options?: { timeout?: number }): Promise<void>;
   bringToFront(): Promise<void>;
-  on(event: "response", listener: (response: BrowserResponse) => void): BrowserPage;
-  off(event: "response", listener: (response: BrowserResponse) => void): BrowserPage;
+  on(event: string, listener: (...args: any[]) => void): BrowserPage;
+  off(event: string, listener: (...args: any[]) => void): BrowserPage;
   mouse: {
     move(x: number, y: number): Promise<void>;
     click(x: number, y: number, options?: Record<string, unknown>): Promise<void>;
