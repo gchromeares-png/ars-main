@@ -18,6 +18,7 @@ from interaction_outcome import from_semantic_result, from_visual_result
 from interaction_policy import InteractionPolicy
 from observation_capture import ObservationCapture
 from page_observation_watchdog import PageObservationWatchdog
+from runtime_identity import BrowserRuntimeIdentity
 from semantic_interaction_runtime import SemanticInteractionRuntime
 from visual_interaction_runtime import VisualInteractionRuntime
 
@@ -39,6 +40,8 @@ class SeleniumBaseCdpAdapter:
     ) -> None:
         self.profile_dir = Path(profile_dir).expanduser().resolve()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
+        self._runtime_identity = BrowserRuntimeIdentity.create(self.profile_dir)
+        runtime_started = time.monotonic()
 
         kwargs: Dict[str, Any] = {
             "user_data_dir": str(self.profile_dir),
@@ -49,14 +52,21 @@ class SeleniumBaseCdpAdapter:
         if user_agent:
             kwargs["agent"] = user_agent
         clean_args = [str(value).strip() for value in (browser_args or []) if str(value).strip()]
-        if clean_args:
-            kwargs["browser_args"] = clean_args
+        kwargs["browser_args"] = self._runtime_identity.browser_args(clean_args)
         if language:
             kwargs["lang"] = str(language)
         if timezone:
             kwargs["tzone"] = str(timezone)
 
-        self._sb = sb_cdp.Chrome(**kwargs)
+        try:
+            self._sb = sb_cdp.Chrome(**kwargs)
+        except Exception:
+            self._runtime_identity.clear()
+            raise
+        self._runtime_metadata = self._runtime_identity.ready_metadata(
+            self,
+            startup_ms=(time.monotonic() - runtime_started) * 1000.0,
+        )
         self._challenge_tracker = ChallengeStateTracker(self._sb)
         self._visual_interactions = VisualInteractionRuntime(
             self._sb,
@@ -95,7 +105,16 @@ class SeleniumBaseCdpAdapter:
         pid = getattr(driver, "_process_pid", None)
         return int(pid) if isinstance(pid, int) and pid > 0 else None
 
+    def runtime_metadata(self) -> Dict[str, Any]:
+        return dict(self._runtime_metadata)
+
     def _profile_browser_pids(self) -> List[int]:
+        # Prefer ARES runtime identity over profile-name inference. The UUID is
+        # assigned before Chromium starts and inherited by its process family.
+        runtime_matches = self._runtime_identity.browser_pids()
+        if runtime_matches:
+            return runtime_matches
+
         target = os.path.normcase(str(self.profile_dir))
         matches: List[int] = []
         for process in psutil.process_iter(["pid", "cmdline"]):
@@ -201,6 +220,7 @@ class SeleniumBaseCdpAdapter:
             "url": str(self._sb.get_current_url() or ""),
             "title": str(self._sb.get_title() or ""),
             "cookies": self.get_snapshot_cookies(),
+            "runtime": self.runtime_metadata(),
             "interactionOutcome": self.interaction_outcome_state(),
         }
 
@@ -360,19 +380,22 @@ class SeleniumBaseCdpAdapter:
         if chrome_pid and chrome_pid not in browser_pids:
             browser_pids.insert(0, chrome_pid)
         try:
-            self._sb.get_all_cookies()
-        except Exception:
-            pass
-        # SeleniumBase's underlying Pure-CDP stop path can terminate Chromium
-        # directly. Ask Chromium itself to close first so Windows can commit the
-        # profile cookie database and local storage before any hard fallback.
-        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
-        graceful_close = self._request_graceful_browser_close()
-        if graceful_close:
-            self._wait_for_profile_flush(browser_pids)
-            return
-        self._sb.quit()
-        self._wait_for_profile_flush(browser_pids)
+            try:
+                self._sb.get_all_cookies()
+            except Exception:
+                pass
+            # SeleniumBase's underlying Pure-CDP stop path can terminate Chromium
+            # directly. Ask Chromium itself to close first so Windows can commit the
+            # profile cookie database and local storage before any hard fallback.
+            time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
+            graceful_close = self._request_graceful_browser_close()
+            if graceful_close:
+                self._wait_for_profile_flush(browser_pids)
+            else:
+                self._sb.quit()
+                self._wait_for_profile_flush(browser_pids)
+        finally:
+            self._runtime_identity.clear()
 
     @staticmethod
     def _wait_for_profile_flush(browser_pids: Iterable[int]) -> None:
