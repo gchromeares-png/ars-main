@@ -11,6 +11,7 @@ describe("SeleniumBase automatic interaction runtime", () => {
   const controller = read("python/seleniumbase_cdp/auto_interaction_controller.py");
   const vision = read("python/seleniumbase_cdp/vision_grid_classifier.py");
   const worker = read("python/seleniumbase_cdp/manual_profile_browser.py");
+  const capture = read("python/seleniumbase_cdp/observation_capture.py");
 
   it("keeps grid and slider auto interactions enabled without blocking task RPC liveness", () => {
     expect(adapter).toContain("self._visual_interactions = VisualInteractionRuntime(");
@@ -31,6 +32,19 @@ describe("SeleniumBase automatic interaction runtime", () => {
     expect(worker).toContain('\"autoInteractionsEnabled\": True');
     expect(worker).toContain('\"sliderActionsEnabled\": True');
     expect(worker).not.toContain("authorizedTestMode");
+  });
+
+  it("keeps the visual watchdog alive throughout a manual profile browser session", () => {
+    expect(worker).toContain("adapter._poll_observation_watchdog()");
+    expect(worker).toContain("challenge that appears after SeleniumBase clicks the initial checkbox");
+    expect(worker).toContain('\"debugCaptureRoot\": debug_root');
+  });
+
+  it("persists screenshot debug metadata beside every retained observation", () => {
+    expect(capture).toContain('metadata_path = path.with_suffix(".json")');
+    expect(capture).toContain('self._root / "latest.json"');
+    expect(capture).toContain('\"debugRoot\": str(self._root)');
+    expect(capture).toContain('\"metadataPath\"');
   });
 
   it("detects sliders structurally with shadow and iframe traversal plus overrides", () => {
