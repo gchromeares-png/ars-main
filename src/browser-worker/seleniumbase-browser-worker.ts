@@ -272,6 +272,9 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
     const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath || "";
     const candidates = [
       configured,
+      path.join(process.cwd(), "python", "seleniumbase_cdp", "task_browser_worker_entry.py"),
+      path.join(__dirname, "../../python/seleniumbase_cdp/task_browser_worker_entry.py"),
+      resourcesPath ? path.join(resourcesPath, "python", "seleniumbase_cdp", "task_browser_worker_entry.py") : undefined,
       path.join(process.cwd(), "python", "seleniumbase_cdp", "task_browser_worker.py"),
       path.join(__dirname, "../../python/seleniumbase_cdp/task_browser_worker.py"),
       resourcesPath ? path.join(resourcesPath, "python", "seleniumbase_cdp", "task_browser_worker.py") : undefined
