@@ -26,8 +26,9 @@ describe("external Node browser worker architecture", () => {
   });
 
   it("keeps locator construction lazy and defers RPC until a real operation", () => {
-    expect(rpcPage).toContain("constructing this object performs zero RPC calls");
-    expect(rpcPage).toContain("locatorOperation(");
+    expect(rpcPage).toContain("constructor(private readonly page: SeleniumBaseRpcPage, private readonly descriptor: LocatorDescriptor) {}");
+    expect(rpcPage).toContain("locator(selector: string): Locator { return new SeleniumBaseRpcLocator(this, { selector }); }");
+    expect(rpcPage).toContain("return this.page.locatorOperation(action, this.descriptor, extra, timeoutMs)");
     expect(rpcPage).toContain('this.op("click"');
     expect(rpcPage).toContain('this.op("fill"');
   });
