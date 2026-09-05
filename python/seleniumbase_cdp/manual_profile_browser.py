@@ -140,6 +140,7 @@ def _start(command: Dict[str, Any]) -> int:
             "gridActionsEnabled": True,
             "sliderActionsEnabled": True,
             "autoInteractionsEnabled": True,
+            "semanticInteractionsEnabled": True,
         })
 
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
@@ -193,6 +194,14 @@ def _start(command: Dict[str, Any]) -> int:
                     _emit({"type": "site-slider-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.site_slider_state()}); continue
                 if command_type == "auto-interaction-state":
                     _emit({"type": "auto-interaction-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.auto_interaction_state()}); continue
+                if command_type == "observe-semantic-fields":
+                    _emit({"type": "semantic-fields", "requestId": next_request_id, "profileId": profile_id, "fields": adapter.observe_semantic_fields()}); continue
+                if command_type == "execute-semantic-plan":
+                    plan = next_command.get("plan")
+                    if not isinstance(plan, list):
+                        raise ValueError("execute-semantic-plan requires a plan array")
+                    result = adapter.execute_semantic_plan(plan)
+                    _emit({"type": "semantic-plan-result", "requestId": next_request_id, "profileId": profile_id, **result}); continue
                 if command_type == "apply-grid-selection":
                     indexes = next_command.get("indexes")
                     if not isinstance(indexes, list):
@@ -204,7 +213,7 @@ def _start(command: Dict[str, Any]) -> int:
                     result = adapter.apply_slider(target)
                     _emit({"type": "slider-applied", "requestId": next_request_id, "profileId": profile_id, **result}); continue
                 if command_type == "status":
-                    _emit({"type": "status", "requestId": next_request_id, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True, "gridActionsEnabled": True, "sliderActionsEnabled": True, "autoInteractionsEnabled": True}); continue
+                    _emit({"type": "status", "requestId": next_request_id, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True, "gridActionsEnabled": True, "sliderActionsEnabled": True, "autoInteractionsEnabled": True, "semanticInteractionsEnabled": True}); continue
                 raise ValueError(f"Unsupported SeleniumBase command: {command_type!r}")
             except Exception as exc:
                 _emit({"type": "error", "requestId": next_request_id, "profileId": profile_id, "errorType": type(exc).__name__, "error": str(exc)})

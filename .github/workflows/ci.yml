@@ -33,6 +33,7 @@ jobs:
           python/seleniumbase_cdp/slider_target_grounder.py
           python/seleniumbase_cdp/interaction_trace.py
           python/seleniumbase_cdp/visual_interaction_runtime.py
+          python/seleniumbase_cdp/semantic_interaction_runtime.py
           python/seleniumbase_cdp/auto_interaction_controller.py
           python/seleniumbase_cdp/site_grid_adapter.py
           python/seleniumbase_cdp/site_slider_adapter.py
@@ -43,6 +44,9 @@ jobs:
 
       - name: Verify visual grounding and cursor planning
         run: python python/seleniumbase_cdp/visual_grounding_probe.py
+
+      - name: Verify semantic interaction runtime
+        run: python python/seleniumbase_cdp/semantic_interaction_probe.py
 
       - name: Verify SeleniumBase challenge state tracker
         run: python python/seleniumbase_cdp/challenge_state_tracker_probe.py

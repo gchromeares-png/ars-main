@@ -6,6 +6,14 @@ import { randomUUID } from "crypto";
 import type { AresProfile } from "../profiles/models";
 import type { AresProxy } from "../proxies/models";
 import type { BrowserProxyConfig } from "../browser-worker/types";
+import {
+  UnifiedInteractionPipeline,
+  type ObservedSemanticField,
+  type SemanticExecutionPlanItem,
+  type SemanticExecutionResult,
+  type SemanticValueBag,
+  type UnifiedInteractionRun
+} from "../browser-worker/unified-interaction-pipeline";
 import type { ProfileCookieSnapshotCookie, ProfileCookieSnapshotSummary } from "../cookies/profile-cookie-snapshot-vault";
 import {
   readRegisteredProfileCookieSnapshot,
@@ -34,6 +42,12 @@ interface SeleniumBaseWireMessage {
   count?: number;
   appliedCookieCount?: number;
   cookies?: ProfileCookieSnapshotCookie[];
+  fields?: ObservedSemanticField[];
+  planned?: number;
+  applied?: number;
+  verified?: boolean;
+  results?: SemanticExecutionResult["results"];
+  fallbackNeeded?: SemanticExecutionResult["fallbackNeeded"];
   error?: string;
 }
 
@@ -129,6 +143,39 @@ export class SeleniumBaseProfileBrowserController {
     }
   }
 
+  async autofill(profileId: string, values: SemanticValueBag): Promise<UnifiedInteractionRun> {
+    const id = String(profileId ?? "").trim();
+    const pipeline = new UnifiedInteractionPipeline({
+      observeFields: () => this.observeSemanticFields(id),
+      executePlan: plan => this.executeSemanticPlan(id, plan)
+    });
+    return pipeline.autofill(values);
+  }
+
+  async observeSemanticFields(profileId: string): Promise<ObservedSemanticField[]> {
+    const message = await this.sendCommand(profileId, "observe-semantic-fields", "semantic-fields", {}, 12_000);
+    return Array.isArray(message.fields) ? message.fields : [];
+  }
+
+  async executeSemanticPlan(profileId: string, plan: SemanticExecutionPlanItem[]): Promise<SemanticExecutionResult> {
+    const message = await this.sendCommand(
+      profileId,
+      "execute-semantic-plan",
+      "semantic-plan-result",
+      { plan },
+      15_000
+    );
+    const results = Array.isArray(message.results) ? message.results : [];
+    const fallbackNeeded = Array.isArray(message.fallbackNeeded) ? message.fallbackNeeded : [];
+    return {
+      planned: Number(message.planned ?? plan.length),
+      applied: Number(message.applied ?? 0),
+      verified: Boolean(message.verified),
+      results,
+      fallbackNeeded
+    };
+  }
+
   async applySnapshot(profileId: string, snapshotId: string): Promise<{ count: number; snapshotId: string }> {
     const id = String(profileId ?? "").trim();
     const selected = String(snapshotId ?? "").trim();
@@ -204,6 +251,19 @@ export class SeleniumBaseProfileBrowserController {
 
   async closeAll(): Promise<void> {
     await Promise.allSettled([...this.sessions.keys()].map(profileId => this.close(profileId)));
+  }
+
+  private async sendCommand(
+    profileId: string,
+    type: string,
+    expectedType: string,
+    payload: Record<string, unknown>,
+    timeoutMs: number
+  ): Promise<SeleniumBaseWireMessage> {
+    const session = this.requireOpenSession(String(profileId ?? "").trim());
+    const requestId = randomUUID();
+    session.child.stdin.write(`${JSON.stringify({ type, requestId, ...payload })}\n`);
+    return this.waitForMessage(session.child, requestId, expectedType, timeoutMs);
   }
 
   private requireOpenSession(profileId: string): SeleniumBaseManualSession {
