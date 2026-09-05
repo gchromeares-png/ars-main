@@ -1,5 +1,5 @@
 import { path as ghostCursorPath } from "ghost-cursor";
-import type { Page } from "patchright";
+import type { Page } from "./types";
 import type { InteractionPoint } from "./interaction-models";
 
 export interface PointerClickOptions {
@@ -16,13 +16,12 @@ export interface PointerDriver {
  * Normal browser pointer driver.
  *
  * `ghost-cursor`'s high-level cursor object is coupled to Puppeteer's private
- * CDP client. Patchright intentionally does not expose that private Puppeteer
- * API, so using createCursor(page) can compile while failing at runtime.
+ * CDP client. ARES does not depend on that private Puppeteer API.
  *
  * We therefore use ghost-cursor's browser-independent path generator and let
- * Patchright execute those generated pointer coordinates through its public
- * mouse API. InteractionEngine still owns readiness, target selection,
- * retries and outcome verification.
+ * the active ARES page execute those generated pointer coordinates through its
+ * public mouse contract. InteractionEngine still owns readiness, target
+ * selection, retries and outcome verification.
  */
 export class GhostCursorPointerDriver implements PointerDriver {
   private position: InteractionPoint = { x: 0, y: 0 };

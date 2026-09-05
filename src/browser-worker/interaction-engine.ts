@@ -1,4 +1,4 @@
-import type { Locator, Page } from "patchright";
+import type { Locator, Page } from "./types";
 import {
   DEFAULT_INTERACTION_PROFILES,
   type BaseInteractionOptions,

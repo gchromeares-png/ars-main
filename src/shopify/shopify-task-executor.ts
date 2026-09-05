@@ -3,7 +3,7 @@ import * as os from "os";
 import * as path from "path";
 import * as http from "http";
 import * as https from "https";
-import type { Page } from "patchright";
+import type { Page } from "../browser-worker/types";
 import { ITaskExecutor } from "../interfaces";
 import { Task } from "../models";
 import { AresProfile } from "../profiles/models";
@@ -14,7 +14,7 @@ import { SemanticCheckoutProfilePlanner } from "../browser-worker/semantic-check
 import { semanticTarget, type FieldIntent, type SemanticTarget } from "../browser-worker/semantic-target";
 import { GhostCursorUiInteractionHelper } from "../browser-worker/ui-interaction-helper";
 import type { BrowserWorker } from "../browser-worker/browser-worker";
-import { PatchrightBrowserWorker } from "../browser-worker/patchright-browser-worker";
+import { SeleniumBaseBrowserWorker } from "../browser-worker/seleniumbase-browser-worker";
 import type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
 import { LiveChallengeHandler } from "../challenges/live-challenge-handler";
 import type { LiveChallengeResult } from "../challenges/types";
@@ -58,7 +58,7 @@ interface ShopifyFlowResult {
   product?: ShopifyProductMatch;
 }
 
-export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
+export class ShopifyTaskExecutor implements ITaskExecutor {
   private readonly productCache = new Map<string, { expiresAt: number; products: ShopifyProduct[] }>();
   private readonly requestDelayMs = 500;
   private readonly cacheTtlMs = 45_000;
@@ -68,7 +68,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
   constructor(
     private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
     private readonly getProfile: (profileId: string) => AresProfile | undefined = () => undefined,
-    private readonly browserWorker: BrowserWorker = new PatchrightBrowserWorker(),
+    private readonly browserWorker: BrowserWorker = new SeleniumBaseBrowserWorker(),
     private readonly liveChallengeHandler: LiveChallengeHandler = new LiveChallengeHandler(),
     private readonly onTaskUpdate: (task: Task) => void = () => undefined
   ) {}
@@ -181,7 +181,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
         ...(task.config.data ?? {}),
         profileId,
         browserSession: {
-          type: "patchright-chromium",
+          type: "seleniumbase-cdp",
           isolatedPerTask: true,
           userDataDir
         },
@@ -218,7 +218,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
   }
 
   async closeAll(): Promise<void> {
-    if (this.browserWorker instanceof PatchrightBrowserWorker) {
+    if (this.browserWorker instanceof SeleniumBaseBrowserWorker) {
       await this.browserWorker.shutdown();
       return;
     }

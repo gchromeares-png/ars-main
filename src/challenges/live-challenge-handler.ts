@@ -1,6 +1,6 @@
 import { createCursor } from "ghost-cursor";
 import { CapMonsterSolver } from "./capmonster-solver";
-import type { Page } from "patchright";
+import type { Page } from "../browser-worker/types";
 import { LiveChallengeDetector } from "./live-challenge-detector";
 import type {
   LiveChallengeDetection,

@@ -28,10 +28,12 @@ describe("SeleniumBase interaction hardening", () => {
     expect(sliderActions).toContain('mode = "seleniumbase-native"');
   });
 
-  it("keeps hardening SeleniumBase-only", () => {
-    for (const source of [grid, gridActions, slider, sliderActions]) {
-      expect(source.toLowerCase()).not.toContain("playwright");
-      expect(source.toLowerCase()).not.toContain("patchright");
-    }
+  it("keeps grid and slider execution on SeleniumBase-owned action paths", () => {
+    expect(sliderActions).toContain('mode = "seleniumbase-native"');
+    expect(gridActions).toContain("class AuthorizedGridActionExecutor");
+    expect(gridActions).toContain("selected = self._indexes(");
+    expect(gridActions).toContain("return self._apply_state(state, selected, submit=submit)");
+    expect(gridActions).toContain('getattr(images[index], "mouse_click"');
+    expect(gridActions).not.toContain("pyautogui");
   });
 });

@@ -1,4 +1,4 @@
-import type { Page } from "patchright";
+import type { Page } from "../../src/browser-worker/types";
 import type { AresProfile } from "../../src/profiles/models";
 import type { FieldSemanticResolver } from "../../src/browser-worker/field-semantic-resolver";
 import { SemanticCheckoutProfilePlanner } from "../../src/browser-worker/semantic-checkout-profile-planner";
@@ -29,7 +29,8 @@ export async function runCheckoutFixtureStage(
   stageId?: string
 ): Promise<CheckoutFixtureRunResult> {
   const fixture = loadCheckoutFixtureStage(manifestPath, stageId);
-  await page.setContent(fixture.html, { waitUntil: "domcontentloaded" });
+  const fixtureUrl = `data:text/html;charset=utf-8,${encodeURIComponent(fixture.html)}`;
+  await page.goto(fixtureUrl, { waitUntil: "domcontentloaded" });
 
   const interactions = new GhostCursorUiInteractionHelper(page);
   const plan = await new SemanticCheckoutProfilePlanner(interactions).prepare(page, profile);

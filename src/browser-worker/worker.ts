@@ -3,7 +3,7 @@ import type { BrowserWorkerRequest, BrowserWorkerResponse } from "./protocol";
 import type { AresProfile } from "../profiles/models";
 import type { CheckoutPaymentSession, PaymentPreparationResult } from "../payments/models";
 import type { RuntimeShop } from "./runtime-types";
-import type { PatchrightShopifyTaskExecutor as ShopifyExecutorType } from "../shopify/patchright-shopify-executor";
+import type { ShopifyTaskExecutor as ShopifyExecutorType } from "../shopify/shopify-task-executor";
 import type { EarlyGateBrowserTaskExecutor as EarlyGateExecutorType } from "./early-gate-task-executor";
 import type { AresBrowserRuntime as BrowserCoreType } from "./ares-browser-runtime";
 import type { PokemonCenterReleaseJourney as PokemonCenterJourneyType } from "../commerce/pokemon-center/release-journey";
@@ -18,7 +18,7 @@ if (nodeMajor < 20) {
 }
 
 const { AresBrowserRuntime } = require("./ares-browser-runtime") as { AresBrowserRuntime: typeof BrowserCoreType; };
-const { PatchrightShopifyTaskExecutor } = require("../shopify/patchright-shopify-executor") as { PatchrightShopifyTaskExecutor: typeof ShopifyExecutorType; };
+const { ShopifyTaskExecutor } = require("../shopify/shopify-task-executor") as { ShopifyTaskExecutor: typeof ShopifyExecutorType; };
 const { EarlyGateBrowserTaskExecutor } = require("./early-gate-task-executor") as { EarlyGateBrowserTaskExecutor: typeof EarlyGateExecutorType; };
 const { PokemonCenterReleaseJourney } = require("../commerce/pokemon-center/release-journey") as { PokemonCenterReleaseJourney: typeof PokemonCenterJourneyType; };
 
@@ -54,7 +54,7 @@ const emitTaskUpdate = (task: any) => {
   send({ type: "task-update", taskId: task.id, taskPatch: { config: task.config, lastError: task.lastError } });
 };
 
-const shopifyExecutor = new PatchrightShopifyTaskExecutor(
+const shopifyExecutor = new ShopifyTaskExecutor(
   shopId => { const shop = shops.get(shopId); return shop && isShopifyRuntimeShop(shop) ? shop : undefined; },
   profileId => profiles.get(profileId), browserCore, undefined, emitTaskUpdate
 );

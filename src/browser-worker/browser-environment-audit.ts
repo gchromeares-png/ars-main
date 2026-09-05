@@ -1,4 +1,4 @@
-import type { Page } from "patchright";
+import type { Page } from "./types";
 import type {
   BrowserEnvironmentAudit,
   BrowserEnvironmentIssue,

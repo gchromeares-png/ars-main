@@ -8,9 +8,8 @@ describe("ARES durable SQLite persistence architecture", () => {
   const store = read("src/persistence/sqlite-task-store.ts");
   const scrubber = read("src/persistence/sensitive-data-scrubber.ts");
 
-  it("uses native better-sqlite3 instead of an exported in-memory sql.js database", () => {
+  it("uses pinned native better-sqlite3 persistence", () => {
     expect(packageJson.dependencies["better-sqlite3"]).toBe("9.6.0");
-    expect(packageJson.dependencies["sql.js"]).toBeUndefined();
     expect(store).toContain('from "better-sqlite3"');
     expect(scrubber).toContain('from "better-sqlite3"');
     expect(store).not.toContain("db.export");

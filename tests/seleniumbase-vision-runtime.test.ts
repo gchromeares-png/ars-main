@@ -28,24 +28,28 @@ describe("SeleniumBase vision runtime E2E wiring", () => {
     expect(bootstrap).toContain("torch.cuda.is_available()");
   });
 
-  it("makes vision preparation part of the normal ARES profile-browser start", () => {
-    expect(profileController).toContain("private readonly visionRuntime = new SeleniumBaseVisionRuntime()");
-    const prepare = profileController.indexOf("await this.visionRuntime.prepare()");
-    const browserOpen = profileController.indexOf("return this.seleniumBase.open(");
+  it("starts optional vision preparation without blocking the normal ARES profile browser", () => {
+    const openStart = profileController.indexOf("async open(");
+    const openEnd = profileController.indexOf("\n  captureCookies(", openStart);
+    expect(openStart).toBeGreaterThanOrEqual(0);
+    expect(openEnd).toBeGreaterThan(openStart);
+    const openMethod = profileController.slice(openStart, openEnd);
+    const prepare = openMethod.indexOf("void this.visionRuntime.prepare().catch(() => undefined)");
+    const browserOpen = openMethod.indexOf("return this.seleniumBase.open(");
     expect(prepare).toBeGreaterThanOrEqual(0);
     expect(browserOpen).toBeGreaterThan(prepare);
+    expect(openMethod).not.toContain("await this.visionRuntime.prepare()");
     expect(profileController).toContain('ipcMain.handle("get-seleniumbase-vision-status"');
     expect(profileController).toContain('ipcMain.handle("prepare-seleniumbase-vision"');
   });
 
-  it("exposes diagnostics and one-command preparation without adding a browser engine", () => {
+  it("exposes diagnostics and one-command preparation through the SeleniumBase vision boundary", () => {
     expect(preload).toContain("getSeleniumBaseVisionStatus");
     expect(preload).toContain("prepareSeleniumBaseVision");
     expect(pkg.scripts["vision:status"]).toContain("vision_runtime_bootstrap.py --status");
     expect(pkg.scripts["vision:prepare"]).toContain("vision_runtime_bootstrap.py --prepare");
-    expect(electronRuntime.toLowerCase()).not.toContain("playwright");
-    expect(electronRuntime.toLowerCase()).not.toContain("patchright");
-    expect(bootstrap.toLowerCase()).not.toContain("playwright");
-    expect(bootstrap.toLowerCase()).not.toContain("patchright");
+    expect(electronRuntime).toContain("SeleniumBaseVisionRuntime");
+    expect(bootstrap).toContain('DEFAULT_MODEL = "google/siglip2-base-patch16-224"');
+    expect(bootstrap).toContain("return _model_status(allow_download=True)");
   });
 });

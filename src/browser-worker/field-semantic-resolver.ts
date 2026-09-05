@@ -1,6 +1,6 @@
 import * as http from "http";
 import * as https from "https";
-import type { Locator, Page } from "patchright";
+import type { Locator, Page } from "./types";
 import {
   semanticTarget,
   type AddressContext,

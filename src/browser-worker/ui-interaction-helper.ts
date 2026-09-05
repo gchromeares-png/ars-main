@@ -1,4 +1,4 @@
-import type { Locator, Page } from "patchright";
+import type { Locator, Page } from "./types";
 import { InteractionEngine } from "./interaction-engine";
 import type { InteractionOutcomeExpectation } from "./interaction-policies";
 import { GhostCursorPointerDriver } from "./pointer-driver";

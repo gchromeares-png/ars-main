@@ -115,14 +115,19 @@ jobs:
         with:
           node-version: 20
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install SeleniumBase task runtime dependency
+        run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
+
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
       - name: Verify GhostCursor and Bezier path providers
         run: node python/seleniumbase_cdp/cursor_path_helper_probe.cjs
-
-      - name: Install Patchright Chrome
-        run: npm run browser:install -- --with-deps
 
       - name: Run targeted payment gates
         env:

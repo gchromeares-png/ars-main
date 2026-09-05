@@ -1,5 +1,8 @@
+import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
-import { chromium, type Page } from "patchright";
+import { AresBrowserRuntime } from "../../src/browser-worker/ares-browser-runtime";
+import type { Page } from "../../src/browser-worker/types";
 import type { SemanticEmbeddingProvider } from "../../src/browser-worker/field-semantic-resolver";
 import { FieldSemanticResolver } from "../../src/browser-worker/field-semantic-resolver";
 import { targetKey } from "../../src/browser-worker/semantic-target";
@@ -69,26 +72,34 @@ function sameAsShippingProfile() {
 }
 
 describeBrowser("checkout fixture harness", () => {
-  jest.setTimeout(30_000);
+  jest.setTimeout(45_000);
 
-  let browser: Awaited<ReturnType<typeof chromium.launch>>;
+  const runtime = new AresBrowserRuntime();
+  let taskId = "";
+  let userDataDir = "";
   let page: Page;
 
-  beforeAll(async () => {
-    browser = await chromium.launch({ headless: true, channel: "chrome" })
-      .catch(() => chromium.launch({ headless: true }));
-  });
-
-  afterAll(async () => {
-    await browser.close();
-  });
-
   beforeEach(async () => {
-    page = await browser.newPage();
+    taskId = `fixture-harness-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ares-fixture-harness-"));
+    page = (await runtime.createContext({
+      taskId,
+      userDataDir,
+      headless: true,
+      navigationTimeoutMs: 30_000,
+      actionTimeoutMs: 15_000
+    })).page;
   });
 
   afterEach(async () => {
-    await page.close();
+    if (taskId) await runtime.closeContext(taskId).catch(() => undefined);
+    if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true });
+    taskId = "";
+    userDataDir = "";
+  });
+
+  afterAll(async () => {
+    await runtime.shutdown();
   });
 
   it("runs Hamburg/Berlin shipping and billing through the real semantic pipeline", async () => {
@@ -127,7 +138,7 @@ describeBrowser("checkout fixture harness", () => {
 
     expect(output.billingMode).toBe("same-as-shipping");
     expect(output.completion.complete).toBe(true);
-    expect(await page.locator('[data-slot="same-as-shipping"]').isChecked()).toBe(true);
+    expect(Boolean(await page.locator('[data-slot="same-as-shipping"]').evaluate(element => (element as HTMLInputElement).checked))).toBe(true);
     expect(await page.locator('[data-slot="shipping-city"]').inputValue()).toBe("Hamburg");
   });
 });

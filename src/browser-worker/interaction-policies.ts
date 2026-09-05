@@ -1,4 +1,4 @@
-import type { Locator, Page } from "patchright";
+import type { Locator, Page } from "./types";
 import type { InteractionTargetState } from "./interaction-models";
 
 export interface InteractionReadinessPolicy {

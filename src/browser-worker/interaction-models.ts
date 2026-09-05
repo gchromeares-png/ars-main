@@ -1,4 +1,4 @@
-import type { Locator } from "patchright";
+import type { Locator } from "./types";
 import type { InteractionOutcomeExpectation, InteractionReadinessPolicy } from "./interaction-policies";
 
 export interface InteractionPoint {

@@ -14,12 +14,12 @@
   <ng-container *ngIf="profileId && mode === 'manage'">
     <div class="browser-engine-grid">
       <div class="engine-card">
-        <div class="engine-title"><span class="engine-badge stable">PATCHRIGHT</span><small>Bestehender ARES-Profilbrowser</small></div>
+        <div class="engine-title"><span class="engine-badge stable">ARES PROFILE</span><small>Bestehender ARES-Profilbrowser</small></div>
         <div class="browser-strip" [class.online]="browserOpen">
-          <div><span class="status-dot"></span><strong>{{ browserOpen ? 'Profil-Browser offen' : 'Profil-Browser geschlossen' }}</strong><small>Unverändert · bestehender ARES-Pfad.</small></div>
+          <div><span class="status-dot"></span><strong>{{ browserOpen ? 'Profil-Browser offen' : 'Profil-Browser geschlossen' }}</strong><small>Bestehender ARES-Profilpfad.</small></div>
           <div class="browser-actions">
-            <button class="btn btn-small btn-accent" type="button" *ngIf="!browserOpen" [disabled]="busy" (click)="openBrowser()">Patchright öffnen</button>
-            <button class="btn btn-small btn-secondary" type="button" *ngIf="browserOpen" [disabled]="busy" (click)="closeBrowser()">Patchright schließen</button>
+            <button class="btn btn-small btn-accent" type="button" *ngIf="!browserOpen" [disabled]="busy" (click)="openBrowser()">Profilbrowser öffnen</button>
+            <button class="btn btn-small btn-secondary" type="button" *ngIf="browserOpen" [disabled]="busy" (click)="closeBrowser()">Profilbrowser schließen</button>
           </div>
         </div>
       </div>
@@ -54,7 +54,7 @@
 
     <div class="snapshot-create">
       <input [(ngModel)]="snapshotName" [disabled]="busy" placeholder="z. B. Pokémon Login · 04.09.">
-      <button class="btn btn-primary" type="button" [disabled]="busy || !browserOpen" (click)="saveSnapshot()">Patchright-Cookies speichern</button>
+      <button class="btn btn-primary" type="button" [disabled]="busy || !browserOpen" (click)="saveSnapshot()">Browser-Cookies speichern</button>
       <button class="btn btn-primary" type="button" [disabled]="busy || !seleniumBaseBrowserOpen" (click)="saveSeleniumBaseSnapshot()">CDP-Cookies speichern</button>
     </div>
   </ng-container>

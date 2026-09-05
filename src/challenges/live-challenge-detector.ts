@@ -1,4 +1,4 @@
-import type { Page } from "patchright";
+import type { Page } from "../browser-worker/types";
 import type { LiveChallengeDetection, LiveChallengeType } from "./types";
 
 export class LiveChallengeDetector {
@@ -110,7 +110,7 @@ export class LiveChallengeDetector {
   }
 
   /**
-   * Prüft eine aktive Patchright-Page im Browser oder den Mock im Test.
+   * Prüft eine aktive ARES-Page im Browser oder den Mock im Test.
    */
   async detect(page: Page): Promise<LiveChallengeDetection> {
     if (!page || (typeof page.isClosed === "function" && page.isClosed())) {
@@ -181,9 +181,9 @@ export class LiveChallengeDetector {
 
     // 2. Fallback über HTML Content
     let html = "";
-    if (typeof page.content === "function") {
+    if (typeof page["content"] === "function") {
       try {
-        const contentVal = await page.content();
+        const contentVal = await page["content"]();
         if (typeof contentVal === "string") {
           html = contentVal;
         }

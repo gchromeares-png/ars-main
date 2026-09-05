@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -31,6 +33,9 @@ class SeleniumBaseCdpAdapter:
         proxy: str | None = None,
         user_agent: str | None = None,
         site_adapter_overrides: Dict[str, str] | None = None,
+        browser_args: Iterable[str] | None = None,
+        language: str | None = None,
+        timezone: str | None = None,
     ) -> None:
         self.profile_dir = Path(profile_dir).expanduser().resolve()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -43,6 +48,13 @@ class SeleniumBaseCdpAdapter:
             kwargs["proxy"] = proxy
         if user_agent:
             kwargs["agent"] = user_agent
+        clean_args = [str(value).strip() for value in (browser_args or []) if str(value).strip()]
+        if clean_args:
+            kwargs["browser_args"] = clean_args
+        if language:
+            kwargs["lang"] = str(language)
+        if timezone:
+            kwargs["tzone"] = str(timezone)
 
         self._sb = sb_cdp.Chrome(**kwargs)
         self._challenge_tracker = ChallengeStateTracker(self._sb)
@@ -76,16 +88,43 @@ class SeleniumBaseCdpAdapter:
     @property
     def chrome_pid(self) -> int | None:
         driver = getattr(self._sb, "driver", None)
+        if driver is None:
+            return None
         if hasattr(driver, "cdp_base"):
             driver = driver.cdp_base
         pid = getattr(driver, "_process_pid", None)
-        return int(pid) if isinstance(pid, int) else None
+        return int(pid) if isinstance(pid, int) and pid > 0 else None
+
+    def _profile_browser_pids(self) -> List[int]:
+        target = os.path.normcase(str(self.profile_dir))
+        matches: List[int] = []
+        for process in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                command_line = [str(value) for value in (process.info.get("cmdline") or [])]
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                continue
+            for index, argument in enumerate(command_line):
+                profile_value = ""
+                if argument.startswith("--user-data-dir="):
+                    profile_value = argument.split("=", 1)[1]
+                elif argument == "--user-data-dir" and index + 1 < len(command_line):
+                    profile_value = command_line[index + 1]
+                if not profile_value:
+                    continue
+                clean = profile_value.strip().strip('"')
+                try:
+                    candidate = os.path.normcase(str(Path(clean).expanduser().resolve()))
+                except (OSError, RuntimeError):
+                    candidate = os.path.normcase(os.path.abspath(os.path.expanduser(clean)))
+                if candidate == target:
+                    matches.append(int(process.pid))
+                    break
+        return matches
 
     def goto(self, url: str) -> None:
         self._sb.goto(url)
         self._challenge_tracker.wait_for_stable_challenge()
         self._sb.solve_captcha()
-
         self._watchdog.reset()
         initial = self._watchdog.poll()
         self._last_watchdog_state = initial
@@ -165,8 +204,19 @@ class SeleniumBaseCdpAdapter:
             "interactionOutcome": self.interaction_outcome_state(),
         }
 
-    def execute_script(self, script: str) -> Any:
-        return self._sb.execute_script(script)
+    def execute_script(self, script: str, *args: Any) -> Any:
+        if not args:
+            return self._sb.execute_script(script)
+        encoded_args = json.dumps(list(args), ensure_ascii=False, separators=(",", ":"))
+        wrapped = (
+            "(() => {"
+            f"const __aresArgs={encoded_args};"
+            "return (function(){"
+            f"{script}"
+            "}).apply(null,__aresArgs);"
+            "})()"
+        )
+        return self._sb.execute_script(wrapped)
 
     def sleep(self, seconds: float) -> None:
         self._sb.sleep(seconds)
@@ -175,7 +225,34 @@ class SeleniumBaseCdpAdapter:
         params = [self._cookie_param(dict(cookie)) for cookie in cookies]
         if not params:
             return 0
-        self._sb.set_all_cookies(params)
+
+        driver = getattr(self._sb, "driver", None)
+        if driver is not None and hasattr(driver, "cdp_base"):
+            driver = driver.cdp_base
+        send = getattr(getattr(driver, "connection", None), "send", None)
+        if callable(send):
+            loop = self._sb.get_event_loop()
+            loop.run_until_complete(send(mycdp.storage.set_cookies(params)))
+            # Startup cookie injection happens before the first target-domain
+            # navigation. Use the browser-scoped Storage domain for readback too,
+            # avoiding the not-yet-stable first tab connection on fresh Windows
+            # CDP sessions while preserving pre-navigation cookie semantics.
+            try:
+                loop.run_until_complete(send(mycdp.storage.get_cookies()))
+            except Exception:
+                pass
+        else:
+            self._sb.set_all_cookies(params)
+            try:
+                self._sb.get_all_cookies()
+            except Exception:
+                pass
+
+        # CDP-injected persistent cookies can become request-visible before
+        # Chromium commits them to the profile cookie database. Give Windows a
+        # short settle window before an immediate clean close/reopen.
+        if sys.platform.startswith("win"):
+            time.sleep(1.0)
         return len(params)
 
     def get_snapshot_cookies(self) -> List[Dict[str, Any]]:
@@ -184,34 +261,22 @@ class SeleniumBaseCdpAdapter:
     def is_running(self) -> bool:
         if self._closed:
             return False
-        driver = getattr(self._sb, "driver", None)
-        if driver is None:
+        pid = self.chrome_pid
+        if not pid:
+            return True
+        try:
+            process = psutil.Process(pid)
+            return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
             return False
-        if hasattr(driver, "cdp_base"):
-            driver = driver.cdp_base
-        checker = getattr(driver, "is_running", None)
-        if callable(checker):
-            try:
-                running = checker() is not False
-            except Exception:
-                return False
-        else:
-            running = True
-
-        if running:
-            try:
-                self._challenge_tracker.poll()
-            except Exception:
-                pass
-            self._poll_observation_watchdog()
-        return running
+        except (psutil.AccessDenied, psutil.Error):
+            return True
 
     def _poll_observation_watchdog(self, *, force: bool = False) -> None:
         now = time.monotonic()
         if not force and now < self._next_watchdog_poll:
             return
         self._next_watchdog_poll = now + self._policy.watchdog_interval_seconds
-
         try:
             state = self._watchdog.poll()
         except Exception:
@@ -219,9 +284,14 @@ class SeleniumBaseCdpAdapter:
         self._last_watchdog_state = state
         if not force and not bool(state.get("changed")):
             return
-
-        self._capture_for_events(state)
-        self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+        try:
+            self._capture_for_events(state)
+        except Exception:
+            pass
+        try:
+            self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+        except Exception:
+            pass
 
     def _capture_for_events(self, state: Dict[str, Any]) -> None:
         generation = int(state.get("generation") or 0)
@@ -265,22 +335,70 @@ class SeleniumBaseCdpAdapter:
             }
         return self._last_instruction_result
 
+    def _request_graceful_browser_close(self) -> bool:
+        driver = getattr(self._sb, "driver", None)
+        if driver is None:
+            return False
+        if hasattr(driver, "cdp_base"):
+            driver = driver.cdp_base
+        loop = getattr(self._sb, "loop", None)
+        send = getattr(getattr(driver, "connection", None), "send", None)
+        if loop is None or not callable(send):
+            return False
+        try:
+            loop.run_until_complete(send(mycdp.browser.close()))
+            return True
+        except Exception:
+            return False
+
     def quit(self) -> None:
         if self._closed:
             return
         self._closed = True
+        browser_pids = self._profile_browser_pids()
         chrome_pid = self.chrome_pid
+        if chrome_pid and chrome_pid not in browser_pids:
+            browser_pids.insert(0, chrome_pid)
+        try:
+            self._sb.get_all_cookies()
+        except Exception:
+            pass
+        # SeleniumBase's underlying Pure-CDP stop path can terminate Chromium
+        # directly. Ask Chromium itself to close first so Windows can commit the
+        # profile cookie database and local storage before any hard fallback.
+        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
+        graceful_close = self._request_graceful_browser_close()
+        if graceful_close:
+            self._wait_for_profile_flush(browser_pids)
+            return
         self._sb.quit()
-        self._wait_for_profile_flush(chrome_pid)
+        self._wait_for_profile_flush(browser_pids)
 
     @staticmethod
-    def _wait_for_profile_flush(chrome_pid: int | None) -> None:
-        if chrome_pid:
+    def _wait_for_profile_flush(browser_pids: Iterable[int]) -> None:
+        pids = list(dict.fromkeys(int(pid) for pid in browser_pids if isinstance(pid, int) and pid > 0))
+        if not pids:
+            time.sleep(1.0)
+            return
+        chrome_pid = pids[0]
+        try:
+            psutil.Process(chrome_pid).wait(timeout=5.0)
+        except psutil.NoSuchProcess:
+            pass
+        except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.Error):
+            pass
+        deadline = time.monotonic() + 5.0
+        for pid in pids[1:]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                psutil.Process(chrome_pid).wait(timeout=5.0)
-            except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                psutil.Process(pid).wait(timeout=remaining)
+            except psutil.NoSuchProcess:
                 pass
-        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
+            except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.Error):
+                continue
+        time.sleep(0.25)
 
     @staticmethod
     def _cookie_param(cookie: Dict[str, Any]) -> mycdp.network.CookieParam:
@@ -290,11 +408,9 @@ class SeleniumBaseCdpAdapter:
                 "Partitionierte Cookies werden im SeleniumBase-Testpfad nicht stillschweigend umgeschrieben. "
                 "Bitte Snapshot ohne partitionKey verwenden."
             )
-
         same_site = str(cookie.get("sameSite") or "Lax")
         if same_site not in {"Strict", "Lax", "None"}:
             same_site = "Lax"
-
         payload: Dict[str, Any] = {
             "name": str(cookie.get("name") or ""),
             "value": str(cookie.get("value") or ""),
@@ -311,7 +427,6 @@ class SeleniumBaseCdpAdapter:
             expires_number = -1
         if expires_number > 0:
             payload["expires"] = expires_number
-
         if not payload["name"] or not payload["domain"]:
             raise ValueError("Cookie ohne Name oder Domain kann nicht in SeleniumBase geladen werden.")
         return mycdp.network.CookieParam.from_json(payload)
@@ -328,14 +443,12 @@ class SeleniumBaseCdpAdapter:
                 for key in dir(cookie)
                 if not key.startswith("_") and not callable(getattr(cookie, key, None))
             }
-
         same_site = raw.get("sameSite") or raw.get("same_site") or "Lax"
         if hasattr(same_site, "to_json"):
             same_site = same_site.to_json()
         same_site = str(same_site)
         if same_site not in {"Strict", "Lax", "None"}:
             same_site = "Lax"
-
         expires = raw.get("expires", -1)
         if hasattr(expires, "to_json"):
             expires = expires.to_json()
@@ -343,7 +456,6 @@ class SeleniumBaseCdpAdapter:
             expires_number = float(expires)
         except (TypeError, ValueError):
             expires_number = -1
-
         snapshot: Dict[str, Any] = {
             "name": str(raw.get("name") or ""),
             "value": str(raw.get("value") or ""),
@@ -354,11 +466,9 @@ class SeleniumBaseCdpAdapter:
             "secure": bool(raw.get("secure", False)),
             "sameSite": same_site,
         }
-
         partition_key = raw.get("partitionKey") or raw.get("partition_key")
         if isinstance(partition_key, str) and partition_key.strip():
             snapshot["partitionKey"] = partition_key.strip()
         elif isinstance(partition_key, dict) and partition_key.get("topLevelSite"):
             snapshot["partitionKey"] = str(partition_key["topLevelSite"])
-
         return snapshot
