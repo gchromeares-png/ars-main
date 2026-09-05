@@ -62,14 +62,43 @@ class AutoInteractionController:
         signature = str(state.get("signature") or "")
         if not self._actionable(state) or not signature or signature == self._last_grid_signature:
             return {"acted": False, "kind": "image-grid", "state": state}
+
         decision = self._vision.classify(str(state.get("instruction") or ""), state.get("sources") or [])
-        selected = decision.get("selectedIndexes") or []
+        selected = self._selected_indexes(decision.get("selectedIndexes") or [], int(state.get("tileCount") or 0))
+        tile_marks = [
+            mark for mark in state.get("marks") or []
+            if isinstance(mark, dict) and mark.get("role") == "grid-tile"
+        ]
+        selected_mark_ids = [
+            str(tile_marks[index].get("markId") or "")
+            for index in selected
+            if index < len(tile_marks) and tile_marks[index].get("markId")
+        ]
+        decision = {**decision, "selectedIndexes": selected, "selectedMarkIds": selected_mark_ids}
         self._record("decision", {"kind": "image-grid", "decision": decision})
         if not selected:
             return {"acted": False, "kind": "image-grid", "state": state, "decision": decision}
-        self._last_grid_signature = signature
+
         self._last_action_at = time.monotonic()
-        result = self._grid_actions.apply(selected, submit=True)
+        apply_marks = getattr(self._grid_actions, "apply_marks", None)
+        if selected_mark_ids and callable(apply_marks):
+            result = apply_marks(selected_mark_ids, submit=True)
+        else:
+            result = self._grid_actions.apply(selected, submit=True)
+
+        clicked = result.get("clickedIndexes") if isinstance(result, dict) else []
+        if not clicked:
+            self._record("action", {"kind": "image-grid", "decision": decision, "result": result, "verification": {"verified": False, "reason": "no-click-resolved"}})
+            return {
+                "acted": False,
+                "verified": False,
+                "kind": "image-grid",
+                "decision": decision,
+                "result": result,
+                "verification": {"verified": False, "reason": "no-click-resolved"},
+            }
+
+        self._last_grid_signature = signature
         verification = self._verify_grid(signature, result.get("state") if isinstance(result, dict) else None)
         self._record("action", {"kind": "image-grid", "decision": decision, "result": result, "verification": verification})
         return {
@@ -98,7 +127,6 @@ class AutoInteractionController:
             return {"acted": False, "kind": "slider", "state": state, "target": target}
 
         target_fraction = float(target.get("targetFraction"))
-        self._last_slider_signature = signature
         self._last_action_at = time.monotonic()
         result = self._slider_actions.apply(target_fraction, state=state)
         verification = self._verify_slider(state, target_fraction, result.get("state") if isinstance(result, dict) else None)
@@ -110,8 +138,11 @@ class AutoInteractionController:
                 fallback = self._slider_actions.apply(target_fraction, state=latest, force_fallback=True)
                 verification = self._verify_slider(latest, target_fraction, fallback.get("state") if isinstance(fallback, dict) else None)
 
+        acted = bool(result.get("moved")) or bool((fallback or {}).get("moved"))
+        if acted:
+            self._last_slider_signature = signature
         payload = {
-            "acted": bool(result.get("moved")) or bool((fallback or {}).get("moved")),
+            "acted": acted,
             "verified": bool(verification.get("verified")),
             "kind": "slider",
             "target": target,
@@ -129,7 +160,7 @@ class AutoInteractionController:
                 return self._slider_grounder.ground(state)
             except Exception as exc:
                 return {"grounded": False, "targetFraction": None, "confidence": 0.0, "source": "error", "error": str(exc)}
-        return {"grounded": True, "targetFraction": 0.96, "confidence": 0.40, "source": "legacy-directional", "markId": "S3"}
+        return {"grounded": True, "targetFraction": 0.96, "confidence": 0.40, "source": "legacy-directional", "markId": "fallback"}
 
     def _verify_grid(self, before_signature: str, initial: Any) -> Dict[str, Any]:
         state = initial if isinstance(initial, dict) else self._grid_adapter.poll()
@@ -175,6 +206,18 @@ class AutoInteractionController:
             self._trace.append(phase, payload)
         except Exception:
             pass
+
+    @staticmethod
+    def _selected_indexes(values: Any, count: int) -> list[int]:
+        selected = set()
+        for value in values:
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < count:
+                selected.add(index)
+        return sorted(selected)
 
     @staticmethod
     def _actionable(state: Dict[str, Any]) -> bool:
