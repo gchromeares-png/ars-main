@@ -211,36 +211,26 @@ class SeleniumBaseCdpAdapter:
         return [self._cookie_to_snapshot(cookie) for cookie in self._sb.get_all_cookies()]
 
     def is_running(self) -> bool:
-        """Return False only when ARES has positive evidence that Chrome is gone.
+        """Fast liveness probe for the browser-owner loop.
 
-        Pure-CDP SeleniumBase builds do not consistently expose a ``.driver`` wrapper.
-        Treating a missing wrapper as a dead browser races the explicit READY handshake.
-        Background observation failures are also non-fatal: they must never terminate
-        the browser-owner worker after READY.
+        This method must never perform challenge, DOM, screenshot, or visual observation
+        work. The task worker calls it before servicing each queued RPC; any blocking
+        browser interaction here can starve the queue and turn a recoverable page state
+        into an application-wide RPC timeout.
         """
         if self._closed:
             return False
 
         pid = self.chrome_pid
-        if pid:
-            try:
-                process = psutil.Process(pid)
-                if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
-                    return False
-            except psutil.NoSuchProcess:
-                return False
-            except (psutil.AccessDenied, psutil.Error):
-                pass
-
+        if not pid:
+            return True
         try:
-            self._challenge_tracker.poll()
-        except Exception:
-            pass
-        try:
-            self._poll_observation_watchdog()
-        except Exception:
-            pass
-        return True
+            process = psutil.Process(pid)
+            return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+        except (psutil.AccessDenied, psutil.Error):
+            return True
 
     def _poll_observation_watchdog(self, *, force: bool = False) -> None:
         now = time.monotonic()
