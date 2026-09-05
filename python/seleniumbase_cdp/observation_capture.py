@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 from pathlib import Path
@@ -34,6 +35,8 @@ class ObservationCapture:
         safe_event = re.sub(r"[^a-z0-9_-]+", "-", event).strip("-") or "event"
         filename = f"{stamp}-{self._counter:04d}-g{int(generation)}-{safe_event}.png"
         path = self._root / filename
+        metadata_path = path.with_suffix(".json")
+
         try:
             self._sb.save_screenshot(filename, folder=str(self._root))
             captured = path.exists() and path.stat().st_size > 0
@@ -44,17 +47,29 @@ class ObservationCapture:
                 "error": str(exc),
                 "event": event,
                 "generation": generation,
+                "root": str(self._root),
             }
             return dict(self._last)
 
-        if captured:
-            self._rotate()
-        self._last = {
+        metadata = {
             "captured": captured,
             "reason": "captured" if captured else "missing-output",
             "event": event,
-            "generation": generation,
-            "path": str(path) if captured else "",
+            "generation": int(generation),
+            "capturedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()),
+            "screenshot": str(path) if captured else "",
+            "debugRoot": str(self._root),
+            **self._page_metadata(),
+        }
+
+        if captured:
+            self._write_metadata(metadata_path, metadata)
+            self._write_metadata(self._root / "latest.json", metadata)
+            self._rotate()
+
+        self._last = {
+            **metadata,
+            "metadataPath": str(metadata_path) if captured else "",
         }
         return dict(self._last)
 
@@ -65,6 +80,29 @@ class ObservationCapture:
             "last": dict(self._last),
         }
 
+    def _page_metadata(self) -> Dict[str, str]:
+        try:
+            url = str(self._sb.get_current_url() or "")
+        except Exception:
+            url = ""
+        try:
+            title = str(self._sb.get_title() or "")
+        except Exception:
+            title = ""
+        return {"url": url, "title": title}
+
+    @staticmethod
+    def _write_metadata(path: Path, metadata: Dict[str, Any]) -> None:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        try:
+            temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(path)
+        except OSError:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def _rotate(self) -> None:
         try:
             files: List[Path] = sorted(
@@ -74,8 +112,14 @@ class ObservationCapture:
             )
         except OSError:
             return
+
         for path in files[self._policy.max_saved_captures :]:
             try:
                 path.unlink()
+            except OSError:
+                pass
+            metadata = path.with_suffix(".json")
+            try:
+                metadata.unlink()
             except OSError:
                 pass
