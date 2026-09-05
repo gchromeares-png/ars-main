@@ -13,7 +13,8 @@ describe("grid debug fallback and Watch task visibility", () => {
     expect(runtime).toContain("self._capture_grid_debug_screenshot(signature)");
     expect(runtime).toContain("self.poll_and_act_from_screenshot(");
     expect(runtime).toContain('source="screenshot-crops"');
-    expect(runtime).toContain('"screenshot-fallback-result"');
+    expect(runtime).toContain('"grid-screenshot-result"');
+    expect(runtime).toContain("screenshotFirstForGrid");
     expect(runtime).toContain("debugScreenshotRoot");
   });
 
