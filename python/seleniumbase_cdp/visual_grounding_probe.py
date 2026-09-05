@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 
 from cursor_path_provider import CursorPathProvider
@@ -35,6 +36,30 @@ class FakeImage:
 class NoScreenshotSb:
     def evaluate(self, _script: str):
         return {}
+
+
+class FakeTab:
+    def __init__(self) -> None:
+        self.events = []
+
+    async def send(self, command):
+        self.events.append(command)
+        return None
+
+
+class FakeCdpSb:
+    def __init__(self) -> None:
+        self.tab = FakeTab()
+        self.loop = asyncio.new_event_loop()
+
+    def get_active_tab(self):
+        return self.tab
+
+    def get_event_loop(self):
+        return self.loop
+
+    def close(self) -> None:
+        self.loop.close()
 
 
 def main() -> int:
@@ -112,6 +137,13 @@ def main() -> int:
     assert math.hypot(points[0][0] - 30.0, points[0][1] - 40.0) <= 1.0
     assert math.hypot(points[-1][0] - 360.0, points[-1][1] - 180.0) <= 1.0
     assert plan["provider"] in {"ghost-cursor", "bezier-mouse-js", "internal-bezier", "python-bezier"}
+
+    cdp = FakeCdpSb()
+    try:
+        assert provider._play_cdp(cdp, [(10.0, 20.0), (20.0, 30.0), (30.0, 40.0)]) is True
+        assert len(cdp.tab.events) == 5
+    finally:
+        cdp.close()
 
     print(f"Visual grounding probe passed. cursorProvider={plan['provider']} target={visual['targetFraction']}")
     return 0
