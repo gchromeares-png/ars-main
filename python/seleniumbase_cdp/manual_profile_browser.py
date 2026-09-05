@@ -13,6 +13,7 @@ from seleniumbase_adapter import SeleniumBaseCdpAdapter
 RESULT_PREFIX = "ARES_SB_MANUAL\t"
 LAST_URL_FILENAME = ".ares-last-url"
 SITE_ADAPTER_FILENAME = ".ares-site-adapter.json"
+VISION_FILENAME = ".ares-vision.json"
 
 
 def _emit(payload: Dict[str, Any]) -> None:
@@ -64,6 +65,21 @@ def _site_adapter_overrides(command: Dict[str, Any], profile_dir: Path) -> Dict[
     return {str(key): str(value) for key, value in raw.items()}
 
 
+def _vision_config(command: Dict[str, Any], profile_dir: Path) -> Dict[str, Any]:
+    inline = command.get("visionConfig")
+    if isinstance(inline, dict):
+        return dict(inline)
+    try:
+        raw = json.loads((profile_dir / VISION_FILENAME).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid {VISION_FILENAME}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"{VISION_FILENAME} must contain a JSON object")
+    return raw
+
+
 def _restorable_url(value: str) -> bool:
     lowered = value.lower()
     return lowered.startswith("http://") or lowered.startswith("https://")
@@ -111,14 +127,15 @@ def _start(command: Dict[str, Any]) -> int:
         raise ValueError("profileDir is required")
 
     request_id = str(command.get("requestId") or "")
+    authorized_test_mode = bool(command.get("authorizedTestMode"))
     adapter = SeleniumBaseCdpAdapter(
         profile_dir=profile_dir,
         headless=False,
         proxy=_proxy_value(command),
         user_agent=str(command.get("userAgent") or "").strip() or None,
         site_adapter_overrides=_site_adapter_overrides(command, profile_dir),
+        vision_config=_vision_config(command, profile_dir) if authorized_test_mode else {},
     )
-    authorized_test_mode = bool(command.get("authorizedTestMode"))
     closed = False
     last_url = _read_last_url(profile_dir)
     try:
