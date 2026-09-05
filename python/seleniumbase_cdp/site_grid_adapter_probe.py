@@ -19,12 +19,13 @@ class FakeElement:
         return self.attrs.get(name)
 
     def get_position(self) -> Dict[str, int]:
-        return {"width": self.width, "height": self.height}
+        return {"x": 0, "y": 0, "width": self.width, "height": self.height}
 
 
 class FakeCdp:
     def __init__(self) -> None:
         self.mode = "document"
+        sources = [f"https://fixture.local/{index}.png" for index in range(9)]
         self.document_payload: Dict[str, Any] = {
             "kind": "image-grid",
             "scope": "document/shadow",
@@ -33,9 +34,24 @@ class FakeCdp:
             "columns": 3,
             "tileCount": 9,
             "instruction": "Select the matching objects",
-            "sources": [f"https://fixture.local/{index}.png" for index in range(9)],
+            "sources": sources,
             "submitText": "Verify",
+            "rawMarks": [self._raw_tile(index, source) for index, source in enumerate(sources)],
+            "viewport": {"width": 1280, "height": 720, "scrollX": 0, "scrollY": 0, "devicePixelRatio": 1},
             "override": False,
+        }
+
+    @staticmethod
+    def _raw_tile(index: int, source: str) -> Dict[str, Any]:
+        return {
+            "role": "grid-tile",
+            "index": index,
+            "visualBounds": {"x": index * 12, "y": 4, "width": 10, "height": 10},
+            "confidence": 0.9,
+            "structuralKey": f"grid-tile|slot:{index}",
+            "semanticSignature": f"grid-tile|{source}",
+            "source": source,
+            "label": f"tile {index}",
         }
 
     def evaluate(self, _script: str) -> Dict[str, Any]:
@@ -59,11 +75,17 @@ def main() -> int:
     assert first["rows"] == 3 and first["columns"] == 3
     assert first["tileCount"] == 9
     assert first["generation"] == 1
+    assert len(first["marks"]) == 9
+    assert first["marks"][0]["visualBounds"]
+    assert first["marks"][0]["frame"] == "document/shadow"
+    assert first["marks"][0]["semanticVisualSignature"]
 
     unchanged = adapter.poll()
     assert unchanged["generation"] == 1
 
-    cdp.document_payload["sources"][4] = "https://fixture.local/4-v2.png"
+    new_source = "https://fixture.local/4-v2.png"
+    cdp.document_payload["sources"][4] = new_source
+    cdp.document_payload["rawMarks"][4] = cdp._raw_tile(4, new_source)
     changed = adapter.poll()
     assert changed["generation"] == 2
 
@@ -74,6 +96,7 @@ def main() -> int:
     assert framed["rows"] == 4 and framed["columns"] == 4
     assert framed["tileCount"] == 16
     assert framed["generation"] == 3
+    assert len(framed["marks"]) == 16
 
     overridden = GridSiteAdapter(cdp, overrides={
         "root": ".board",
