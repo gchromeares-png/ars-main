@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
+
+import mycdp
 
 
 Point = Tuple[float, float]
@@ -26,24 +29,83 @@ class CursorPathProvider:
             return external
         return {"provider": "python-bezier", "points": self._python_bezier(start, end)}
 
-    def play_drag(self, seleniumbase_cdp: Any, start: Point, end: Point, *, preferred: str = "ghost-cursor") -> Dict[str, Any]:
+    def play_drag(
+        self,
+        seleniumbase_cdp: Any,
+        start: Point,
+        end: Point,
+        *,
+        preferred: str = "ghost-cursor",
+        gui_start: Point | None = None,
+        gui_end: Point | None = None,
+    ) -> Dict[str, Any]:
         plan = self.plan(start, end, preferred=preferred)
         points = self._clean_points(plan.get("points") or [])
+        provider = str(plan.get("provider") or "path")
         if len(points) < 2:
-            return {"moved": False, "provider": str(plan.get("provider") or "none"), "pointCount": len(points)}
+            return {"moved": False, "provider": provider, "pointCount": len(points)}
 
-        if self._play_pyautogui(points):
-            return {"moved": True, "provider": str(plan.get("provider") or "path"), "pointCount": len(points)}
+        if self._play_cdp(seleniumbase_cdp, points):
+            return {"moved": True, "provider": f"{provider}:cdp", "pointCount": len(points)}
+
+        if gui_start is not None and gui_end is not None:
+            gui_plan = self.plan(gui_start, gui_end, preferred=preferred)
+            gui_points = self._clean_points(gui_plan.get("points") or [])
+            gui_provider = str(gui_plan.get("provider") or provider)
+            if len(gui_points) >= 2 and self._play_pyautogui(gui_points):
+                return {"moved": True, "provider": f"{gui_provider}:gui", "pointCount": len(gui_points)}
+            try:
+                seleniumbase_cdp.gui_drag_drop_points(
+                    int(round(gui_start[0])), int(round(gui_start[1])),
+                    int(round(gui_end[0])), int(round(gui_end[1])),
+                    timeframe=0.55,
+                )
+                return {"moved": True, "provider": "seleniumbase-gui", "pointCount": 2}
+            except Exception:
+                pass
+
+        return {"moved": False, "provider": provider, "pointCount": len(points)}
+
+    @staticmethod
+    def _play_cdp(seleniumbase_cdp: Any, points: List[Point]) -> bool:
+        get_tab = getattr(seleniumbase_cdp, "get_active_tab", None)
+        get_loop = getattr(seleniumbase_cdp, "get_event_loop", None)
+        if not callable(get_tab) or not callable(get_loop):
+            return False
+        try:
+            tab = get_tab()
+            loop = get_loop()
+        except Exception:
+            return False
+        if tab is None or loop is None:
+            return False
+
+        async def drag() -> None:
+            button = mycdp.input_.MouseButton("left")
+            start_x, start_y = points[0]
+            await tab.send(mycdp.input_.dispatch_mouse_event(
+                "mouseMoved", x=start_x, y=start_y, button=button, buttons=0
+            ))
+            await tab.send(mycdp.input_.dispatch_mouse_event(
+                "mousePressed", x=start_x, y=start_y, button=button, buttons=1, click_count=1
+            ))
+            try:
+                for x, y in points[1:]:
+                    await tab.send(mycdp.input_.dispatch_mouse_event(
+                        "mouseMoved", x=x, y=y, button=button, buttons=1
+                    ))
+                    await asyncio.sleep(0)
+            finally:
+                end_x, end_y = points[-1]
+                await tab.send(mycdp.input_.dispatch_mouse_event(
+                    "mouseReleased", x=end_x, y=end_y, button=button, buttons=0, click_count=1
+                ))
 
         try:
-            seleniumbase_cdp.gui_drag_drop_points(
-                int(round(points[0][0])), int(round(points[0][1])),
-                int(round(points[-1][0])), int(round(points[-1][1])),
-                timeframe=0.55,
-            )
-            return {"moved": True, "provider": "seleniumbase-direct", "pointCount": 2}
+            loop.run_until_complete(drag())
+            return True
         except Exception:
-            return {"moved": False, "provider": str(plan.get("provider") or "none"), "pointCount": len(points)}
+            return False
 
     def _external(self, start: Point, end: Point, *, preferred: str) -> Dict[str, Any] | None:
         if not self._helper.exists():
