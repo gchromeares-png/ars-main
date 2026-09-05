@@ -1,4 +1,4 @@
-import type { Page } from "patchright";
+import type { Page } from "../../browser-worker/types";
 import type { CommerceShop } from "../platforms";
 import type { ProductObservation } from "../../monitor/models";
 
