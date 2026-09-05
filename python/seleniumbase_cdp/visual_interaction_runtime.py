@@ -7,6 +7,7 @@ from auto_interaction_controller import AutoInteractionController
 from composite_slider_grounder import CompositeSliderGrounder
 from cursor_path_provider import CursorPathProvider
 from extended_grid_site_adapter import ExtendedGridSiteAdapter
+from interaction_policy import InteractionPolicy
 from interaction_trace import InteractionTrace
 from proximity_grid_action_executor import ProximityGridActionExecutor
 from robust_vision_grid_classifier import RobustVisionGridClassifier
@@ -26,10 +27,11 @@ class VisualInteractionRuntime:
     ) -> None:
         self._sb = seleniumbase_cdp
         self._profile_dir = Path(profile_dir).expanduser().resolve()
+        self._policy = InteractionPolicy.from_profile(self._profile_dir)
         self._grid = ExtendedGridSiteAdapter(self._sb, overrides=overrides or {})
         self._slider = SliderSiteAdapter(self._sb, overrides=overrides or {})
         self._paths = CursorPathProvider()
-        self._grid_actions = ProximityGridActionExecutor(self._sb, self._grid)
+        self._grid_actions = ProximityGridActionExecutor(self._sb, self._grid, self._policy)
         self._slider_actions = SliderActionExecutor(self._sb, self._slider, self._paths)
         self._vision = RobustVisionGridClassifier()
         self._slider_grounder = CompositeSliderGrounder(self._sb, profile_dir=self._profile_dir)
@@ -54,6 +56,10 @@ class VisualInteractionRuntime:
             "markIdentity": "structural+semantic-visual",
             "gridGeometry": "dynamic-2x2-through-8x8",
             "gridClickOrder": "nearest-neighbour",
+            "gridTiming": {
+                "clickDelaySeconds": self._policy.grid_click_delay_range_seconds,
+                "submitDelaySeconds": self._policy.grid_submit_delay_seconds,
+            },
             "sliderProviders": self._slider_grounder.status(),
         }
 
