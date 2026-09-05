@@ -5,7 +5,7 @@ import type { CheckoutPaymentSession, PaymentPreparationResult } from "../paymen
 import type { RuntimeShop } from "./runtime-types";
 import type { PatchrightShopifyTaskExecutor as ShopifyExecutorType } from "../shopify/patchright-shopify-executor";
 import type { EarlyGateBrowserTaskExecutor as EarlyGateExecutorType } from "./early-gate-task-executor";
-import type { PatchrightBrowserWorker as BrowserCoreType } from "./patchright-browser-worker";
+import type { AresBrowserRuntime as BrowserCoreType } from "./ares-browser-runtime";
 import type { PokemonCenterReleaseJourney as PokemonCenterJourneyType } from "../commerce/pokemon-center/release-journey";
 import { ShopifyPaymentPreparer } from "../shopify/payment-preparer";
 import { isEarlyGateChildTask } from "../monitor/early-gate";
@@ -17,7 +17,7 @@ if (nodeMajor < 20) {
   process.exit(20);
 }
 
-const { PatchrightBrowserWorker } = require("./patchright-browser-worker") as { PatchrightBrowserWorker: typeof BrowserCoreType; };
+const { AresBrowserRuntime } = require("./ares-browser-runtime") as { AresBrowserRuntime: typeof BrowserCoreType; };
 const { PatchrightShopifyTaskExecutor } = require("../shopify/patchright-shopify-executor") as { PatchrightShopifyTaskExecutor: typeof ShopifyExecutorType; };
 const { EarlyGateBrowserTaskExecutor } = require("./early-gate-task-executor") as { EarlyGateBrowserTaskExecutor: typeof EarlyGateExecutorType; };
 const { PokemonCenterReleaseJourney } = require("../commerce/pokemon-center/release-journey") as { PokemonCenterReleaseJourney: typeof PokemonCenterJourneyType; };
@@ -26,7 +26,7 @@ function send(message: BrowserWorkerResponse): void { process.stdout.write(`${JS
 
 const shops = new Map<string, RuntimeShop>();
 const profiles = new Map<string, AresProfile>();
-const browserCore = new PatchrightBrowserWorker();
+const browserCore = new AresBrowserRuntime();
 const paymentPreparer = new ShopifyPaymentPreparer();
 const pokemonCenterJourney = new PokemonCenterReleaseJourney();
 
@@ -38,8 +38,13 @@ function stampProfileOwnedBrowserSession(task: any): void {
   task.config.data = {
     ...(task.config.data ?? {}),
     browserSession: {
-      ...(current ?? {}), type: "patchright-chromium", profileId,
-      isolatedPerTask: false, isolatedPerProfile: true, userDataDir: handle.userDataDir
+      ...(current ?? {}),
+      type: "ares-browser-runtime",
+      engine: browserCore.engine,
+      profileId,
+      isolatedPerTask: false,
+      isolatedPerProfile: true,
+      userDataDir: handle.userDataDir
     }
   };
 }
@@ -99,7 +104,13 @@ async function handle(request: BrowserWorkerRequest): Promise<void> {
         stampProfileOwnedBrowserSession(request.task);
         request.task.config.data = {
           ...(request.task.config.data ?? {}),
-          browserWorker: { pid: process.pid, nodeVersion: process.versions.node, externalProcess: true }
+          browserWorker: {
+            pid: process.pid,
+            nodeVersion: process.versions.node,
+            externalProcess: true,
+            runtime: browserCore.runtimeId,
+            engine: browserCore.engine
+          }
         };
         await browserCore.closeContext(request.task.id).catch(() => undefined);
         browserCore.unbindTaskProfile(request.task.id);
@@ -127,7 +138,13 @@ async function handle(request: BrowserWorkerRequest): Promise<void> {
     }
     if (request.type === "health") {
       const health = await browserCore.health();
-      send({ type: "health-result", requestId: request.requestId, health: { ...health, startedAt: health.startedAt.toISOString() }, pid: process.pid, nodeVersion: process.versions.node }); return;
+      send({
+        type: "health-result",
+        requestId: request.requestId,
+        health: { ...health, startedAt: health.startedAt.toISOString() },
+        pid: process.pid,
+        nodeVersion: process.versions.node
+      }); return;
     }
     if (request.type === "shutdown") {
       await earlyGateExecutor.setFinalPurchaseAllowed(false);

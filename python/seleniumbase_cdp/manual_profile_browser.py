@@ -118,7 +118,6 @@ def _start(command: Dict[str, Any]) -> int:
         user_agent=str(command.get("userAgent") or "").strip() or None,
         site_adapter_overrides=_site_adapter_overrides(command, profile_dir),
     )
-    authorized_test_mode = bool(command.get("authorizedTestMode"))
     closed = False
     last_url = _read_last_url(profile_dir)
     try:
@@ -138,7 +137,7 @@ def _start(command: Dict[str, Any]) -> int:
             "pid": adapter.chrome_pid,
             "appliedCookieCount": applied,
             "siteAdapterEnabled": True,
-            "authorizedTestMode": authorized_test_mode,
+            "gridActionsEnabled": True,
         })
 
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
@@ -189,15 +188,13 @@ def _start(command: Dict[str, Any]) -> int:
                 if command_type == "site-grid-state":
                     _emit({"type": "site-grid-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.site_grid_state()}); continue
                 if command_type == "apply-grid-selection":
-                    if not authorized_test_mode:
-                        raise ValueError("apply-grid-selection requires authorizedTestMode")
                     indexes = next_command.get("indexes")
                     if not isinstance(indexes, list):
                         raise ValueError("apply-grid-selection requires an indexes array")
                     result = adapter.apply_grid_selection(indexes, submit=bool(next_command.get("submit", True)))
                     _emit({"type": "grid-selection-applied", "requestId": next_request_id, "profileId": profile_id, **result}); continue
                 if command_type == "status":
-                    _emit({"type": "status", "requestId": next_request_id, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True, "authorizedTestMode": authorized_test_mode}); continue
+                    _emit({"type": "status", "requestId": next_request_id, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True, "gridActionsEnabled": True}); continue
                 raise ValueError(f"Unsupported SeleniumBase command: {command_type!r}")
             except Exception as exc:
                 _emit({"type": "error", "requestId": next_request_id, "profileId": profile_id, "errorType": type(exc).__name__, "error": str(exc)})
