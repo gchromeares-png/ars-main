@@ -1,4 +1,4 @@
-import type { Page, Response } from "patchright";
+import type { Page, Response } from "./types";
 import type { Task } from "../models";
 
 export type QueuePhase = "waiting" | "released" | "timed-out";
