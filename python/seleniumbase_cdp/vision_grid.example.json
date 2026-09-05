@@ -1,0 +1,5 @@
+{
+  "modelPath": "C:/path/to/vision-grid.pt",
+  "aliasesPath": "C:/path/to/vision-aliases.json",
+  "threshold": 0.72
+}
