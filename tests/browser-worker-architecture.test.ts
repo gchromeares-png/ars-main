@@ -6,6 +6,7 @@ describe("external Node browser worker architecture", () => {
   const protocol = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/protocol.ts"), "utf8");
   const worker = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/worker.ts"), "utf8");
   const contract = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/browser-worker.ts"), "utf8");
+  const runtime = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/ares-browser-runtime.ts"), "utf8");
 
   it("exposes createContext, closeContext and health as the browser-core contract", () => {
     expect(contract).toContain("createContext(config: BrowserContextConfig)");
@@ -13,9 +14,16 @@ describe("external Node browser worker architecture", () => {
     expect(contract).toContain("health(): Promise<BrowserWorkerHealth>");
   });
 
-  it("runs Patchright only after a Node 20+ worker runtime gate", () => {
+  it("routes task browser ownership through the central ARES runtime boundary", () => {
+    expect(worker).toContain('require("./ares-browser-runtime")');
+    expect(worker).toContain("new AresBrowserRuntime()");
+    expect(worker).not.toContain('require("./patchright-browser-worker")');
+    expect(runtime).toContain("class AresBrowserRuntime");
+    expect(runtime).toContain('engine = "patchright-legacy"');
+  });
+
+  it("runs browser executors only after a Node 20+ worker runtime gate", () => {
     expect(worker).toContain("if (nodeMajor < 20)");
-    expect(worker).toContain('require("./patchright-browser-worker")');
     expect(worker).toContain('require("../shopify/patchright-shopify-executor")');
   });
 
@@ -44,7 +52,7 @@ describe("external Node browser worker architecture", () => {
     expect(electronMain).not.toContain("await browserWorker.cancelTask(taskId)");
   });
 
-  it("keeps Patchright runtime imports outside Electron main", () => {
+  it("keeps concrete browser runtime imports outside Electron main", () => {
     const electronMain = fs.readFileSync(path.resolve(__dirname, "../src/electron/main.ts"), "utf8");
     expect(electronMain).not.toContain('from "patchright"');
     expect(electronMain).not.toContain('require("patchright")');
