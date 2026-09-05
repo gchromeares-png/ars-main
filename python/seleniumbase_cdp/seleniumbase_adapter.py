@@ -10,6 +10,7 @@ import psutil
 from seleniumbase import sb_cdp
 
 from challenge_state_tracker import ChallengeStateTracker
+from instruction_input_runtime import InstructionInputRuntime
 from interaction_outcome import from_semantic_result, from_visual_result
 from semantic_interaction_runtime import SemanticInteractionRuntime
 from visual_interaction_runtime import VisualInteractionRuntime
@@ -47,11 +48,18 @@ class SeleniumBaseCdpAdapter:
             overrides=site_adapter_overrides or {},
         )
         self._semantic_interactions = SemanticInteractionRuntime(self._sb)
+        self._instruction_inputs = InstructionInputRuntime(self._sb)
         self._next_auto_poll = 0.0
         self._last_auto_result: Dict[str, Any] = {
             "acted": False,
             "kind": "none",
             "outcome": from_visual_result({"acted": False, "kind": "none"}),
+        }
+        self._last_instruction_result: Dict[str, Any] = {
+            "acted": False,
+            "verified": False,
+            "kind": "instruction-input",
+            "reason": "not-run",
         }
         self._last_semantic_outcome: Dict[str, Any] = from_semantic_result({"results": []})
         self._closed = False
@@ -83,7 +91,12 @@ class SeleniumBaseCdpAdapter:
         return self._visual_interactions.slider_target_state()
 
     def auto_interaction_state(self) -> Dict[str, Any]:
-        return {**self._visual_interactions.status(), "lastResult": self._last_auto_result}
+        return {
+            **self._visual_interactions.status(),
+            "lastResult": self._last_auto_result,
+            "lastInstructionResult": self._last_instruction_result,
+            "instructionInputsEnabled": True,
+        }
 
     def interaction_outcome_state(self) -> Dict[str, Any]:
         return {
@@ -91,6 +104,7 @@ class SeleniumBaseCdpAdapter:
             "mode": "default",
             "semantic": self._last_semantic_outcome,
             "visual": self._last_auto_result.get("outcome", from_visual_result(self._last_auto_result)),
+            "instructionInput": self._last_instruction_result,
         }
 
     def observe_semantic_fields(self) -> List[Dict[str, Any]]:
@@ -170,6 +184,20 @@ class SeleniumBaseCdpAdapter:
         except Exception as exc:
             result = {"acted": False, "kind": "error", "error": str(exc)}
             self._last_auto_result = {**result, "outcome": from_visual_result(result)}
+
+        if bool(self._last_auto_result.get("acted")):
+            return
+
+        try:
+            self._last_instruction_result = self._instruction_inputs.apply()
+        except Exception as exc:
+            self._last_instruction_result = {
+                "acted": False,
+                "verified": False,
+                "kind": "instruction-input",
+                "reason": "error",
+                "error": str(exc),
+            }
 
     def quit(self) -> None:
         if self._closed:
