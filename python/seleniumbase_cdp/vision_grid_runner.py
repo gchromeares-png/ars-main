@@ -30,10 +30,11 @@ class VisionGridRunner:
             self._last_signature = signature
             return {"status": "no-selection", "target": target, "predictions": [p.__dict__ for p in predictions], "state": state}
 
-        result = self.adapter.apply_grid_selection(indexes, submit=True)
+        result = self.adapter.apply_grid_selection(indexes, submit=True, expected_signature=signature)
         after = result.get("state") or self.adapter.site_grid_state()
         self._last_signature = "" if after.get("signature") != signature else signature
-        return {"status": "clicked", "target": target, "indexes": indexes, "predictions": [p.__dict__ for p in predictions], "action": result}
+        status = "stale-grid" if result.get("stale") else "clicked"
+        return {"status": status, "target": target, "indexes": indexes, "predictions": [p.__dict__ for p in predictions], "action": result}
 
     def _browser_resolve_sources(self, sources: list[str]) -> list[str]:
         script = f"""
