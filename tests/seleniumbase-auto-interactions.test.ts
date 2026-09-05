@@ -7,16 +7,19 @@ describe("SeleniumBase automatic interaction runtime", () => {
   const adapter = read("python/seleniumbase_cdp/seleniumbase_adapter.py");
   const sliderAdapter = read("python/seleniumbase_cdp/site_slider_adapter.py");
   const sliderActions = read("python/seleniumbase_cdp/slider_action_executor.py");
+  const runtime = read("python/seleniumbase_cdp/visual_interaction_runtime.py");
   const controller = read("python/seleniumbase_cdp/auto_interaction_controller.py");
   const vision = read("python/seleniumbase_cdp/vision_grid_classifier.py");
   const worker = read("python/seleniumbase_cdp/manual_profile_browser.py");
 
   it("keeps grid and slider auto interactions enabled by default", () => {
-    expect(adapter).toContain("self._auto_interactions = AutoInteractionController(");
+    expect(adapter).toContain("self._visual_interactions = VisualInteractionRuntime(");
     expect(adapter).toContain("self._poll_auto_interactions(force=True)");
     expect(adapter).toContain("self._poll_auto_interactions()");
-    expect(worker).toContain('"autoInteractionsEnabled": True');
-    expect(worker).toContain('"sliderActionsEnabled": True');
+    expect(adapter).toContain("self._visual_interactions.poll_and_act()");
+    expect(runtime).toContain("AutoInteractionController(");
+    expect(worker).toContain('\"autoInteractionsEnabled\": True');
+    expect(worker).toContain('\"sliderActionsEnabled\": True');
     expect(worker).not.toContain("authorizedTestMode");
   });
 
@@ -45,7 +48,7 @@ describe("SeleniumBase automatic interaction runtime", () => {
   });
 
   it("does not couple the automatic interaction modules to Playwright or Patchright", () => {
-    for (const source of [sliderAdapter, sliderActions, controller, vision]) {
+    for (const source of [sliderAdapter, sliderActions, runtime, controller, vision]) {
       expect(source.toLowerCase()).not.toContain("playwright");
       expect(source.toLowerCase()).not.toContain("patchright");
       expect(source).not.toContain("src/challenges");
