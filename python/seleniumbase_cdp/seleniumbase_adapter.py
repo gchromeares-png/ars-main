@@ -92,6 +92,9 @@ class SeleniumBaseCdpAdapter:
     def execute_script(self, script: str) -> Any:
         return self._sb.execute_script(script)
 
+    def execute_async_script(self, script: str) -> Any:
+        return self._sb.loop.run_until_complete(self._sb.page.evaluate(script, await_promise=True))
+
     def sleep(self, seconds: float) -> None:
         self._sb.sleep(seconds)
 
