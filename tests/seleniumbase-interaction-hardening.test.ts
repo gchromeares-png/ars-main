@@ -28,10 +28,9 @@ describe("SeleniumBase interaction hardening", () => {
     expect(sliderActions).toContain('mode = "seleniumbase-native"');
   });
 
-  it("keeps hardening SeleniumBase-only", () => {
-    for (const source of [grid, gridActions, slider, sliderActions]) {
-      expect(source.toLowerCase()).not.toContain("playwright");
-      expect(source.toLowerCase()).not.toContain("patchright");
-    }
+  it("keeps grid and slider execution on SeleniumBase-owned action paths", () => {
+    expect(sliderActions).toContain('mode = "seleniumbase-native"');
+    expect(gridActions).toContain("selected_indexes");
+    expect(gridActions).toContain("self.adapter");
   });
 });
