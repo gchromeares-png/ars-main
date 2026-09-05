@@ -251,7 +251,7 @@ def main() -> int:
     profile_dir = Path(temporary) / "profile" / ".ares-seleniumbase-cdp"
     try:
         _run(profile_dir)
-        print("SeleniumBase Pure CDP process/session/cookie probe passed without Playwright.")
+        print("SeleniumBase Pure CDP process/session/cookie probe passed natively.")
         return 0
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
