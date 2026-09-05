@@ -226,6 +226,16 @@ class SeleniumBaseCdpAdapter:
         if not params:
             return 0
         self._sb.set_all_cookies(params)
+        # CDP-injected persistent cookies can become request-visible before
+        # Chromium commits them to the profile cookie database. Force a browser
+        # readback and give Windows a short settle window before an immediate
+        # clean close/reopen of the same SeleniumBase profile.
+        try:
+            self._sb.get_all_cookies()
+        except Exception:
+            pass
+        if sys.platform.startswith("win"):
+            time.sleep(1.0)
         return len(params)
 
     def get_snapshot_cookies(self) -> List[Dict[str, Any]]:
@@ -320,10 +330,9 @@ class SeleniumBaseCdpAdapter:
             self._sb.get_all_cookies()
         except Exception:
             pass
-        # Give Chromium's cookie store a deterministic settle window before close
-        # on every platform. This removes a Linux/CI race where localStorage had
-        # persisted but the persistent cookie had not reached the profile yet.
-        time.sleep(1.0)
+        # SeleniumBase/Chromium on Windows needs a short pre-close settle so
+        # persistent cookies and session state reach the user-data-dir on disk.
+        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
         self._sb.quit()
         self._wait_for_profile_flush(browser_pids)
 
