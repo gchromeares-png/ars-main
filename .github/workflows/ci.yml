@@ -121,9 +121,6 @@ jobs:
       - name: Verify GhostCursor and Bezier path providers
         run: node python/seleniumbase_cdp/cursor_path_helper_probe.cjs
 
-      - name: Install Patchright Chrome
-        run: npm run browser:install -- --with-deps
-
       - name: Run targeted payment gates
         env:
           ARES_RUN_BROWSER_INTEGRATION: "1"
