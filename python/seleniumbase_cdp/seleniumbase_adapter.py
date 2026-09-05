@@ -11,6 +11,7 @@ from seleniumbase import sb_cdp
 
 from challenge_state_tracker import ChallengeStateTracker
 from instruction_input_runtime import InstructionInputRuntime
+from interaction_orchestrator import InteractionOrchestrator
 from interaction_outcome import from_semantic_result, from_visual_result
 from semantic_interaction_runtime import SemanticInteractionRuntime
 from visual_interaction_runtime import VisualInteractionRuntime
@@ -49,6 +50,7 @@ class SeleniumBaseCdpAdapter:
         )
         self._semantic_interactions = SemanticInteractionRuntime(self._sb)
         self._instruction_inputs = InstructionInputRuntime(self._sb)
+        self._orchestrator = InteractionOrchestrator()
         self._next_auto_poll = 0.0
         self._last_auto_result: Dict[str, Any] = {
             "acted": False,
@@ -96,6 +98,7 @@ class SeleniumBaseCdpAdapter:
             "lastResult": self._last_auto_result,
             "lastInstructionResult": self._last_instruction_result,
             "instructionInputsEnabled": True,
+            "orchestrator": self._orchestrator.status(),
         }
 
     def interaction_outcome_state(self) -> Dict[str, Any]:
@@ -105,24 +108,38 @@ class SeleniumBaseCdpAdapter:
             "semantic": self._last_semantic_outcome,
             "visual": self._last_auto_result.get("outcome", from_visual_result(self._last_auto_result)),
             "instructionInput": self._last_instruction_result,
+            "orchestrator": self._orchestrator.status(),
         }
 
     def observe_semantic_fields(self) -> List[Dict[str, Any]]:
         return self._semantic_interactions.observe_fields()
 
     def execute_semantic_plan(self, plan: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
-        result = self._semantic_interactions.execute_plan(plan)
-        outcome = from_semantic_result(result)
-        self._last_semantic_outcome = outcome
-        return {**result, "outcome": outcome}
+        items = [dict(item) for item in plan]
+
+        def action() -> Dict[str, Any]:
+            result = self._semantic_interactions.execute_plan(items)
+            outcome = from_semantic_result(result)
+            self._last_semantic_outcome = outcome
+            return {**result, "outcome": outcome}
+
+        return self._orchestrator.run_action("semantic", action)
 
     def apply_grid_selection(self, indexes: Iterable[int], *, submit: bool = True) -> Dict[str, Any]:
-        result = self._visual_interactions.apply_grid_selection(indexes, submit=submit)
-        return {**result, "outcome": from_visual_result(result)}
+        selected = list(indexes)
+
+        def action() -> Dict[str, Any]:
+            result = self._visual_interactions.apply_grid_selection(selected, submit=submit)
+            return {**result, "outcome": from_visual_result(result)}
+
+        return self._orchestrator.run_action("grid", action)
 
     def apply_slider(self, target_fraction: float = 0.96) -> Dict[str, Any]:
-        result = self._visual_interactions.apply_slider(target_fraction)
-        return {**result, "outcome": from_visual_result(result)}
+        def action() -> Dict[str, Any]:
+            result = self._visual_interactions.apply_slider(target_fraction)
+            return {**result, "outcome": from_visual_result(result)}
+
+        return self._orchestrator.run_action("slider", action)
 
     def inspect_session(self) -> Dict[str, Any]:
         return {
@@ -178,16 +195,18 @@ class SeleniumBaseCdpAdapter:
         if not force and now < self._next_auto_poll:
             return
         self._next_auto_poll = now + 0.8
+        self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+
+    def _run_visual_auto(self) -> Dict[str, Any]:
         try:
             result = self._visual_interactions.poll_and_act()
             self._last_auto_result = {**result, "outcome": from_visual_result(result)}
         except Exception as exc:
             result = {"acted": False, "kind": "error", "error": str(exc)}
             self._last_auto_result = {**result, "outcome": from_visual_result(result)}
+        return self._last_auto_result
 
-        if bool(self._last_auto_result.get("acted")):
-            return
-
+    def _run_instruction_auto(self) -> Dict[str, Any]:
         try:
             self._last_instruction_result = self._instruction_inputs.apply()
         except Exception as exc:
@@ -198,6 +217,7 @@ class SeleniumBaseCdpAdapter:
                 "reason": "error",
                 "error": str(exc),
             }
+        return self._last_instruction_result
 
     def quit(self) -> None:
         if self._closed:
