@@ -41,14 +41,11 @@ describeBrowser("local payment fixture", () => {
     });
     const page = handle.page;
 
-    // This is a synthetic local DOM fixture, not a shop navigation. Loading it through
-    // page.goto() would intentionally enter the protected ARES navigation/challenge
-    // pipeline. Keep that production sequence untouched and inject the fixture into the
-    // READY about:blank document so this test isolates RPC locator/fill semantics.
+    // Synthetic fixture only: keep the READY document/context alive. document.open()/
+    // document.close() destroys the active CDP execution context while the RPC call is
+    // still awaiting its result, which is not representative of production navigation.
     await page.evaluate((html: string) => {
-      document.open();
-      document.write(html);
-      document.close();
+      document.documentElement.innerHTML = html;
       return document.readyState;
     }, fixture);
 
