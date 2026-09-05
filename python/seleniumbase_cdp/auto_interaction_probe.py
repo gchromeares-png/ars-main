@@ -31,6 +31,10 @@ class FakeSb:
                 "handleSelector": "input[type=\"range\"]",
                 "trackSelector": "input[type=\"range\"]",
                 "nativeRange": True,
+                "targetCandidates": [],
+                "marks": [],
+                "complete": False,
+                "failed": False,
                 "override": False,
             }
         return {"kind": "none", "scope": "document", "score": 0}
@@ -43,11 +47,21 @@ class FakeSb:
         self.fraction = 0.96
 
 
+class FakePaths:
+    def play_drag(self, sb, start, end, *, preferred="ghost-cursor"):
+        assert preferred == "ghost-cursor"
+        sb.gui_drag_drop_points(start[0], start[1], end[0], end[1], timeframe=0.55)
+        return {"moved": True, "provider": "ghost-cursor", "pointCount": 33}
+
+
 class FakeGridAdapter:
     def __init__(self) -> None:
         self.signature = "grid-a"
+        self.active = True
 
     def poll(self):
+        if not self.active:
+            return {"kind": "none", "score": 0, "signature": "none"}
         return {
             "kind": "image-grid",
             "score": 95,
@@ -75,17 +89,19 @@ class FakeVision:
 
 
 class FakeGridActions:
-    def __init__(self) -> None:
+    def __init__(self, adapter) -> None:
+        self.adapter = adapter
         self.calls = []
 
     def apply(self, indexes, *, submit=True):
         self.calls.append((list(indexes), submit))
-        return {"clickedIndexes": list(indexes), "submitted": submit}
+        self.adapter.active = False
+        return {"clickedIndexes": list(indexes), "submitted": submit, "state": self.adapter.poll()}
 
 
 class FakeSliderActions:
-    def apply(self, target_fraction=0.96):
-        return {"moved": True, "targetFraction": target_fraction}
+    def apply(self, target_fraction=0.96, *, state=None, force_fallback=False):
+        return {"moved": True, "targetFraction": target_fraction, "mode": "fake", "state": state or {}}
 
 
 def main() -> int:
@@ -93,12 +109,12 @@ def main() -> int:
     slider = SliderSiteAdapter(sb)
     first = slider.poll()
     assert first["kind"] == "slider" and first["orientation"] == "horizontal"
-    moved = SliderActionExecutor(sb, slider).apply(0.96)
-    assert moved["moved"] is True and moved["mode"] == "seleniumbase-native"
+    moved = SliderActionExecutor(sb, slider, FakePaths()).apply(0.96)
+    assert moved["moved"] is True and moved["mode"] == "path:ghost-cursor"
     assert moved["state"]["fraction"] == 0.96 and len(sb.drags) == 1
 
     grid = FakeGridAdapter()
-    grid_actions = FakeGridActions()
+    grid_actions = FakeGridActions(grid)
     controller = AutoInteractionController(
         grid,
         FakeSliderNone(),
@@ -107,11 +123,12 @@ def main() -> int:
         FakeVision(),
     )
     result = controller.poll_and_act()
-    assert result["acted"] is True
+    assert result["acted"] is True and result["verified"] is True
     assert grid_actions.calls == [([1, 4, 7], True)]
     duplicate = controller.poll_and_act()
     assert duplicate["acted"] is False
 
+    grid.active = True
     grid.signature = "grid-b"
     changed = controller.poll_and_act()
     assert changed["acted"] is True
