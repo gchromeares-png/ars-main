@@ -14,22 +14,29 @@ class SliderActionExecutor:
         self._slider_adapter = slider_adapter
         self._paths = path_provider or CursorPathProvider()
 
-    def apply(self, target_fraction: float = 0.96, *, state: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def apply(
+        self,
+        target_fraction: float = 0.96,
+        *,
+        state: Dict[str, Any] | None = None,
+        force_fallback: bool = False,
+    ) -> Dict[str, Any]:
         state = state or self._slider_adapter.poll()
         if state.get("kind") != "slider":
             return {"moved": False, "targetFraction": 0.0, "mode": "none", "state": state}
 
         target = max(0.0, min(1.0, float(target_fraction)))
-        planned = self._planned_drag(state, target)
-        if planned.get("moved"):
-            mode = f"path:{planned.get('provider') or 'unknown'}"
-            return {
-                "moved": True,
-                "targetFraction": target,
-                "mode": mode,
-                "pointCount": int(planned.get("pointCount") or 0),
-                "state": self._slider_adapter.poll(),
-            }
+        if not force_fallback:
+            planned = self._planned_drag(state, target)
+            if planned.get("moved"):
+                mode = f"path:{planned.get('provider') or 'unknown'}"
+                return {
+                    "moved": True,
+                    "targetFraction": target,
+                    "mode": mode,
+                    "pointCount": int(planned.get("pointCount") or 0),
+                    "state": self._slider_adapter.poll(),
+                }
 
         moved = self._native_drag(state, target)
         mode = "seleniumbase-native" if moved else "event-fallback"
