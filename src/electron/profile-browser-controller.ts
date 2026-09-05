@@ -9,6 +9,7 @@ import {
   SeleniumBaseProfileBrowserController,
   type SeleniumBaseProfileBrowserStatus
 } from "./seleniumbase-profile-browser-controller";
+import { SeleniumBaseVisionRuntime } from "./seleniumbase-vision-runtime";
 
 export type ProfileBrowserStatus = SeleniumBaseProfileBrowserStatus;
 
@@ -20,6 +21,7 @@ export interface ProfileBrowserOpenOptions {
 
 export class ProfileBrowserController {
   private readonly seleniumBase: SeleniumBaseProfileBrowserController;
+  private readonly visionRuntime = new SeleniumBaseVisionRuntime();
 
   constructor(
     profileRoot: string,
@@ -39,6 +41,10 @@ export class ProfileBrowserController {
     const options = typeof startUrlOrOptions === "string"
       ? { startUrl: startUrlOrOptions }
       : (startUrlOrOptions ?? {});
+    const vision = await this.visionRuntime.prepare();
+    if (!vision.ready) {
+      throw new Error(`ARES Vision Runtime ist nicht bereit: ${vision.error || "unbekannter Fehler"}`);
+    }
     return this.seleniumBase.open(profile, options.startUrl, options.cookieSnapshotId);
   }
 
@@ -66,6 +72,22 @@ export class ProfileBrowserController {
     ipcMain.handle("get-seleniumbase-profile-browser-status", (_event, profileId: string) => {
       try {
         return { success: true, status: this.seleniumBase.status(profileId) };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle("get-seleniumbase-vision-status", async () => {
+      try {
+        return { success: true, status: await this.visionRuntime.status() };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle("prepare-seleniumbase-vision", async () => {
+      try {
+        return { success: true, status: await this.visionRuntime.prepare() };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
