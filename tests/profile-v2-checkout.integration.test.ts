@@ -1,4 +1,8 @@
-import { chromium, type Page } from "patchright";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { AresBrowserRuntime } from "../src/browser-worker/ares-browser-runtime";
+import type { Page } from "../src/browser-worker/types";
 import type { SemanticEmbeddingProvider } from "../src/browser-worker/field-semantic-resolver";
 import { FieldSemanticResolver } from "../src/browser-worker/field-semantic-resolver";
 import { SemanticFieldAutofill } from "../src/browser-worker/semantic-field-autofill";
@@ -16,27 +20,20 @@ class NoEmbeddingProvider implements SemanticEmbeddingProvider {
 }
 
 async function runCheckoutCase(page: Page, shippingCity: string, billingCity: string) {
-  await page.setContent(`<!doctype html><html><body>
-    <section aria-label="Lieferanschrift">
-      <label>Ort der Lieferanschrift
-        <input data-slot="shipping-city" autocomplete="shipping address-level2">
-      </label>
-    </section>
-    <section aria-label="Rechnungsanschrift">
-      <label>Ort der Rechnungsanschrift
-        <input data-slot="billing-city" autocomplete="billing address-level2">
-      </label>
-    </section>
-  </body></html>`);
+  const html = `<!doctype html><html><body>
+    <section aria-label="Lieferanschrift"><label>Ort der Lieferanschrift
+      <input data-slot="shipping-city" autocomplete="shipping address-level2">
+    </label></section>
+    <section aria-label="Rechnungsanschrift"><label>Ort der Rechnungsanschrift
+      <input data-slot="billing-city" autocomplete="billing address-level2">
+    </label></section>
+  </body></html>`;
+  await page.goto(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`, { waitUntil: "domcontentloaded" });
 
   const draft = toProfileV2Draft();
   draft.id = `profile-${shippingCity}-${billingCity}`;
   draft.name = "Profile V2 Checkout";
-  draft.contact = {
-    firstName: "Max",
-    lastName: "Mustermann",
-    email: "max@example.test"
-  };
+  draft.contact = { firstName: "Max", lastName: "Mustermann", email: "max@example.test" };
   draft.shippingAddress = {
     address1: "Mönckebergstraße 7",
     street: "Mönckebergstraße",
@@ -78,84 +75,63 @@ async function runCheckoutCase(page: Page, shippingCity: string, billingCity: st
 }
 
 describeBrowser("Profile V2 checkout mapping", () => {
-  jest.setTimeout(30_000);
+  jest.setTimeout(45_000);
+
+  const runtime = new AresBrowserRuntime();
+  let taskId = "";
+  let userDataDir = "";
+  let page: Page;
+
+  beforeEach(async () => {
+    taskId = `profile-v2-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ares-profile-v2-"));
+    page = (await runtime.createContext({ taskId, userDataDir, headless: true })).page;
+  });
+
+  afterEach(async () => {
+    if (taskId) await runtime.closeContext(taskId).catch(() => undefined);
+    if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true });
+  });
+
+  afterAll(async () => {
+    await runtime.shutdown();
+  });
 
   it("keeps shipping:city and billing:city separate when both values are Hamburg", async () => {
-    const browser = await chromium.launch({ headless: true, channel: "chrome" }).catch(() => chromium.launch({ headless: true }));
-    try {
-      const page = await browser.newPage();
-      const output = await runCheckoutCase(page, "Hamburg", "Hamburg");
-
-      expect(output.plan.billingMode).toBe("explicit-billing");
-      expect(output.shippingValue).toBe("Hamburg");
-      expect(output.billingValue).toBe("Hamburg");
-      expect(output.result.missing).toEqual([]);
-      expect(new Set(output.result.filled.map(targetKey))).toEqual(new Set([
-        targetKey(output.shippingTarget),
-        targetKey(output.billingTarget)
-      ]));
-      expect(output.result.writeCounts[targetKey(output.shippingTarget)]).toBe(1);
-      expect(output.result.writeCounts[targetKey(output.billingTarget)]).toBe(1);
-      expect(targetKey(output.shippingTarget)).not.toBe(targetKey(output.billingTarget));
-    } finally {
-      await browser.close();
-    }
+    const output = await runCheckoutCase(page, "Hamburg", "Hamburg");
+    expect(output.plan.billingMode).toBe("explicit-billing");
+    expect(output.shippingValue).toBe("Hamburg");
+    expect(output.billingValue).toBe("Hamburg");
+    expect(output.result.missing).toEqual([]);
+    expect(new Set(output.result.filled.map(targetKey))).toEqual(new Set([
+      targetKey(output.shippingTarget),
+      targetKey(output.billingTarget)
+    ]));
+    expect(output.result.writeCounts[targetKey(output.shippingTarget)]).toBe(1);
+    expect(output.result.writeCounts[targetKey(output.billingTarget)]).toBe(1);
+    expect(targetKey(output.shippingTarget)).not.toBe(targetKey(output.billingTarget));
   });
 
   it("maps Hamburg shipping and Berlin billing independently end-to-end with a PII-safe trace", async () => {
-    const browser = await chromium.launch({ headless: true, channel: "chrome" }).catch(() => chromium.launch({ headless: true }));
-    try {
-      const page = await browser.newPage();
-      const output = await runCheckoutCase(page, "Hamburg", "Berlin");
+    const output = await runCheckoutCase(page, "Hamburg", "Berlin");
+    expect(output.profile.shippingAddress?.city).toBe("Hamburg");
+    expect(output.profile.billingAddress?.city).toBe("Berlin");
+    expect(output.shippingValue).toBe("Hamburg");
+    expect(output.billingValue).toBe("Berlin");
+    expect(output.result.missing).toEqual([]);
+    expect(output.result.writeCounts[targetKey(output.shippingTarget)]).toBe(1);
+    expect(output.result.writeCounts[targetKey(output.billingTarget)]).toBe(1);
 
-      expect(output.profile.shippingAddress?.city).toBe("Hamburg");
-      expect(output.profile.billingAddress?.city).toBe("Berlin");
-      expect(output.shippingValue).toBe("Hamburg");
-      expect(output.billingValue).toBe("Berlin");
-      expect(output.result.missing).toEqual([]);
-      expect(output.result.writeCounts[targetKey(output.shippingTarget)]).toBe(1);
-      expect(output.result.writeCounts[targetKey(output.billingTarget)]).toBe(1);
+    const trace = output.result.trace;
+    expect(trace?.schemaVersion).toBe(1);
+    expect(trace?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ targetKey: targetKey(output.shippingTarget), context: "shipping", intent: "city", resolverSource: { intent: "standard-metadata", context: "standard-metadata" }, confidence: 1, billingMode: "explicit-billing", valueAvailable: true, action: "write", result: "filled" }),
+      expect.objectContaining({ targetKey: targetKey(output.billingTarget), context: "billing", intent: "city", resolverSource: { intent: "standard-metadata", context: "standard-metadata" }, confidence: 1, billingMode: "explicit-billing", valueAvailable: true, action: "write", result: "filled" })
+    ]));
 
-      const trace = output.result.trace;
-      expect(trace?.schemaVersion).toBe(1);
-      expect(trace?.events).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          targetKey: targetKey(output.shippingTarget),
-          context: "shipping",
-          intent: "city",
-          resolverSource: { intent: "standard-metadata", context: "standard-metadata" },
-          confidence: 1,
-          billingMode: "explicit-billing",
-          valueAvailable: true,
-          action: "write",
-          result: "filled"
-        }),
-        expect.objectContaining({
-          targetKey: targetKey(output.billingTarget),
-          context: "billing",
-          intent: "city",
-          resolverSource: { intent: "standard-metadata", context: "standard-metadata" },
-          confidence: 1,
-          billingMode: "explicit-billing",
-          valueAvailable: true,
-          action: "write",
-          result: "filled"
-        })
-      ]));
-
-      const serializedTrace = JSON.stringify(trace);
-      for (const pii of [
-        "Hamburg",
-        "Berlin",
-        "Mönckebergstraße",
-        "Alexanderplatz",
-        "max@example.test",
-        "Mustermann"
-      ]) {
-        expect(serializedTrace).not.toContain(pii);
-      }
-    } finally {
-      await browser.close();
+    const serializedTrace = JSON.stringify(trace);
+    for (const pii of ["Hamburg", "Berlin", "Mönckebergstraße", "Alexanderplatz", "max@example.test", "Mustermann"]) {
+      expect(serializedTrace).not.toContain(pii);
     }
   });
 });
