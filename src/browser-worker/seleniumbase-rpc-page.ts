@@ -3,6 +3,8 @@ import type { ChildProcessWithoutNullStreams } from "child_process";
 import type { Frame, FrameLocator, Locator, Page, Response } from "./types";
 
 type NetworkEvent = { url?: string; headers?: Record<string, string>; body?: string };
+type FrameSnapshot = { path?: unknown; url?: unknown; name?: unknown; depth?: unknown };
+type PageSnapshot = { url?: unknown; readyState?: unknown; frames?: unknown };
 type RpcReply = { type?: string; requestId?: string; ok?: boolean; result?: unknown; error?: string; url?: string; title?: string; events?: NetworkEvent[]; };
 type Pending = { resolve: (value: RpcReply) => void; reject: (error: Error) => void; timeout: NodeJS.Timeout; };
 export interface LocatorDescriptor { selector: string; nth?: number; hasText?: { source: string; flags: string } | string; framePath?: string[]; }
@@ -10,6 +12,7 @@ export interface LocatorDescriptor { selector: string; nth?: number; hasText?: {
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 const serializePattern = (value: string | RegExp | undefined): string | { source: string; flags: string } | undefined => value instanceof RegExp ? { source: value.source, flags: value.flags } : value;
 const serializeFunction = (fn: string | Function): string => typeof fn === "string" ? fn : fn.toString();
+const frameKey = (path: readonly string[]): string => JSON.stringify(path);
 function roleSelector(role: string): string {
   switch (role.toLowerCase()) {
     case "button": return 'button,[role="button"],input[type="submit"],input[type="button"]';
@@ -118,40 +121,162 @@ class SeleniumBaseRpcLocator implements Locator {
 
 class SeleniumBaseRpcFrame implements Frame, FrameLocator {
   [key: string]: any;
-  constructor(private readonly page: SeleniumBaseRpcPage, private readonly framePath: string[]) {}
+  private frameUrl = "";
+  private frameName = "";
+  constructor(private readonly page: SeleniumBaseRpcPage, private readonly framePath: string[], url = "", name = "") {
+    this.frameUrl = url;
+    this.frameName = name;
+  }
+  update(url: string, name: string): void { this.frameUrl = url; this.frameName = name; }
+  path(): readonly string[] { return [...this.framePath]; }
+  url(): string { return this.frameUrl; }
+  name(): string { return this.frameName; }
   locator(selector: string): Locator { return new SeleniumBaseRpcLocator(this.page, { selector, framePath: [...this.framePath] }); }
   getByRole(role: string, options: { name?: string | RegExp } = {}): Locator { return new SeleniumBaseRpcLocator(this.page, { selector: roleSelector(role), framePath:[...this.framePath], hasText:serializePattern(options.name) }); }
+  frameLocator(selector: string): FrameLocator { return new SeleniumBaseRpcFrame(this.page, [...this.framePath, selector]); }
 }
 
 export class SeleniumBaseRpcPage implements Page {
   [key: string]: any;
   private currentUrl = "about:blank";
+  private currentReadyState = "";
+  private frameCache = new Map<string, SeleniumBaseRpcFrame>();
+  private readonly mainFrameRef: SeleniumBaseRpcFrame;
   private readonly responseListeners = new Set<(response: Response) => void>();
-  private responsePoll?: NodeJS.Timeout;
+  private readonly loadListeners = new Set<(...args: any[]) => void>();
+  private readonly frameNavigationListeners = new Set<(frame: Frame) => void>();
+  private eventPoll?: NodeJS.Timeout;
+  private eventPollInFlight = false;
   readonly mouse = {
     move: async (x: number, y: number): Promise<void> => { await this.command("rpc", { action:"mouse-move", x, y }, 5_000); },
     click: async (x: number, y: number, options: Record<string, unknown> = {}): Promise<void> => { await this.command("rpc", { action:"mouse-click", x, y, options }, 10_000); }
   };
-  constructor(private readonly transport: SeleniumBaseRpcTransport) { if (!transport.isReady) throw new Error("Cannot create SeleniumBase page before worker READY."); }
+  constructor(private readonly transport: SeleniumBaseRpcTransport) {
+    if (!transport.isReady) throw new Error("Cannot create SeleniumBase page before worker READY.");
+    this.mainFrameRef = new SeleniumBaseRpcFrame(this, [], this.currentUrl, "main");
+  }
   locator(selector: string): Locator { return new SeleniumBaseRpcLocator(this, { selector }); }
   async $(selector: string): Promise<Locator | null> { const locator=this.locator(selector).first(); return (await locator.count()) > 0 ? locator : null; }
   async content(): Promise<string> { return String(await this.evaluate(() => document.documentElement ? document.documentElement.outerHTML : "")); }
   getByRole(role: string, options: { name?: string | RegExp } = {}): Locator { return new SeleniumBaseRpcLocator(this, { selector:roleSelector(role), hasText:serializePattern(options.name) }); }
   frameLocator(selector: string): FrameLocator { return new SeleniumBaseRpcFrame(this, [selector]); }
-  mainFrame(): Frame { return new SeleniumBaseRpcFrame(this, []); }
-  frames(): Frame[] { const frames: Frame[] = [this.mainFrame()]; for (let i=1;i<=12;i++) frames.push(new SeleniumBaseRpcFrame(this,[`iframe:nth-of-type(${i})`])); return frames; }
-  async goto(url: string, options: Record<string, unknown> = {}): Promise<unknown> { const reply=await this.command("navigate",{url,waitUntil:options["waitUntil"],timeoutMs:options["timeout"]},Number(options["timeout"]??30_000)+5_000); this.currentUrl=String(reply.url??url); return reply.result; }
+  mainFrame(): Frame { return this.mainFrameRef; }
+  frames(): Frame[] { return [this.mainFrameRef, ...this.frameCache.values()]; }
+  async goto(url: string, options: Record<string, unknown> = {}): Promise<unknown> {
+    const reply=await this.command("navigate",{url,waitUntil:options["waitUntil"],timeoutMs:options["timeout"]},Number(options["timeout"]??30_000)+5_000);
+    const fallback=String(reply.url??url);
+    try { await this.refreshPageState(true); } catch { this.currentUrl=fallback; this.mainFrameRef.update(fallback,"main"); }
+    return reply.result;
+  }
   url(): string { return this.currentUrl; }
   async title(): Promise<string> { const reply=await this.command("rpc",{action:"title"},5_000); return String(reply.result??reply.title??""); }
   isClosed(): boolean { return this.transport.closed; }
-  async evaluate<T = unknown>(fn: ((...args: any[]) => T) | string, ...args: any[]): Promise<T> { const reply=await this.command("rpc",{action:"evaluate-page",script:serializeFunction(fn),args},15_000); if(typeof reply.url==="string"&&reply.url)this.currentUrl=reply.url; return reply.result as T; }
+  async evaluate<T = unknown>(fn: ((...args: any[]) => T) | string, ...args: any[]): Promise<T> {
+    const reply=await this.command("rpc",{action:"evaluate-page",script:serializeFunction(fn),args},15_000);
+    if(typeof reply.url==="string"&&reply.url){this.currentUrl=reply.url;this.mainFrameRef.update(this.currentUrl,"main");}
+    return reply.result as T;
+  }
   async waitForTimeout(ms: number): Promise<void> { await sleep(Math.max(0,ms)); }
-  async waitForLoadState(state="domcontentloaded",options:{timeout?:number}={}):Promise<void>{await this.command("rpc",{action:"wait-load-state",state,timeoutMs:options.timeout},options.timeout??15_000);}
+  async waitForLoadState(state="domcontentloaded",options:{timeout?:number}={}):Promise<void>{await this.command("rpc",{action:"wait-load-state",state,timeoutMs:options.timeout},options.timeout??15_000);await this.refreshPageState(true).catch(()=>undefined);}
   async bringToFront():Promise<void>{await this.command("rpc",{action:"bring-to-front"},5_000);}
-  on(event:string,listener:(...args:any[])=>void):Page{if(event!=="response")return this;this.responseListeners.add(listener as (response:Response)=>void);if(!this.responsePoll){this.responsePoll=setInterval(()=>void this.pollNetworkEvents(),500);this.responsePoll.unref?.();}return this;}
-  off(event:string,listener:(...args:any[])=>void):Page{if(event!=="response")return this;this.responseListeners.delete(listener as (response:Response)=>void);if(!this.responseListeners.size&&this.responsePoll){clearInterval(this.responsePoll);this.responsePoll=undefined;}return this;}
-  async locatorOperation(action:string,descriptor:LocatorDescriptor,extra:Record<string,unknown>={},timeoutMs=15_000):Promise<unknown>{const reply=await this.command("rpc",{action,locator:descriptor,...extra},timeoutMs);if(typeof reply.url==="string"&&reply.url)this.currentUrl=reply.url;return reply.result;}
-  async closeTransport():Promise<void>{if(this.responsePoll)clearInterval(this.responsePoll);this.responsePoll=undefined;this.responseListeners.clear();if(!this.transport.closed&&this.transport.isReady)await this.transport.request("close",{},10_000).catch(()=>undefined);}
+  on(event:string,listener:(...args:any[])=>void):Page{
+    if(event==="response")this.responseListeners.add(listener as (response:Response)=>void);
+    else if(event==="load")this.loadListeners.add(listener);
+    else if(event==="framenavigated")this.frameNavigationListeners.add(listener as (frame:Frame)=>void);
+    else return this;
+    this.ensureEventPoll();
+    return this;
+  }
+  off(event:string,listener:(...args:any[])=>void):Page{
+    if(event==="response")this.responseListeners.delete(listener as (response:Response)=>void);
+    else if(event==="load")this.loadListeners.delete(listener);
+    else if(event==="framenavigated")this.frameNavigationListeners.delete(listener as (frame:Frame)=>void);
+    else return this;
+    this.stopEventPollIfIdle();
+    return this;
+  }
+  async locatorOperation(action:string,descriptor:LocatorDescriptor,extra:Record<string,unknown>={},timeoutMs=15_000):Promise<unknown>{
+    const reply=await this.command("rpc",{action,locator:descriptor,...extra},timeoutMs);
+    const returnedUrl=typeof reply.url==="string"?reply.url:"";
+    if(action==="click"&&this.hasLifecycleListeners())await this.refreshPageState(true).catch(()=>undefined);
+    else if(returnedUrl){this.currentUrl=returnedUrl;this.mainFrameRef.update(returnedUrl,"main");}
+    return reply.result;
+  }
+  async closeTransport():Promise<void>{
+    if(this.eventPoll)clearInterval(this.eventPoll);
+    this.eventPoll=undefined;
+    this.responseListeners.clear();
+    this.loadListeners.clear();
+    this.frameNavigationListeners.clear();
+    this.frameCache.clear();
+    if(!this.transport.closed&&this.transport.isReady)await this.transport.request("close",{},10_000).catch(()=>undefined);
+  }
   private command(type:string,payload:Record<string,unknown>,timeoutMs:number):Promise<RpcReply>{return this.transport.request(type,payload,timeoutMs);}
-  private async pollNetworkEvents():Promise<void>{if(!this.responseListeners.size||this.transport.closed||!this.transport.isReady)return;try{const reply=await this.command("network-events",{},4_000);for(const event of reply.events??[]){const response=new RpcResponse(event);for(const listener of this.responseListeners)listener(response);}if(typeof reply.url==="string"&&reply.url)this.currentUrl=reply.url;}catch{/* passive */}}
+  private hasLifecycleListeners():boolean{return this.loadListeners.size>0||this.frameNavigationListeners.size>0;}
+  private ensureEventPoll():void{
+    if(this.eventPoll)return;
+    this.eventPoll=setInterval(()=>void this.pollEvents(),250);
+    this.eventPoll.unref?.();
+  }
+  private stopEventPollIfIdle():void{
+    if(this.responseListeners.size||this.loadListeners.size||this.frameNavigationListeners.size||!this.eventPoll)return;
+    clearInterval(this.eventPoll);this.eventPoll=undefined;
+  }
+  private async pollEvents():Promise<void>{
+    if(this.eventPollInFlight||this.transport.closed||!this.transport.isReady)return;
+    this.eventPollInFlight=true;
+    try{
+      if(this.responseListeners.size)await this.pollNetworkEvents();
+      if(this.hasLifecycleListeners())await this.refreshPageState(true);
+    }catch{/* passive lifecycle/network observation must not break checkout */}
+    finally{this.eventPollInFlight=false;}
+  }
+  private async pollNetworkEvents():Promise<void>{
+    if(!this.responseListeners.size)return;
+    const reply=await this.command("network-events",{},4_000);
+    for(const event of reply.events??[]){const response=new RpcResponse(event);for(const listener of this.responseListeners)listener(response);}
+  }
+  private async refreshPageState(emitEvents:boolean):Promise<void>{
+    if(this.transport.closed||!this.transport.isReady)return;
+    const previousUrl=this.currentUrl;
+    const previousReadyState=this.currentReadyState;
+    const previousFrames=new Map<string,string>();
+    for(const [key,frame] of this.frameCache)previousFrames.set(key,frame.url());
+
+    const reply=await this.command("rpc",{action:"page-state"},6_000);
+    const raw=(reply.result&&typeof reply.result==="object"?reply.result:{}) as PageSnapshot;
+    const nextUrl=String(raw.url??reply.url??this.currentUrl);
+    const nextReadyState=String(raw.readyState??"");
+    const snapshots=Array.isArray(raw.frames)?raw.frames as FrameSnapshot[]:[];
+    const nextCache=new Map<string,SeleniumBaseRpcFrame>();
+
+    for(const snapshot of snapshots){
+      if(!snapshot||typeof snapshot!=="object"||!Array.isArray(snapshot.path))continue;
+      const path=(snapshot.path as unknown[]).map(value=>String(value||"")).filter(Boolean);
+      if(!path.length)continue;
+      const key=frameKey(path);
+      const url=String(snapshot.url??"");
+      const name=String(snapshot.name??"");
+      const frame=this.frameCache.get(key)??new SeleniumBaseRpcFrame(this,path,url,name);
+      frame.update(url,name);
+      nextCache.set(key,frame);
+    }
+
+    this.currentUrl=nextUrl;
+    this.currentReadyState=nextReadyState;
+    this.mainFrameRef.update(nextUrl,"main");
+    this.frameCache=nextCache;
+
+    if(!emitEvents)return;
+    if(nextUrl!==previousUrl){for(const listener of this.frameNavigationListeners)listener(this.mainFrameRef);}
+    for(const [key,frame] of nextCache){
+      const previousFrameUrl=previousFrames.get(key);
+      if(previousFrameUrl===undefined||previousFrameUrl!==frame.url()){
+        for(const listener of this.frameNavigationListeners)listener(frame);
+      }
+    }
+    if(nextReadyState==="complete"&&(previousReadyState!=="complete"||nextUrl!==previousUrl)){
+      for(const listener of this.loadListeners)listener();
+    }
+  }
 }

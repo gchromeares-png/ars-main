@@ -16,6 +16,7 @@ from seleniumbase_adapter import SeleniumBaseCdpAdapter
 PREFIX = "ARES_SB_TASK\t"
 MAX_RESPONSE_BODY = 256_000
 MAX_NETWORK_EVENTS = 50
+MAX_DISCOVERED_FRAMES = 128
 _CONTEXT_RETRY_ERRORS = (
     "execution context was destroyed",
     "cannot find context",
@@ -27,6 +28,30 @@ _QUEUE_URL_RE = re.compile(
     r"(?i)(queue[-_.]?it|waiting[-_.]?room|waitingroom|/queue(?:/|\?|$)|queue-token|queue/status|checkpoint|throttle)"
 )
 _TEXT_MIME_RE = re.compile(r"(?i)^(?:application/(?:json|[^;]+\+json)|text/(?:html|plain))(?:;|$)")
+_FRAME_DESCRIPTORS_SCRIPT = r"""
+const selectorFor = (element) => {
+  const parts = [];
+  let node = element;
+  while (node && node.nodeType === 1) {
+    if (node === document.documentElement) {
+      parts.unshift('html');
+      break;
+    }
+    const parent = node.parentElement;
+    if (!parent) break;
+    const index = Array.prototype.indexOf.call(parent.children, node) + 1;
+    parts.unshift(`${node.tagName.toLowerCase()}:nth-child(${index})`);
+    node = parent;
+  }
+  return parts.join(' > ');
+};
+return Array.from(document.querySelectorAll('iframe,frame')).map((element, ordinal) => ({
+  selector: selectorFor(element),
+  name: String(element.getAttribute('name') || element.getAttribute('id') || ''),
+  src: String(element.getAttribute('src') || ''),
+  ordinal,
+}));
+"""
 
 
 def emit(payload: Dict[str, Any]) -> None:
@@ -249,11 +274,79 @@ class TaskRpcRuntime:
             output.append(event)
         return {"events": output, "url": str(self.sb.get_current_url() or "")}
 
+    def page_state(self) -> Dict[str, Any]:
+        try:
+            self.sb.switch_to_default_content()
+        except Exception:
+            pass
+        try:
+            url = str(self.sb.get_current_url() or "")
+        except Exception:
+            url = ""
+        try:
+            ready_state = str(self.adapter.execute_script("return document.readyState;") or "")
+        except Exception:
+            ready_state = ""
+        return {
+            "url": url,
+            "readyState": ready_state,
+            "frames": self._discover_frame_tree(),
+        }
+
+    def _discover_frame_tree(self) -> List[Dict[str, Any]]:
+        queue_paths: Deque[List[str]] = deque([[]])
+        entries: Dict[tuple[str, ...], Dict[str, Any]] = {}
+        visited: set[tuple[str, ...]] = set()
+
+        while queue_paths and len(entries) < MAX_DISCOVERED_FRAMES:
+            path = queue_paths.popleft()
+            key = tuple(path)
+            if key in visited:
+                continue
+            visited.add(key)
+            try:
+                self._switch_to_frame_path(path)
+                current_url = str(self.adapter.execute_script("return window.location.href;") or "")
+                raw_descriptors = self.adapter.execute_script(_FRAME_DESCRIPTORS_SCRIPT)
+                descriptors = raw_descriptors if isinstance(raw_descriptors, list) else []
+                if path and key in entries and current_url:
+                    entries[key]["url"] = current_url
+                for raw in descriptors:
+                    if not isinstance(raw, dict):
+                        continue
+                    selector = str(raw.get("selector") or "").strip()
+                    if not selector:
+                        continue
+                    child_path = [*path, selector]
+                    child_key = tuple(child_path)
+                    if child_key in entries:
+                        continue
+                    entries[child_key] = {
+                        "path": child_path,
+                        "url": str(raw.get("src") or ""),
+                        "name": str(raw.get("name") or ""),
+                        "depth": len(child_path),
+                    }
+                    if len(entries) < MAX_DISCOVERED_FRAMES:
+                        queue_paths.append(child_path)
+            except Exception:
+                continue
+            finally:
+                try:
+                    self.sb.switch_to_default_content()
+                except Exception:
+                    pass
+
+        return list(entries.values())
+
     def rpc(self, command: Dict[str, Any]) -> Dict[str, Any]:
         self._sync_newest_target()
         action = str(command.get("action") or "")
         if action == "title":
             return {"result": str(self.sb.get_title() or ""), "url": str(self.sb.get_current_url() or "")}
+        if action == "page-state":
+            state = self.page_state()
+            return {"result": state, "url": str(state.get("url") or "")}
         if action == "evaluate-page":
             result = self._evaluate_function(str(command.get("script") or ""), command.get("args") if isinstance(command.get("args"), list) else [])
             return {"result": result, "url": str(self.sb.get_current_url() or "")}
@@ -375,13 +468,20 @@ const fn=(0,eval)(`(${fnSource})`); if(arguments[5]) return fn(items,...extra); 
             args,
         )
 
+    def _switch_to_frame_path(self, frame_path: Iterable[str]) -> None:
+        try:
+            self.sb.switch_to_default_content()
+        except Exception:
+            pass
+        for selector in frame_path:
+            self.sb.switch_to_frame(selector)
+
     def _in_frames(self, frame_path: Iterable[str], action: Any) -> Any:
         path = list(frame_path)
         if not path:
             return action()
         try:
-            for selector in path:
-                self.sb.switch_to_frame(selector)
+            self._switch_to_frame_path(path)
             return action()
         finally:
             try:
