@@ -1,4 +1,4 @@
-import type { BrowserContext } from "patchright";
+import type { BrowserContext } from "../types";
 
 /**
  * Page-visible WebRTC privacy layer for proxied browser sessions.
