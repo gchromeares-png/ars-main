@@ -45,24 +45,20 @@ def _run(command: Dict[str, Any]) -> Dict[str, Any]:
         if action == "seed-persistence":
             if not token:
                 raise ValueError("seed-persistence requires a non-empty token")
-            adapter.set_snapshot_cookies([
-                {
-                    "name": COOKIE_NAME,
-                    "value": token,
-                    "domain": "127.0.0.1",
-                    "path": "/",
-                    "expires": 4102444800,
-                    "httpOnly": False,
-                    "secure": False,
-                    "sameSite": "Lax",
-                }
-            ])
+
+            # This probe verifies Chrome's native profile persistence only.
+            # Cookie snapshot injection has its own dedicated bridge probe.
+            adapter.execute_script(
+                "document.cookie = "
+                f"{json.dumps(f'{COOKIE_NAME}={token}; Path=/; Max-Age=34560000; SameSite=Lax')};"
+            )
             adapter.execute_script(
                 "localStorage.setItem("
                 f"{json.dumps(STORAGE_KEY)}, {json.dumps(token)}"
                 ");"
             )
-            adapter.sleep(0.25)
+            # Give Chromium time to commit its profile stores before graceful quit.
+            adapter.sleep(1.5)
 
         cookies = adapter.get_snapshot_cookies()
         storage_value = adapter.execute_script(
