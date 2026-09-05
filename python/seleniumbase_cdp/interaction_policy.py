@@ -19,6 +19,9 @@ _DEFAULTS: Dict[str, Any] = {
     "captureOnCanvas": True,
     "captureOnVerificationFailure": True,
     "maxSavedCaptures": 40,
+    "gridClickDelayMinMs": 180,
+    "gridClickDelayMaxMs": 420,
+    "gridSubmitDelayMs": 300,
     "textHints": [
         "verify", "verification", "challenge", "security", "secure", "gate", "check", "confirm",
         "prüfen", "bestätigen", "sicherheit", "verifizieren",
@@ -52,6 +55,12 @@ class InteractionPolicy:
                     merged[key] = values[key]
         merged["watchdogIntervalMs"] = max(200, min(5000, int(merged["watchdogIntervalMs"])))
         merged["maxSavedCaptures"] = max(4, min(500, int(merged["maxSavedCaptures"])))
+        merged["gridClickDelayMinMs"] = max(0, min(5000, int(merged["gridClickDelayMinMs"])))
+        merged["gridClickDelayMaxMs"] = max(
+            merged["gridClickDelayMinMs"],
+            min(5000, int(merged["gridClickDelayMaxMs"])),
+        )
+        merged["gridSubmitDelayMs"] = max(0, min(5000, int(merged["gridSubmitDelayMs"])))
         for key in _DEFAULTS:
             if key.startswith("captureOn"):
                 merged[key] = bool(merged[key])
@@ -78,6 +87,17 @@ class InteractionPolicy:
     @property
     def max_saved_captures(self) -> int:
         return int(self._values["maxSavedCaptures"])
+
+    @property
+    def grid_click_delay_range_seconds(self) -> tuple[float, float]:
+        return (
+            float(self._values["gridClickDelayMinMs"]) / 1000.0,
+            float(self._values["gridClickDelayMaxMs"]) / 1000.0,
+        )
+
+    @property
+    def grid_submit_delay_seconds(self) -> float:
+        return float(self._values["gridSubmitDelayMs"]) / 1000.0
 
     @property
     def text_hints(self) -> List[str]:
