@@ -3,15 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-from authorized_grid_action_executor import AuthorizedGridActionExecutor
 from auto_interaction_controller import AutoInteractionController
 from composite_slider_grounder import CompositeSliderGrounder
 from cursor_path_provider import CursorPathProvider
+from extended_grid_site_adapter import ExtendedGridSiteAdapter
+from interaction_policy import InteractionPolicy
 from interaction_trace import InteractionTrace
-from site_grid_adapter import GridSiteAdapter
+from proximity_grid_action_executor import ProximityGridActionExecutor
+from robust_vision_grid_classifier import RobustVisionGridClassifier
+from screenshot_grid_tile_provider import ScreenshotGridTileProvider
 from site_slider_adapter import SliderSiteAdapter
 from slider_action_executor import SliderActionExecutor
-from vision_grid_classifier import VisionGridClassifier
 
 
 class VisualInteractionRuntime:
@@ -26,12 +28,14 @@ class VisualInteractionRuntime:
     ) -> None:
         self._sb = seleniumbase_cdp
         self._profile_dir = Path(profile_dir).expanduser().resolve()
-        self._grid = GridSiteAdapter(self._sb, overrides=overrides or {})
+        self._policy = InteractionPolicy.from_profile(self._profile_dir)
+        self._grid = ExtendedGridSiteAdapter(self._sb, overrides=overrides or {})
         self._slider = SliderSiteAdapter(self._sb, overrides=overrides or {})
         self._paths = CursorPathProvider()
-        self._grid_actions = AuthorizedGridActionExecutor(self._sb, self._grid)
+        self._grid_actions = ProximityGridActionExecutor(self._sb, self._grid, self._policy)
         self._slider_actions = SliderActionExecutor(self._sb, self._slider, self._paths)
-        self._vision = VisionGridClassifier()
+        self._vision = RobustVisionGridClassifier()
+        self._screenshot_tiles = ScreenshotGridTileProvider()
         self._slider_grounder = CompositeSliderGrounder(self._sb, profile_dir=self._profile_dir)
         self._trace = InteractionTrace(self._profile_dir)
         self._controller = AutoInteractionController(
@@ -47,11 +51,37 @@ class VisualInteractionRuntime:
     def poll_and_act(self) -> Dict[str, Any]:
         return self._controller.poll_and_act()
 
+    def poll_and_act_from_screenshot(self, screenshot_path: str | Path) -> Dict[str, Any]:
+        state = self._grid.poll()
+        if state.get("kind") != "image-grid":
+            return {"acted": False, "kind": "none", "reason": "no-image-grid", "state": state}
+
+        provided = self._screenshot_tiles.sources(screenshot_path, state)
+        sources = list(provided.get("sources") or [])
+        if not sources or not any(sources):
+            return {
+                "acted": False,
+                "kind": "image-grid",
+                "reason": "screenshot-grid-unavailable",
+                "state": state,
+                "screenshot": provided,
+            }
+
+        result = self._controller.act_grid_from_sources(state, sources, source="screenshot-crops")
+        return {**result, "screenshot": provided}
+
     def status(self) -> Dict[str, Any]:
         return {
             **self._controller.status(),
             "runtime": "visual-interaction-runtime",
             "markIdentity": "structural+semantic-visual",
+            "gridGeometry": "dynamic-2x2-through-8x8",
+            "gridClickOrder": "nearest-neighbour",
+            "gridTiming": {
+                "clickDelaySeconds": self._policy.grid_click_delay_seconds,
+                "submitDelaySeconds": self._policy.grid_submit_delay_seconds,
+            },
+            "screenshotGridFallback": True,
             "sliderProviders": self._slider_grounder.status(),
         }
 

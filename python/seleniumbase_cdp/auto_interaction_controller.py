@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Iterable
 
 
 _ACTION_TERMS = re.compile(
@@ -46,6 +46,18 @@ class AutoInteractionController:
             return self._handle_slider(candidate)
         return {"acted": False, "kind": "none", "state": candidate}
 
+    def act_grid_from_sources(
+        self,
+        state: Dict[str, Any],
+        sources: Iterable[str],
+        *,
+        source: str = "screenshot",
+    ) -> Dict[str, Any]:
+        if state.get("kind") != "image-grid":
+            return {"acted": False, "kind": "none", "state": state, "reason": "not-image-grid"}
+        result = self._handle_grid(state, source_override=list(sources), decision_source=source)
+        return {**result, "decisionSource": source}
+
     def status(self) -> Dict[str, Any]:
         status = {
             "enabled": True,
@@ -58,12 +70,19 @@ class AutoInteractionController:
             status["tracePath"] = str(trace_path)
         return status
 
-    def _handle_grid(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_grid(
+        self,
+        state: Dict[str, Any],
+        *,
+        source_override: list[str] | None = None,
+        decision_source: str = "structural-source",
+    ) -> Dict[str, Any]:
         signature = str(state.get("signature") or "")
         if not self._actionable(state) or not signature or signature == self._last_grid_signature:
-            return {"acted": False, "kind": "image-grid", "state": state}
+            return {"acted": False, "kind": "image-grid", "state": state, "decisionSource": decision_source}
 
-        decision = self._vision.classify(str(state.get("instruction") or ""), state.get("sources") or [])
+        sources = source_override if source_override is not None else list(state.get("sources") or [])
+        decision = self._vision.classify(str(state.get("instruction") or ""), sources)
         selected = self._selected_indexes(decision.get("selectedIndexes") or [], int(state.get("tileCount") or 0))
         tile_marks = [
             mark for mark in state.get("marks") or []
@@ -74,10 +93,21 @@ class AutoInteractionController:
             for index in selected
             if index < len(tile_marks) and tile_marks[index].get("markId")
         ]
-        decision = {**decision, "selectedIndexes": selected, "selectedMarkIds": selected_mark_ids}
+        decision = {
+            **decision,
+            "selectedIndexes": selected,
+            "selectedMarkIds": selected_mark_ids,
+            "source": decision_source,
+        }
         self._record("decision", {"kind": "image-grid", "decision": decision})
         if not selected:
-            return {"acted": False, "kind": "image-grid", "state": state, "decision": decision}
+            return {
+                "acted": False,
+                "kind": "image-grid",
+                "state": state,
+                "decision": decision,
+                "decisionSource": decision_source,
+            }
 
         self._last_action_at = time.monotonic()
         apply_marks = getattr(self._grid_actions, "apply_marks", None)
@@ -94,6 +124,7 @@ class AutoInteractionController:
                 "verified": False,
                 "kind": "image-grid",
                 "decision": decision,
+                "decisionSource": decision_source,
                 "result": result,
                 "verification": {"verified": False, "reason": "no-click-resolved"},
             }
@@ -106,6 +137,7 @@ class AutoInteractionController:
             "verified": bool(verification.get("verified")),
             "kind": "image-grid",
             "decision": decision,
+            "decisionSource": decision_source,
             "result": result,
             "verification": verification,
         }
