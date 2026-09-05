@@ -136,7 +136,8 @@ export class SeleniumBaseRpcPage implements Page {
   locator(selector: string): Locator { return new SeleniumBaseRpcLocator(this, { selector }); }
   getByRole(role: string, options: { name?: string | RegExp } = {}): Locator { return new SeleniumBaseRpcLocator(this, { selector:roleSelector(role), hasText:serializePattern(options.name) }); }
   frameLocator(selector: string): FrameLocator { return new SeleniumBaseRpcFrame(this, [selector]); }
-  frames(): Frame[] { const frames: Frame[] = [new SeleniumBaseRpcFrame(this, [])]; for (let i=1;i<=12;i++) frames.push(new SeleniumBaseRpcFrame(this,[`iframe:nth-of-type(${i})`])); return frames; }
+  mainFrame(): Frame { return new SeleniumBaseRpcFrame(this, []); }
+  frames(): Frame[] { const frames: Frame[] = [this.mainFrame()]; for (let i=1;i<=12;i++) frames.push(new SeleniumBaseRpcFrame(this,[`iframe:nth-of-type(${i})`])); return frames; }
   async goto(url: string, options: Record<string, unknown> = {}): Promise<unknown> { const reply=await this.command("navigate",{url,waitUntil:options["waitUntil"],timeoutMs:options["timeout"]},Number(options["timeout"]??30_000)+5_000); this.currentUrl=String(reply.url??url); return reply.result; }
   url(): string { return this.currentUrl; }
   async title(): Promise<string> { const reply=await this.command("rpc",{action:"title"},5_000); return String(reply.result??reply.title??""); }
@@ -145,8 +146,8 @@ export class SeleniumBaseRpcPage implements Page {
   async waitForTimeout(ms: number): Promise<void> { await sleep(Math.max(0,ms)); }
   async waitForLoadState(state="domcontentloaded",options:{timeout?:number}={}):Promise<void>{await this.command("rpc",{action:"wait-load-state",state,timeoutMs:options.timeout},options.timeout??15_000);}
   async bringToFront():Promise<void>{await this.command("rpc",{action:"bring-to-front"},5_000);}
-  on(event:"response",listener:(response:Response)=>void):Page{if(event!=="response")return this;this.responseListeners.add(listener);if(!this.responsePoll){this.responsePoll=setInterval(()=>void this.pollNetworkEvents(),500);this.responsePoll.unref?.();}return this;}
-  off(event:"response",listener:(response:Response)=>void):Page{if(event!=="response")return this;this.responseListeners.delete(listener);if(!this.responseListeners.size&&this.responsePoll){clearInterval(this.responsePoll);this.responsePoll=undefined;}return this;}
+  on(event:string,listener:(...args:any[])=>void):Page{if(event!=="response")return this;this.responseListeners.add(listener as (response:Response)=>void);if(!this.responsePoll){this.responsePoll=setInterval(()=>void this.pollNetworkEvents(),500);this.responsePoll.unref?.();}return this;}
+  off(event:string,listener:(...args:any[])=>void):Page{if(event!=="response")return this;this.responseListeners.delete(listener as (response:Response)=>void);if(!this.responseListeners.size&&this.responsePoll){clearInterval(this.responsePoll);this.responsePoll=undefined;}return this;}
   async locatorOperation(action:string,descriptor:LocatorDescriptor,extra:Record<string,unknown>={},timeoutMs=15_000):Promise<unknown>{const reply=await this.command("rpc",{action,locator:descriptor,...extra},timeoutMs);if(typeof reply.url==="string"&&reply.url)this.currentUrl=reply.url;return reply.result;}
   async closeTransport():Promise<void>{if(this.responsePoll)clearInterval(this.responsePoll);this.responsePoll=undefined;this.responseListeners.clear();if(!this.transport.closed&&this.transport.isReady)await this.transport.request("close",{},10_000).catch(()=>undefined);}
   private command(type:string,payload:Record<string,unknown>,timeoutMs:number):Promise<RpcReply>{return this.transport.request(type,payload,timeoutMs);}
