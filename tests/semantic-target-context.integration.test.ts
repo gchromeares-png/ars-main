@@ -1,4 +1,8 @@
-import { chromium, type Locator, type Page } from "patchright";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import type { Locator, Page } from "../src/browser-worker/types";
+import { AresBrowserRuntime } from "../src/browser-worker/ares-browser-runtime";
 import type { SemanticEmbeddingProvider } from "../src/browser-worker/field-semantic-resolver";
 import { FieldSemanticResolver } from "../src/browser-worker/field-semantic-resolver";
 import { SemanticFieldAutofill } from "../src/browser-worker/semantic-field-autofill";
@@ -28,16 +32,29 @@ class RecordingInteractions extends GhostCursorUiInteractionHelper {
 }
 
 describeBrowser("semantic target context identity", () => {
-  jest.setTimeout(30_000);
+  jest.setTimeout(45_000);
 
   it("tracks shipping:city and billing:city independently across fill, missing and retry", async () => {
-    const browser = await chromium.launch({ headless: true, channel: "chrome" }).catch(() => chromium.launch({ headless: true }));
+    const runtime = new AresBrowserRuntime();
+    const taskId = `semantic-target-context-${Date.now()}`;
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ares-semantic-target-"));
     try {
-      const page = await browser.newPage();
-      await page.setContent(`<!doctype html><html><body>
+      const handle = await runtime.createContext({
+        taskId,
+        userDataDir,
+        headless: true,
+        navigationTimeoutMs: 30_000,
+        actionTimeoutMs: 15_000
+      });
+      const page = handle.page;
+      const html = `<!doctype html><html><body>
         <label>Lieferort<input data-slot="shipping-city" autocomplete="shipping address-level2"></label>
         <label>Rechnungsort<input data-slot="billing-city" autocomplete="billing address-level2"></label>
-      </body></html>`);
+      </body></html>`;
+      await page.goto(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`, {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000
+      });
 
       const shippingCity = semanticTarget("city", "shipping");
       const billingCity = semanticTarget("city", "billing");
@@ -88,7 +105,9 @@ describeBrowser("semantic target context identity", () => {
       expect(missingResult.writeCounts[targetKey(shippingCity)]).toBe(1);
       expect(missingResult.writeCounts[targetKey(billingCity)]).toBeUndefined();
     } finally {
-      await browser.close();
+      await runtime.closeContext(taskId).catch(() => undefined);
+      await runtime.shutdown().catch(() => undefined);
+      fs.rmSync(userDataDir, { recursive: true, force: true });
     }
   });
 });
