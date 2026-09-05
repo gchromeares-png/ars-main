@@ -4,6 +4,8 @@ import hashlib
 import json
 from typing import Any, Dict
 
+from stable_marks import build_stable_marks, stable_mark_digest
+
 
 class SliderSiteAdapter:
     """Domain-agnostic structural detector for slider-style test interactions."""
@@ -23,6 +25,13 @@ class SliderSiteAdapter:
         script = f"""
         (() => {{
           const overrides = {overrides};
+          const viewport = {{
+            width: window.innerWidth || document.documentElement.clientWidth || 0,
+            height: window.innerHeight || document.documentElement.clientHeight || 0,
+            scrollX: window.scrollX || 0,
+            scrollY: window.scrollY || 0,
+            devicePixelRatio: window.devicePixelRatio || 1,
+          }};
           const visible = el => {{
             if (!el?.getBoundingClientRect) return false;
             const r = el.getBoundingClientRect(), s = getComputedStyle(el);
@@ -43,6 +52,32 @@ class SliderSiteAdapter:
               return name ? 'input[type="range"][name="' + CSS.escape(name) + '"]' : 'input[type="range"]';
             }}
             return '';
+          }};
+          const structuralKey = (el, role, fallbackIndex=0) => {{
+            if (!el) return `${{role}}:slot:${{fallbackIndex}}`;
+            const selector = selectorFor(el);
+            if (selector) return selector;
+            const id = el.getAttribute?.('id') || '';
+            const testId = el.getAttribute?.('data-testid') || '';
+            const name = el.getAttribute?.('name') || '';
+            const aria = el.getAttribute?.('aria-label') || '';
+            const roleAttr = el.getAttribute?.('role') || '';
+            const cls = typeof el.className === 'string' ? el.className.trim().split(/\\s+/).slice(0,4).join('.') : '';
+            return [role, el.tagName || '', id, testId, name, aria, roleAttr, cls, `slot:${{fallbackIndex}}`].join('|');
+          }};
+          const semanticSignature = (el, role) => {{
+            if (!el) return role;
+            const style = getComputedStyle(el);
+            return [
+              role,
+              text(el).slice(0,240),
+              el.getAttribute?.('aria-valuenow') || '',
+              el.getAttribute?.('aria-valuetext') || '',
+              el.getAttribute?.('data-target') || '',
+              el.getAttribute?.('data-goal') || '',
+              style.backgroundColor || '',
+              style.borderColor || '',
+            ].join('|');
           }};
           const roots = [], seen = new Set();
           const walk = (root, scope) => {{
@@ -90,8 +125,8 @@ class SliderSiteAdapter:
               const targetSelector = overrides.sliderTarget || '[data-target],[data-goal],[aria-label*="target" i],[aria-label*="goal" i],[class*="target" i],[class*="goal" i],[class*="marker" i],[class*="tick" i]';
               const targetNodes = [...(scopedRoot.querySelectorAll?.(targetSelector) || [])]
                 .filter(el => el !== handle && el !== track && visible(el));
-              const targetCandidates = [];
-              for (const node of targetNodes) {{
+              const rawTargets = [];
+              for (const [targetIndex,node] of targetNodes.entries()) {{
                 const r = node.getBoundingClientRect();
                 const [cx,cy] = center(r);
                 const distance = distanceToRect(cx,cy,t);
@@ -108,22 +143,34 @@ class SliderSiteAdapter:
                 if (overrides.sliderTarget) targetScore += 25;
                 if (label) targetScore += 5;
                 if (distance <= 4) targetScore += 10;
-                targetCandidates.push({{
-                  markId:'',
+                rawTargets.push({{
+                  role:'slider-target',
                   fraction:Math.max(0,Math.min(1,targetFraction)),
                   score:targetScore,
+                  confidence:Math.max(0.5,Math.min(0.96,0.45 + targetScore/180)),
                   label:label.slice(0,160),
-                  rect:rectOf(node),
+                  visualBounds:rectOf(node),
                   selector:selectorFor(node),
+                  structuralKey:structuralKey(node,'slider-target',targetIndex),
+                  semanticSignature:semanticSignature(node,'slider-target'),
                 }});
               }}
-              targetCandidates.sort((a,b) => b.score-a.score);
-              targetCandidates.forEach((item,index) => item.markId = `S${{index+3}}`);
+              rawTargets.sort((a,b) => b.score-a.score);
 
-              const marks = [
-                {{markId:'S1', role:'slider-handle', rect:rectOf(handle), selector:overrides.sliderHandle || selectorFor(handle)}},
-                {{markId:'S2', role:'slider-track', rect:rectOf(track), selector:overrides.sliderTrack || selectorFor(track)}},
-                ...targetCandidates.map(item => ({{markId:item.markId, role:'slider-target', rect:item.rect, selector:item.selector, label:item.label}})),
+              const rawMarks = [
+                {{
+                  role:'slider-handle', visualBounds:rectOf(handle), confidence:0.98,
+                  selector:overrides.sliderHandle || selectorFor(handle),
+                  structuralKey:structuralKey(handle,'slider-handle',0),
+                  semanticSignature:semanticSignature(handle,'slider-handle'),
+                }},
+                {{
+                  role:'slider-track', visualBounds:rectOf(track), confidence:0.96,
+                  selector:overrides.sliderTrack || selectorFor(track),
+                  structuralKey:structuralKey(track,'slider-track',0),
+                  semanticSignature:semanticSignature(track,'slider-track'),
+                }},
+                ...rawTargets,
               ];
               const complete = Boolean(overrides.sliderComplete && scopedRoot.querySelector(overrides.sliderComplete));
               const failed = Boolean(overrides.sliderFailed && scopedRoot.querySelector(overrides.sliderFailed));
@@ -133,7 +180,7 @@ class SliderSiteAdapter:
               if (overrides.sliderHandle || overrides.sliderTrack) score += 20;
               if (t.width >= 120 || t.height >= 120) score += 10;
               if (text(instruction)) score += 5;
-              if (targetCandidates.length) score += 8;
+              if (rawTargets.length) score += 8;
               candidates.push({{
                 kind:'slider', scope, score,
                 orientation: horizontal ? 'horizontal' : 'vertical',
@@ -144,8 +191,8 @@ class SliderSiteAdapter:
                 handleSelector: overrides.sliderHandle || selectorFor(handle),
                 trackSelector: overrides.sliderTrack || selectorFor(track),
                 nativeRange,
-                targetCandidates,
-                marks,
+                rawMarks,
+                viewport,
                 complete,
                 failed,
                 override:Boolean(overrides.sliderRoot || overrides.sliderHandle || overrides.sliderTrack || overrides.sliderTarget)
@@ -153,7 +200,7 @@ class SliderSiteAdapter:
             }}
           }}
           candidates.sort((a,b) => b.score-a.score);
-          return candidates[0] || {{kind:'none',scope:'document',score:0,orientation:'horizontal',fraction:0,min:0,max:0,value:0,instruction:'',handleRect:null,trackRect:null,handleSelector:'',trackSelector:'',nativeRange:false,targetCandidates:[],marks:[],complete:false,failed:false,override:false}};
+          return candidates[0] || {{kind:'none',scope:'document',score:0,orientation:'horizontal',fraction:0,min:0,max:0,value:0,instruction:'',handleRect:null,trackRect:null,handleSelector:'',trackSelector:'',nativeRange:false,rawMarks:[],viewport,complete:false,failed:false,override:false}};
         }})()
         """
         try:
@@ -169,8 +216,7 @@ class SliderSiteAdapter:
             str(snapshot.get("orientation") or ""),
             str(round(float(snapshot.get("fraction") or 0), 4)),
             str(snapshot.get("instruction") or ""),
-            json.dumps(snapshot.get("trackRect"), sort_keys=True),
-            json.dumps(snapshot.get("targetCandidates") or [], sort_keys=True),
+            stable_mark_digest(snapshot.get("marks") or []),
             str(bool(snapshot.get("complete"))),
             str(bool(snapshot.get("failed"))),
         ])
@@ -195,11 +241,28 @@ class SliderSiteAdapter:
     def _normalize(value: Any) -> Dict[str, Any]:
         if not isinstance(value, dict):
             return SliderSiteAdapter._empty()
-        target_candidates = [dict(item) for item in value.get("targetCandidates") or [] if isinstance(item, dict)]
-        marks = [dict(item) for item in value.get("marks") or [] if isinstance(item, dict)]
+        scope = str(value.get("scope") or "document")
+        marks = build_stable_marks(
+            [dict(item) for item in value.get("rawMarks") or [] if isinstance(item, dict)],
+            scope=scope,
+            viewport=value.get("viewport") if isinstance(value.get("viewport"), dict) else {},
+        )
+        targets = [
+            {
+                "markId": mark.get("markId"),
+                "fraction": mark.get("fraction"),
+                "score": mark.get("score"),
+                "confidence": mark.get("confidence"),
+                "label": mark.get("label", ""),
+                "rect": mark.get("visualBounds"),
+                "semanticVisualSignature": mark.get("semanticVisualSignature"),
+            }
+            for mark in marks
+            if mark.get("role") == "slider-target"
+        ]
         return {
             "kind": str(value.get("kind") or "none"),
-            "scope": str(value.get("scope") or "document"),
+            "scope": scope,
             "score": int(value.get("score") or 0),
             "orientation": str(value.get("orientation") or "horizontal"),
             "fraction": float(value.get("fraction") or 0),
@@ -212,7 +275,7 @@ class SliderSiteAdapter:
             "handleSelector": str(value.get("handleSelector") or ""),
             "trackSelector": str(value.get("trackSelector") or ""),
             "nativeRange": bool(value.get("nativeRange")),
-            "targetCandidates": target_candidates,
+            "targetCandidates": targets,
             "marks": marks,
             "complete": bool(value.get("complete")),
             "failed": bool(value.get("failed")),
