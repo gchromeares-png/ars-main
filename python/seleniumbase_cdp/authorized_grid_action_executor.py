@@ -28,10 +28,11 @@ class AuthorizedGridActionExecutor:
         }
 
     def _apply_document(self, selected: List[int], submit: bool) -> Dict[str, Any]:
+        overrides = getattr(self._site_adapter, "_overrides", {})
         script = f"""
         (() => {{
           const selected = {json.dumps(selected)};
-          const overrides = {json.dumps(self._site_adapter.overrides)};
+          const overrides = {json.dumps(overrides)};
           const roots = [], seen = new Set();
           const visible = el => {{
             if (!el?.getBoundingClientRect) return false;
@@ -86,8 +87,8 @@ class AuthorizedGridActionExecutor:
 
     def _apply_frame(self, state: Dict[str, Any], selected: List[int], submit: bool) -> Dict[str, Any]:
         try:
-            index = int(str(state["scope"]).split(":", 1)[1])
-            frame = list(self._sb.find_elements("iframe") or [])[index]
+            frame_index = int(str(state["scope"]).split(":", 1)[1])
+            frame = list(self._sb.find_elements("iframe") or [])[frame_index]
             images = list(frame.query_selector_all("img") or [])
         except Exception:
             return {"clicked": [], "submitted": False}
@@ -102,7 +103,8 @@ class AuthorizedGridActionExecutor:
 
         submitted = False
         if submit:
-            for selector in (self._site_adapter.overrides.get("submit"), 'button[type="submit"]', 'input[type="submit"]', 'button'):
+            overrides = getattr(self._site_adapter, "_overrides", {})
+            for selector in (overrides.get("submit"), 'button[type="submit"]', 'input[type="submit"]', 'button'):
                 if not selector:
                     continue
                 try:
