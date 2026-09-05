@@ -220,6 +220,7 @@ def _start(command: Dict[str, Any]) -> int:
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
         threading.Thread(target=_command_reader, args=(commands,), daemon=True).start()
         next_url_capture = time.monotonic() + 2.0
+        next_challenge_debug_capture = 0.0
 
         while True:
             if not adapter.is_running():
@@ -242,6 +243,40 @@ def _start(command: Dict[str, Any]) -> int:
                 })
 
             now = time.monotonic()
+            # Cross-origin challenge internals may not mutate the top document.
+            # While any challenge frame is active, force a bounded full-page
+            # capture every two seconds so the exact visible grid can be audited.
+            if now >= next_challenge_debug_capture:
+                try:
+                    challenge = adapter.challenge_state()
+                    if str(challenge.get("kind") or "none") != "none":
+                        generation = int(challenge.get("generation") or 0)
+                        debug_capture = adapter._capture.capture(
+                            "challenge-live",
+                            generation=generation,
+                            force=True,
+                        )
+                        _emit({
+                            "type": "debug",
+                            "profileId": profile_id,
+                            "event": "challenge-live-capture",
+                            "challenge": challenge,
+                            "capture": debug_capture,
+                            "debugCaptureRoot": debug_root,
+                        })
+                        next_challenge_debug_capture = now + 2.0
+                    else:
+                        next_challenge_debug_capture = now + 0.8
+                except Exception as exc:
+                    _emit({
+                        "type": "debug",
+                        "profileId": profile_id,
+                        "event": "challenge-debug-error",
+                        "error": str(exc),
+                        "debugCaptureRoot": debug_root,
+                    })
+                    next_challenge_debug_capture = now + 2.0
+
             if now >= next_url_capture:
                 last_url = _remember_last_url(profile_dir, adapter, last_url)
                 next_url_capture = now + 2.0
