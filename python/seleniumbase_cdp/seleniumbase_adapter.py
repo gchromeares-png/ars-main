@@ -86,17 +86,17 @@ class SeleniumBaseCdpAdapter:
 
     @property
     def chrome_pid(self) -> int | None:
-        candidates = [getattr(self._sb, "driver", None), self._sb]
-        for candidate in candidates:
-            if candidate is None:
-                continue
-            if hasattr(candidate, "cdp_base"):
-                candidate = candidate.cdp_base
-            for attribute in ("_process_pid", "process_pid", "pid"):
-                pid = getattr(candidate, attribute, None)
-                if isinstance(pid, int) and pid > 0:
-                    return pid
-        return None
+        # Only use the process handle SeleniumBase historically exposed for the
+        # Chromium process. Generic `.pid` attributes on wrapper objects are not
+        # guaranteed to be Chrome and can make Windows profile-flush waiting target
+        # the wrong process.
+        driver = getattr(self._sb, "driver", None)
+        if driver is None:
+            return None
+        if hasattr(driver, "cdp_base"):
+            driver = driver.cdp_base
+        pid = getattr(driver, "_process_pid", None)
+        return int(pid) if isinstance(pid, int) and pid > 0 else None
 
     def goto(self, url: str) -> None:
         self._sb.goto(url)
@@ -211,18 +211,14 @@ class SeleniumBaseCdpAdapter:
         return [self._cookie_to_snapshot(cookie) for cookie in self._sb.get_all_cookies()]
 
     def is_running(self) -> bool:
-        """Fast liveness probe for the browser-owner loop.
-
-        This method must never perform challenge, DOM, screenshot, or visual observation
-        work. The task worker calls it before servicing each queued RPC; any blocking
-        browser interaction here can starve the queue and turn a recoverable page state
-        into an application-wide RPC timeout.
-        """
+        """Fast, non-blocking liveness probe for the task-worker command loop."""
         if self._closed:
             return False
 
         pid = self.chrome_pid
         if not pid:
+            # Pure-CDP builds may not expose SeleniumBase's legacy driver wrapper.
+            # Missing optional process metadata is not evidence that Chrome died.
             return True
         try:
             process = psutil.Process(pid)
@@ -361,13 +357,36 @@ class SeleniumBaseCdpAdapter:
                 if not key.startswith("_") and not callable(getattr(cookie, key, None))
             }
 
-        return {
+        same_site = raw.get("sameSite") or raw.get("same_site") or "Lax"
+        if hasattr(same_site, "to_json"):
+            same_site = same_site.to_json()
+        same_site = str(same_site)
+        if same_site not in {"Strict", "Lax", "None"}:
+            same_site = "Lax"
+
+        expires = raw.get("expires", -1)
+        if hasattr(expires, "to_json"):
+            expires = expires.to_json()
+        try:
+            expires_number = float(expires)
+        except (TypeError, ValueError):
+            expires_number = -1
+
+        snapshot: Dict[str, Any] = {
             "name": str(raw.get("name") or ""),
             "value": str(raw.get("value") or ""),
             "domain": str(raw.get("domain") or ""),
             "path": str(raw.get("path") or "/"),
-            "expires": float(raw.get("expires") or -1),
-            "httpOnly": bool(raw.get("httpOnly")),
-            "secure": bool(raw.get("secure")),
-            "sameSite": str(raw.get("sameSite") or "Lax"),
+            "expires": expires_number,
+            "httpOnly": bool(raw.get("httpOnly", raw.get("http_only", False))),
+            "secure": bool(raw.get("secure", False)),
+            "sameSite": same_site,
         }
+
+        partition_key = raw.get("partitionKey") or raw.get("partition_key")
+        if isinstance(partition_key, str) and partition_key.strip():
+            snapshot["partitionKey"] = partition_key.strip()
+        elif isinstance(partition_key, dict) and partition_key.get("topLevelSite"):
+            snapshot["partitionKey"] = str(partition_key["topLevelSite"])
+
+        return snapshot
