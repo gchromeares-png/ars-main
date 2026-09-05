@@ -51,7 +51,6 @@ def _site_adapter_overrides(command: Dict[str, Any], profile_dir: Path) -> Dict[
     inline = command.get("siteAdapterOverrides")
     if isinstance(inline, dict):
         return {str(key): str(value) for key, value in inline.items()}
-
     path = profile_dir / SITE_ADAPTER_FILENAME
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -65,8 +64,8 @@ def _site_adapter_overrides(command: Dict[str, Any], profile_dir: Path) -> Dict[
 
 
 def _restorable_url(value: str) -> bool:
-    lowered = value.lower()
-    return lowered.startswith("http://") or lowered.startswith("https://")
+    value = value.lower()
+    return value.startswith("http://") or value.startswith("https://")
 
 
 def _read_last_url(profile_dir: Path) -> str:
@@ -84,19 +83,15 @@ def _remember_last_url(profile_dir: Path, adapter: SeleniumBaseCdpAdapter, previ
         return previous
     if not _restorable_url(value) or value == previous:
         return previous
-
     target = profile_dir / LAST_URL_FILENAME
     temporary = profile_dir / f"{LAST_URL_FILENAME}.tmp"
     try:
         temporary.write_text(value, encoding="utf-8")
         temporary.replace(target)
+        return value
     except OSError:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        temporary.unlink(missing_ok=True)
         return previous
-    return value
 
 
 def _start(command: Dict[str, Any]) -> int:
@@ -107,109 +102,71 @@ def _start(command: Dict[str, Any]) -> int:
     profile_dir = Path(str(command.get("profileDir") or "")).expanduser().resolve()
     if not profile_id:
         raise ValueError("profileId is required")
-    if not str(profile_dir):
-        raise ValueError("profileDir is required")
 
     request_id = str(command.get("requestId") or "")
-    user_agent = str(command.get("userAgent") or "").strip() or None
     adapter = SeleniumBaseCdpAdapter(
         profile_dir=profile_dir,
         headless=False,
         proxy=_proxy_value(command),
-        user_agent=user_agent,
+        user_agent=str(command.get("userAgent") or "").strip() or None,
         site_adapter_overrides=_site_adapter_overrides(command, profile_dir),
     )
     closed = False
     last_url = _read_last_url(profile_dir)
     try:
-        initial_cookies = command.get("cookies")
-        applied = 0
-        if isinstance(initial_cookies, list) and initial_cookies:
-            applied = adapter.set_snapshot_cookies(initial_cookies)
-
+        cookies = command.get("cookies")
+        applied = adapter.set_snapshot_cookies(cookies) if isinstance(cookies, list) and cookies else 0
         start_url = str(command.get("startUrl") or "").strip() or last_url
         if start_url:
             adapter.goto(start_url)
             last_url = _remember_last_url(profile_dir, adapter, last_url)
 
-        _emit({
-            "type": "ready",
-            "requestId": request_id,
-            "profileId": profile_id,
-            "profileDir": str(profile_dir),
-            "pid": adapter.chrome_pid,
-            "appliedCookieCount": applied,
-            "siteAdapterEnabled": True,
-        })
-
+        _emit({"type": "ready", "requestId": request_id, "profileId": profile_id, "profileDir": str(profile_dir), "pid": adapter.chrome_pid, "appliedCookieCount": applied, "siteAdapterEnabled": True})
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
-        reader = threading.Thread(target=_command_reader, args=(commands,), daemon=True)
-        reader.start()
+        threading.Thread(target=_command_reader, args=(commands,), daemon=True).start()
         next_url_capture = time.monotonic() + 2.0
 
-        while True:
-            if not adapter.is_running():
-                _emit({"type": "browser-closed", "profileId": profile_id})
-                break
-
+        while adapter.is_running():
             now = time.monotonic()
             if now >= next_url_capture:
                 last_url = _remember_last_url(profile_dir, adapter, last_url)
                 next_url_capture = now + 2.0
-
             try:
                 next_command = commands.get(timeout=0.4)
             except queue.Empty:
                 continue
 
             command_type = str(next_command.get("type") or "")
-            next_request_id = str(next_command.get("requestId") or "")
+            rid = str(next_command.get("requestId") or "")
             try:
                 if command_type == "close":
                     last_url = _remember_last_url(profile_dir, adapter, last_url)
-                    adapter.quit()
-                    closed = True
-                    _emit({"type": "closed", "requestId": next_request_id, "profileId": profile_id})
+                    adapter.quit(); closed = True
+                    _emit({"type": "closed", "requestId": rid, "profileId": profile_id})
                     break
                 if command_type == "export-cookies":
-                    _emit({"type": "cookies", "requestId": next_request_id, "profileId": profile_id, "cookies": adapter.get_snapshot_cookies()})
-                    continue
+                    _emit({"type": "cookies", "requestId": rid, "profileId": profile_id, "cookies": adapter.get_snapshot_cookies()}); continue
                 if command_type == "apply-cookies":
-                    cookies = next_command.get("cookies")
-                    if not isinstance(cookies, list):
-                        raise ValueError("apply-cookies requires a cookies array")
-                    count = adapter.set_snapshot_cookies(cookies)
-                    _emit({"type": "cookies-applied", "requestId": next_request_id, "profileId": profile_id, "count": count})
-                    continue
+                    _emit({"type": "cookies-applied", "requestId": rid, "profileId": profile_id, "count": adapter.set_snapshot_cookies(next_command.get("cookies") or [])}); continue
                 if command_type == "navigate":
-                    url = str(next_command.get("url") or "").strip()
-                    if not url:
-                        raise ValueError("navigate requires a URL")
-                    adapter.goto(url)
-                    last_url = _remember_last_url(profile_dir, adapter, last_url)
-                    _emit({"type": "navigated", "requestId": next_request_id, "profileId": profile_id})
-                    continue
+                    adapter.goto(str(next_command.get("url") or "").strip()); last_url = _remember_last_url(profile_dir, adapter, last_url)
+                    _emit({"type": "navigated", "requestId": rid, "profileId": profile_id}); continue
                 if command_type == "inspect-session":
-                    _emit({"type": "session-inspection", "requestId": next_request_id, "profileId": profile_id, **adapter.inspect_session()})
-                    continue
+                    _emit({"type": "session-inspection", "requestId": rid, "profileId": profile_id, **adapter.inspect_session()}); continue
                 if command_type == "challenge-state":
-                    _emit({"type": "challenge-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.challenge_state()})
-                    continue
+                    _emit({"type": "challenge-state", "requestId": rid, "profileId": profile_id, "state": adapter.challenge_state()}); continue
                 if command_type == "site-grid-state":
-                    _emit({"type": "site-grid-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.site_grid_state()})
-                    continue
+                    _emit({"type": "site-grid-state", "requestId": rid, "profileId": profile_id, "state": adapter.site_grid_state()}); continue
+                if command_type == "grid-act":
+                    result = adapter.apply_grid_selection(next_command.get("indexes") or [], expected_signature=str(next_command.get("expectedSignature") or ""), submit=next_command.get("submit") is not False)
+                    _emit({"type": "grid-action", "requestId": rid, "profileId": profile_id, "result": result}); continue
                 if command_type == "status":
-                    _emit({"type": "status", "requestId": next_request_id, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True})
-                    continue
+                    _emit({"type": "status", "requestId": rid, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True}); continue
                 raise ValueError(f"Unsupported SeleniumBase command: {command_type!r}")
             except Exception as exc:
-                _emit({
-                    "type": "error",
-                    "requestId": next_request_id,
-                    "profileId": profile_id,
-                    "errorType": type(exc).__name__,
-                    "error": str(exc),
-                })
+                _emit({"type": "error", "requestId": rid, "profileId": profile_id, "errorType": type(exc).__name__, "error": str(exc)})
+        else:
+            _emit({"type": "browser-closed", "profileId": profile_id})
     finally:
         if not closed:
             try:
