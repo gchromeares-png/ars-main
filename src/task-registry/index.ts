@@ -31,7 +31,11 @@ export class TaskRegistry {
   }
 
   getAllTasks(): Task[] {
-    return [...this.tasks.values()];
+    return [...this.tasks.values()].sort((left, right) => {
+      const updatedDelta = right.updatedAt.getTime() - left.updatedAt.getTime();
+      if (updatedDelta !== 0) return updatedDelta;
+      return right.createdAt.getTime() - left.createdAt.getTime();
+    });
   }
 
   updateTask(id: string, updates: Partial<Task>): Task {
