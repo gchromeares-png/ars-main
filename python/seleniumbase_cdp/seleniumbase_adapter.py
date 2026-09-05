@@ -10,6 +10,7 @@ import psutil
 from seleniumbase import sb_cdp
 
 from challenge_state_tracker import ChallengeStateTracker
+from site_grid_adapter import GridSiteAdapter
 
 
 class SeleniumBaseCdpAdapter:
@@ -17,7 +18,8 @@ class SeleniumBaseCdpAdapter:
 
     ARES worker modules depend on this adapter instead of importing SeleniumBase
     or MyCDP directly. SeleniumBase owns the browser lifecycle, profile, cookies,
-    navigation, DOM access, and session inspection end to end.
+    navigation, DOM access, structural page inspection, and session inspection
+    end to end.
     """
 
     def __init__(
@@ -27,6 +29,7 @@ class SeleniumBaseCdpAdapter:
         headless: bool,
         proxy: str | None = None,
         user_agent: str | None = None,
+        site_adapter_overrides: Dict[str, str] | None = None,
     ) -> None:
         self.profile_dir = Path(profile_dir).expanduser().resolve()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -42,6 +45,10 @@ class SeleniumBaseCdpAdapter:
 
         self._sb = sb_cdp.Chrome(**kwargs)
         self._challenge_tracker = ChallengeStateTracker(self._sb)
+        # Always enabled in the experimental SeleniumBase path. It is read-only
+        # and returns kind='none' when no matching authorized test-grid structure
+        # is present, so normal browsing remains unaffected.
+        self._site_adapter = GridSiteAdapter(self._sb, overrides=site_adapter_overrides)
         self._closed = False
 
     @property
@@ -63,6 +70,10 @@ class SeleniumBaseCdpAdapter:
     def challenge_state(self) -> Dict[str, Any]:
         """Return the latest structure-only challenge observation."""
         return self._challenge_tracker.poll()
+
+    def site_grid_state(self) -> Dict[str, Any]:
+        """Return the neutral structural grid snapshot for authorized test pages."""
+        return self._site_adapter.poll()
 
     def inspect_session(self) -> Dict[str, Any]:
         """Inspect the active SeleniumBase-owned page without a second browser layer."""
@@ -105,12 +116,16 @@ class SeleniumBaseCdpAdapter:
         else:
             running = True
 
-        # manual_profile_browser calls is_running() continuously. Polling here
-        # therefore tracks reloads, manual navigation, iframe appearance, and
-        # dynamic grid generations without changing the protected solver core.
+        # manual_profile_browser calls is_running() continuously. Poll both
+        # structural observers so manual navigation/reloads are reflected without
+        # introducing another browser layer or changing solver behavior.
         if running:
             try:
                 self._challenge_tracker.poll()
+            except Exception:
+                pass
+            try:
+                self._site_adapter.poll()
             except Exception:
                 pass
         return running
