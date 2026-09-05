@@ -1,0 +1,202 @@
+name: WIP SeleniumBase Final Validation
+
+on:
+  pull_request:
+    branches: [validation/seleniumbase-cleanup-20260905]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout WIP head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Regenerate canonical package lock
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: Assert dependency cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RIn --exclude-dir=.git --exclude='MIGRATION-PATCHRIGHT.md' 'patchright' package.json package-lock.json src tests; then
+            echo 'patchright remains in active code/tests/lockfile'
+            exit 1
+          fi
+          if grep -RIn --exclude-dir=.git 'sql\.js' package.json package-lock.json src tests; then
+            echo 'sql.js remains in active code/tests/lockfile'
+            exit 1
+          fi
+          grep -q 'node_modules/better-sqlite3' package-lock.json
+          test ! -e src/browser-worker/patchright-browser-worker.ts
+          test ! -e src/browser-worker/patchright-launcher.ts
+          test ! -e src/shopify/patchright-shopify-executor.ts
+          test ! -e src/types/patchright-compat.d.ts
+          test ! -e tests/patchright-profile-isolation.test.ts
+
+      - name: Commit regenerated lockfile to WIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- package-lock.json; then
+            echo 'package-lock.json already canonical'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package-lock.json
+          git commit -m 'wip: regenerate lockfile after SeleniumBase migration'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
+  build-and-test:
+    needs: prepare-lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout updated WIP
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install SeleniumBase runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
+
+      - name: Install Node dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Assert lockfile remains canonical
+        run: git diff --exit-code -- package-lock.json
+
+      - name: Verify no active Patchright or sql.js
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RIn --exclude-dir=.git --exclude='MIGRATION-PATCHRIGHT.md' 'patchright' package.json package-lock.json src tests
+          ! grep -RIn --exclude-dir=.git 'sql\.js' package.json package-lock.json src tests
+          grep -q 'node_modules/better-sqlite3' package-lock.json
+
+      - name: Compile Python runtime
+        run: python -m compileall -q python/seleniumbase_cdp
+
+      - name: Verify cursor providers
+        run: node python/seleniumbase_cdp/cursor_path_helper_probe.cjs
+
+      - name: Run targeted payment gates
+        env:
+          ARES_RUN_BROWSER_INTEGRATION: '1'
+        run: >-
+          npx jest --runInBand
+          tests/payment-session-normalizer.test.ts
+          tests/profile-payment-vault.test.ts
+          tests/ephemeral-payment-executor.test.ts
+          tests/payment-persistence-safety.test.ts
+          tests/payment-preparation.test.ts
+          tests/payment-fixture.integration.test.ts
+          tests/payment-source-guard.test.ts
+
+      - name: Build backend
+        run: npm run build:backend
+
+      - name: Build UI
+        run: npm run build:ui
+
+      - name: Run full Jest suite
+        env:
+          ARES_RUN_BROWSER_INTEGRATION: '1'
+        run: npm test -- --runInBand
+
+  seleniumbase-runtime:
+    needs: prepare-lock
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout updated WIP
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install SeleniumBase runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
+
+      - name: Compile all SeleniumBase Python
+        run: python -m compileall -q python/seleniumbase_cdp
+
+      - name: Stable marks
+        run: python python/seleniumbase_cdp/stable_marks_probe.py
+
+      - name: Visual grounding and screenshot fallback
+        run: python python/seleniumbase_cdp/visual_grounding_probe.py
+
+      - name: Composite slider grounding
+        run: python python/seleniumbase_cdp/composite_slider_grounder_probe.py
+
+      - name: Optional ddddocr slider fallback
+        run: python python/seleniumbase_cdp/ddddocr_slider_provider_probe.py
+
+      - name: Interaction outcome contract
+        run: python python/seleniumbase_cdp/interaction_outcome_probe.py
+
+      - name: Interaction orchestration
+        run: python python/seleniumbase_cdp/interaction_orchestrator_probe.py
+
+      - name: Visual event trigger
+        run: python python/seleniumbase_cdp/visual_event_trigger_probe.py
+
+      - name: Observation policy
+        run: python python/seleniumbase_cdp/observation_policy_probe.py
+
+      - name: 2x2 through 8x8 grid readiness
+        run: python python/seleniumbase_cdp/test_readiness_grid_probe.py
+
+      - name: Instruction input fallback
+        run: python python/seleniumbase_cdp/instruction_input_probe.py
+
+      - name: Semantic interaction runtime
+        run: python python/seleniumbase_cdp/semantic_interaction_probe.py
+
+      - name: Challenge state tracker
+        run: python python/seleniumbase_cdp/challenge_state_tracker_probe.py
+
+      - name: Structural grid adapter
+        run: python python/seleniumbase_cdp/site_grid_adapter_probe.py
+
+      - name: Authorized grid action executor
+        run: python python/seleniumbase_cdp/authorized_grid_action_executor_probe.py
+
+      - name: Automatic grid and slider interactions
+        run: python python/seleniumbase_cdp/auto_interaction_probe.py
+
+      - name: Persistent profile and cookie runtime
+        run: python python/seleniumbase_cdp/persistence_probe.py
+
+      - name: Manual profile READY/cookie bridge
+        run: python python/seleniumbase_cdp/manual_profile_probe.py
+
+      - name: Reopen profile and cookies
+        run: python python/seleniumbase_cdp/reopen_profile_probe.py
