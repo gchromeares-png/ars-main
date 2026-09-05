@@ -3,13 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from stable_marks import build_stable_marks, stable_mark_digest
 
 
-_GRID_SIZES = {9: (3, 3), 16: (4, 4)}
-_GRID_SIZES.update({4: (2, 2), 6: (2, 3), 8: (2, 4), 12: (3, 4), 20: (4, 5), 25: (5, 5)})
+_MIN_GRID_SIDE = 2
+_MAX_GRID_SIDE = 8
+_MIN_GRID_TILES = _MIN_GRID_SIDE * _MIN_GRID_SIDE
+_MAX_GRID_TILES = _MAX_GRID_SIDE * _MAX_GRID_SIDE
 
 
 class GridSiteAdapter:
@@ -38,11 +40,13 @@ class GridSiteAdapter:
 
     def _snapshot_document(self) -> Dict[str, Any]:
         overrides = json.dumps(self._overrides)
-        grid_sizes = json.dumps({str(k): list(v) for k, v in _GRID_SIZES.items()})
         script = f"""
         (() => {{
           const overrides = {overrides};
-          const GRID = new Map(Object.entries({grid_sizes}).map(([k,v]) => [Number(k), v]));
+          const minSide = {_MIN_GRID_SIDE};
+          const maxSide = {_MAX_GRID_SIDE};
+          const minTiles = {_MIN_GRID_TILES};
+          const maxTiles = {_MAX_GRID_TILES};
           const viewport = {{
             width: window.innerWidth || document.documentElement.clientWidth || 0,
             height: window.innerHeight || document.documentElement.clientHeight || 0,
@@ -57,6 +61,30 @@ class GridSiteAdapter:
           }};
           const text = el => (el?.innerText || el?.textContent || el?.getAttribute?.('aria-label') || '').trim().replace(/\\s+/g, ' ');
           const rectOf = el => {{ const r=el.getBoundingClientRect(); return {{x:r.x,y:r.y,width:r.width,height:r.height}}; }};
+          const supportedCount = count => count >= minTiles && count <= maxTiles;
+          const clusterCount = (values, tolerance) => {{
+            const sorted = [...values].sort((a,b) => a-b);
+            const clusters = [];
+            for (const value of sorted) {{
+              const last = clusters[clusters.length - 1];
+              if (!last || Math.abs(value - last.center) > tolerance) clusters.push({{center:value,count:1}});
+              else {{ last.center = (last.center * last.count + value) / (last.count + 1); last.count += 1; }}
+            }}
+            return clusters.length;
+          }};
+          const inferShape = rects => {{
+            const count = rects.length;
+            if (!supportedCount(count)) return null;
+            const avgW = rects.reduce((a,r) => a+r.width,0)/count;
+            const avgH = rects.reduce((a,r) => a+r.height,0)/count;
+            const xs = rects.map(r => r.left + r.width/2);
+            const ys = rects.map(r => r.top + r.height/2);
+            const columns = clusterCount(xs, Math.max(5, avgW*.45));
+            const rows = clusterCount(ys, Math.max(5, avgH*.45));
+            if (rows < minSide || columns < minSide || rows > maxSide || columns > maxSide) return null;
+            if (rows * columns !== count) return null;
+            return [rows, columns];
+          }};
           const selectorFor = el => {{
             if (!el || el.getRootNode?.() !== document) return '';
             if (el.id) return '#' + CSS.escape(el.id);
@@ -129,7 +157,7 @@ class GridSiteAdapter:
             const groups = [];
             if (overrides.tiles) {{
               const tiles = [...root.querySelectorAll(overrides.tiles)].filter(visible);
-              if (GRID.has(tiles.length)) groups.push({{root: overrides.root ? root.querySelector(overrides.root) || root : root, tiles, override:true}});
+              if (supportedCount(tiles.length)) groups.push({{root: overrides.root ? root.querySelector(overrides.root) || root : root, tiles, override:true}});
             }}
 
             if (!groups.length) {{
@@ -140,16 +168,17 @@ class GridSiteAdapter:
               }}
               for (const parent of parents) {{
                 const tiles = [...new Set(visualsIn(parent).map(tileFor))].filter(visible);
-                if (!GRID.has(tiles.length)) continue;
+                if (!supportedCount(tiles.length)) continue;
                 groups.push({{root:parent, tiles, override:false}});
               }}
             }}
 
             for (const group of groups) {{
               const count = group.tiles.length;
-              if (!GRID.has(count)) continue;
-              const [rows, columns] = GRID.get(count);
               const rects = group.tiles.map(tile => tile.getBoundingClientRect());
+              const shape = inferShape(rects);
+              if (!shape) continue;
+              const [rows, columns] = shape;
               const avgW = rects.reduce((a,r) => a+r.width,0)/count;
               const avgH = rects.reduce((a,r) => a+r.height,0)/count;
               const regular = rects.filter(r => Math.abs(r.width-avgW)<=Math.max(12,avgW*.35) && Math.abs(r.height-avgH)<=Math.max(12,avgH*.35)).length;
@@ -209,9 +238,10 @@ class GridSiteAdapter:
                 images = [img for img in (frame.query_selector_all("img") or []) if self._element_visible(img)]
             except Exception:
                 continue
-            if len(images) not in _GRID_SIZES:
+            shape = self._infer_shape([self._element_position(image) for image in images])
+            if shape is None:
                 continue
-            rows, columns = _GRID_SIZES[len(images)]
+            rows, columns = shape
             sources = [self._element_image_source(img) for img in images]
             scope = f"iframe:{frame_index}"
             raw_marks = []
@@ -302,6 +332,41 @@ class GridSiteAdapter:
     @staticmethod
     def _empty(scope: str) -> Dict[str, Any]:
         return {"kind":"none","scope":scope,"score":0,"rows":0,"columns":0,"tileCount":0,"instruction":"","sources":[],"submitText":"","override":False,"marks":[]}
+
+    @staticmethod
+    def _infer_shape(positions: List[Dict[str, Any] | None]) -> Tuple[int, int] | None:
+        clean = [position for position in positions if isinstance(position, dict)]
+        count = len(clean)
+        if count < _MIN_GRID_TILES or count > _MAX_GRID_TILES or count != len(positions):
+            return None
+        try:
+            widths = [float(position.get("width") or 0.0) for position in clean]
+            heights = [float(position.get("height") or 0.0) for position in clean]
+            xs = [float(position.get("x") or 0.0) + widths[index] / 2.0 for index, position in enumerate(clean)]
+            ys = [float(position.get("y") or 0.0) + heights[index] / 2.0 for index, position in enumerate(clean)]
+        except (TypeError, ValueError):
+            return None
+        avg_w = sum(widths) / count
+        avg_h = sum(heights) / count
+        columns = GridSiteAdapter._cluster_count(xs, max(5.0, avg_w * 0.45))
+        rows = GridSiteAdapter._cluster_count(ys, max(5.0, avg_h * 0.45))
+        if not (_MIN_GRID_SIDE <= rows <= _MAX_GRID_SIDE and _MIN_GRID_SIDE <= columns <= _MAX_GRID_SIDE):
+            return None
+        if rows * columns != count:
+            return None
+        return rows, columns
+
+    @staticmethod
+    def _cluster_count(values: List[float], tolerance: float) -> int:
+        centers: List[List[float]] = []
+        for value in sorted(values):
+            if not centers or abs(value - centers[-1][0]) > tolerance:
+                centers.append([value, 1.0])
+                continue
+            center, size = centers[-1]
+            size += 1.0
+            centers[-1] = [(center * (size - 1.0) + value) / size, size]
+        return len(centers)
 
     @staticmethod
     def _element_visible(element: Any) -> bool:
