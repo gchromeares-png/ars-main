@@ -55,6 +55,21 @@
   padding-inline: 12px;
 }
 
+.profile-browser-actions .runtime-btn.session-reset {
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid rgba(164, 92, 92, .24);
+  color: #c99c9c;
+  background: rgba(112, 48, 48, .12);
+  font-size: 8px;
+  opacity: .82;
+}
+
+.profile-browser-actions .runtime-btn.session-reset:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(126, 52, 52, .24);
+}
+
 .runtime-btn.start-all {
   background: #37784f;
 }
