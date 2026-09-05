@@ -3,6 +3,7 @@ import * as path from "path";
 import type { AresProfile } from "../profiles/models";
 import type { AresProxy } from "../proxies/models";
 import type { ProfileCookieSnapshotCookie } from "../cookies/profile-cookie-snapshot-vault";
+import { removeProfileUserDataDir } from "../browser-worker/profile-session-manager";
 import { registerProfilePaymentIpc } from "./profile-payment-controller";
 import { registerProfileCookieSnapshotIpc } from "./profile-cookie-snapshot-controller";
 import {
@@ -24,7 +25,7 @@ export class ProfileBrowserController {
   private readonly visionRuntime = new SeleniumBaseVisionRuntime();
 
   constructor(
-    profileRoot: string,
+    private readonly profileRoot: string,
     getProxy: (proxyId: string) => AresProxy | undefined
   ) {
     const userDataRoot = path.dirname(profileRoot);
@@ -53,6 +54,14 @@ export class ProfileBrowserController {
 
   close(profileId: string): Promise<ProfileBrowserStatus> {
     return this.seleniumBase.close(profileId);
+  }
+
+  async resetSession(profileId: string): Promise<ProfileBrowserStatus> {
+    const id = String(profileId ?? "").trim();
+    if (!id) throw new Error("Profil-ID fehlt.");
+    await this.seleniumBase.close(id);
+    removeProfileUserDataDir(id, this.profileRoot);
+    return this.seleniumBase.status(id);
   }
 
   status(profileId: string): ProfileBrowserStatus {
@@ -95,6 +104,14 @@ export class ProfileBrowserController {
     ipcMain.handle("close-seleniumbase-profile-browser", async (_event, profileId: string) => {
       try {
         return { success: true, status: await this.seleniumBase.close(profileId) };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle("reset-profile-browser-session", async (_event, profileId: string) => {
+      try {
+        return { success: true, status: await this.resetSession(profileId) };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }

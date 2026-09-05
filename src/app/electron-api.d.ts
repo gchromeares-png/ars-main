@@ -12,6 +12,7 @@ declare global {
       getProfileBrowserStatus(profileId: string): Promise<any>;
       openProfileBrowser(profileId: string, startUrl?: string): Promise<any>;
       closeProfileBrowser(profileId: string): Promise<any>;
+      resetProfileBrowserSession(profileId: string): Promise<any>;
       getSeleniumBaseProfileBrowserStatus(profileId: string): Promise<any>;
       openSeleniumBaseProfileBrowser(profileId: string, startUrl?: string, cookieSnapshotId?: string): Promise<any>;
       closeSeleniumBaseProfileBrowser(profileId: string): Promise<any>;

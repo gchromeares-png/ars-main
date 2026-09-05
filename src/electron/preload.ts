@@ -13,6 +13,7 @@ const api = {
   getProfileBrowserStatus: (profileId: string) => ipcRenderer.invoke("get-profile-browser-status", profileId),
   openProfileBrowser: (profileId: string, startUrl?: string) => ipcRenderer.invoke("open-profile-browser", profileId, startUrl),
   closeProfileBrowser: (profileId: string) => ipcRenderer.invoke("close-profile-browser", profileId),
+  resetProfileBrowserSession: (profileId: string) => ipcRenderer.invoke("reset-profile-browser-session", profileId),
   getSeleniumBaseProfileBrowserStatus: (profileId: string) => ipcRenderer.invoke("get-seleniumbase-profile-browser-status", profileId),
   getSeleniumBaseVisionStatus: () => ipcRenderer.invoke("get-seleniumbase-vision-status"),
   prepareSeleniumBaseVision: () => ipcRenderer.invoke("prepare-seleniumbase-vision"),
