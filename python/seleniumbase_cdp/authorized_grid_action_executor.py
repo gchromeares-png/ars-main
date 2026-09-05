@@ -1,20 +1,18 @@
 from __future__ import annotations
 
 import json
-import random
-import time
 from typing import Any, Dict, Iterable, List
 
-from interaction_policy import InteractionPolicy
+
+_SUPPORTED_COUNTS = [4, 6, 8, 9, 12, 16, 20, 25]
 
 
 class AuthorizedGridActionExecutor:
     """Apply classifier-selected stable marks to the current structural test grid."""
 
-    def __init__(self, seleniumbase_cdp: Any, site_adapter: Any, policy: InteractionPolicy | None = None) -> None:
+    def __init__(self, seleniumbase_cdp: Any, site_adapter: Any) -> None:
         self._sb = seleniumbase_cdp
         self._site_adapter = site_adapter
-        self._policy = policy or InteractionPolicy()
 
     def apply(self, indexes: Iterable[int], *, submit: bool = True) -> Dict[str, Any]:
         state = self._site_adapter.poll()
@@ -41,70 +39,23 @@ class AuthorizedGridActionExecutor:
         if state.get("kind") != "image-grid" or not selected:
             return {"clickedIndexes": [], "submitted": False, "state": state}
 
-        ordered = self._nearest_order(state, selected)
-        result = self._apply_document(ordered, submit)
+        result = self._apply_document(selected, submit)
         if not result["clicked"] and str(state.get("scope") or "").startswith("iframe:"):
-            result = self._apply_frame(state, ordered, submit)
+            result = self._apply_frame(state, selected, submit)
 
         return {
             "clickedIndexes": result["clicked"],
-            "clickOrder": ordered,
             "submitted": result["submitted"],
             "state": self._site_adapter.poll(),
         }
 
     def _apply_document(self, selected: List[int], submit: bool) -> Dict[str, Any]:
-        clicked: List[int] = []
-        for position, index in enumerate(selected):
-            if self._document_click(index):
-                clicked.append(index)
-            if position < len(selected) - 1:
-                self._sleep_between_grid_clicks()
-
-        submitted = False
-        if submit and clicked:
-            delay = self._policy.grid_submit_delay_seconds
-            if delay > 0:
-                time.sleep(delay)
-            submitted = self._document_submit()
-        return {"clicked": clicked, "submitted": submitted}
-
-    def _document_click(self, index: int) -> bool:
         overrides = getattr(self._site_adapter, "_overrides", {})
-        script = self._document_group_script(overrides, f"""
-          const tile = group.tiles[{int(index)}];
-          if (!tile) return false;
-          tile.scrollIntoView({{block:'center', inline:'center'}});
-          tile.click();
-          return true;
-        """)
-        try:
-            return bool(self._evaluate(script))
-        except Exception:
-            return False
-
-    def _document_submit(self) -> bool:
-        overrides = getattr(self._site_adapter, "_overrides", {})
-        selector = json.dumps(overrides.get("submit") or 'button[type="submit"],input[type="submit"],button,[role="button"]')
-        script = self._document_group_script(overrides, f"""
-          const selector = {selector};
-          const button = [...(group.root.parentElement?.querySelectorAll(selector) || [])]
-            .filter(el => visible(el) && !group.tiles.includes(el))[0];
-          if (!button) return false;
-          button.click();
-          return true;
-        """)
-        try:
-            return bool(self._evaluate(script))
-        except Exception:
-            return False
-
-    @staticmethod
-    def _document_group_script(overrides: Dict[str, str], action: str) -> str:
-        return f"""
+        script = f"""
         (() => {{
+          const selected = {json.dumps(selected)};
           const overrides = {json.dumps(overrides)};
-          const supported = count => count >= 4 && count <= 64;
+          const supported = new Set({json.dumps(_SUPPORTED_COUNTS)});
           const roots = [], seen = new Set();
           const visible = el => {{
             if (!el?.getBoundingClientRect) return false;
@@ -138,7 +89,7 @@ class AuthorizedGridActionExecutor:
           for (const root of roots) {{
             if (overrides.tiles) {{
               const tiles = [...root.querySelectorAll(overrides.tiles)].filter(visible);
-              if (supported(tiles.length)) groups.push({{root:overrides.root ? root.querySelector(overrides.root) || root : root, tiles, preferred:true}});
+              if (supported.has(tiles.length)) groups.push({{root:overrides.root ? root.querySelector(overrides.root) || root : root, tiles, preferred:true}});
             }}
             if (!overrides.tiles) {{
               const parents = new Set();
@@ -148,17 +99,36 @@ class AuthorizedGridActionExecutor:
               }}
               for (const parent of parents) {{
                 const tiles = [...new Set(visualsIn(parent).map(tileFor))].filter(visible);
-                if (!supported(tiles.length)) continue;
+                if (!supported.has(tiles.length)) continue;
                 groups.push({{root:parent, tiles, preferred:false}});
               }}
             }}
           }}
           groups.sort((a,b) => Number(b.preferred)-Number(a.preferred));
           const group = groups[0];
-          if (!group) return false;
-          {action}
+          if (!group) return {{clicked:[], submitted:false}};
+
+          const clicked = [];
+          for (const index of selected) {{
+            const tile = group.tiles[index];
+            if (!tile) continue;
+            tile.scrollIntoView({{block:'center', inline:'center'}});
+            tile.click();
+            clicked.push(index);
+          }}
+
+          let submitted = false;
+          if ({str(submit).lower()}) {{
+            const selector = overrides.submit || 'button[type="submit"],input[type="submit"],button,[role="button"]';
+            const button = [...(group.root.parentElement?.querySelectorAll(selector) || [])]
+              .filter(el => visible(el) && !group.tiles.includes(el))[0];
+            if (button) {{ button.click(); submitted = true; }}
+          }}
+          return {{clicked, submitted}};
         }})()
         """
+        value = self._evaluate(script)
+        return value if isinstance(value, dict) else {"clicked": [], "submitted": False}
 
     def _apply_frame(self, state: Dict[str, Any], selected: List[int], submit: bool) -> Dict[str, Any]:
         try:
@@ -168,22 +138,17 @@ class AuthorizedGridActionExecutor:
         except Exception:
             return {"clicked": [], "submitted": False}
 
-        clicked: List[int] = []
-        for position, index in enumerate(selected):
+        clicked = []
+        for index in selected:
             if index >= len(images):
                 continue
             click = getattr(images[index], "mouse_click", None) or getattr(images[index], "click", None)
             if callable(click):
                 click()
                 clicked.append(index)
-            if position < len(selected) - 1:
-                self._sleep_between_grid_clicks()
 
         submitted = False
-        if submit and clicked:
-            delay = self._policy.grid_submit_delay_seconds
-            if delay > 0:
-                time.sleep(delay)
+        if submit:
             overrides = getattr(self._site_adapter, "_overrides", {})
             for selector in (overrides.get("submit"), 'button[type="submit"]', 'input[type="submit"]', 'button'):
                 if not selector:
@@ -198,51 +163,6 @@ class AuthorizedGridActionExecutor:
                     submitted = True
                     break
         return {"clicked": clicked, "submitted": submitted}
-
-    def _sleep_between_grid_clicks(self) -> None:
-        low, high = self._policy.grid_click_delay_range_seconds
-        if high <= 0:
-            return
-        time.sleep(random.uniform(low, high))
-
-    @staticmethod
-    def _nearest_order(state: Dict[str, Any], selected: List[int]) -> List[int]:
-        marks = [mark for mark in state.get("marks") or [] if isinstance(mark, dict) and mark.get("role") == "grid-tile"]
-        centers: Dict[int, tuple[float, float]] = {}
-        for index in selected:
-            if index >= len(marks):
-                continue
-            bounds = marks[index].get("visualBounds") if isinstance(marks[index].get("visualBounds"), dict) else {}
-            try:
-                x = float(bounds.get("x") or 0.0) + float(bounds.get("width") or 0.0) / 2.0
-                y = float(bounds.get("y") or 0.0) + float(bounds.get("height") or 0.0) / 2.0
-            except (TypeError, ValueError):
-                continue
-            centers[index] = (x, y)
-
-        if len(centers) != len(selected):
-            return list(selected)
-
-        remaining = set(selected)
-        first = min(remaining, key=lambda index: (centers[index][1], centers[index][0], index))
-        order = [first]
-        remaining.remove(first)
-        current = first
-        while remaining:
-            cx, cy = centers[current]
-            next_index = min(
-                remaining,
-                key=lambda index: (
-                    (centers[index][0] - cx) ** 2 + (centers[index][1] - cy) ** 2,
-                    centers[index][1],
-                    centers[index][0],
-                    index,
-                ),
-            )
-            order.append(next_index)
-            remaining.remove(next_index)
-            current = next_index
-        return order
 
     def _evaluate(self, script: str) -> Any:
         evaluate = getattr(self._sb, "evaluate", None)
