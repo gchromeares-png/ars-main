@@ -189,6 +189,18 @@ class TaskRpcRuntime:
         except Exception:
             pass
 
+    def add_init_script(self, script: str) -> Dict[str, Any]:
+        source = str(script or "")
+        if not source.strip():
+            return {"result": False}
+        command = getattr(getattr(mycdp, "page", None), "add_script_to_evaluate_on_new_document", None)
+        if not callable(command):
+            raise RuntimeError("CDP Page.addScriptToEvaluateOnNewDocument is unavailable")
+        tab = self.sb.get_active_tab()
+        loop = self.sb.get_event_loop()
+        result = loop.run_until_complete(tab.send(command(source=source)))
+        return {"result": True, "identifier": str(result or "")}
+
     def _sync_newest_target(self) -> None:
         try:
             tabs = list(self.sb.get_tabs() or [])
@@ -352,75 +364,48 @@ const fn=(0,eval)(`(${fnSource})`); if(arguments[5]) return fn(items,...extra); 
             raise LookupError(f"No element matched locator: {selector}")
         return value
 
-    def _evaluate_function(self, source: str, args: List[Any]) -> Any:
+    def _evaluate_function(self, function_source: str, args: List[Any]) -> Any:
+        source = function_source.strip()
         if not source:
             return None
-        if source.lstrip().startswith(("return ", "const ", "let ", "var ")) or ("function" not in source and "=>" not in source):
-            return self._execute_script_retry(source, *args)
-        return self._execute_script_retry(
-            "const fn=(0,eval)(`(${arguments[0]})`); return fn(...arguments[1]);",
-            source,
-            args,
-        )
+        if source.startswith(("function", "async", "(", "_", "x", "e")) or "=>" in source:
+            script = "const fn=(0,eval)(`(" + source.replace("`", "\\`") + ")`); return fn(...arguments);"
+            return self._execute_script_retry(script, *args)
+        return self._execute_script_retry(source, *args)
 
-    def _in_frames(self, frame_path: Iterable[str], action: Any) -> Any:
-        path = list(frame_path)
-        if not path:
-            return action()
+    def _in_frames(self, frame_path: List[str], callback: Any) -> Any:
+        if not frame_path:
+            return callback()
         try:
-            for selector in path:
+            for selector in frame_path:
                 self.sb.switch_to_frame(selector)
-            return action()
+            return callback()
         finally:
-            try:
-                self.sb.switch_to_default_content()
-            except Exception:
-                pass
+            self.sb.switch_to_default_content()
 
     def _wait_ready(self, timeout_ms: int) -> None:
-        deadline = time.monotonic() + max(0.25, timeout_ms / 1000.0)
+        deadline = time.monotonic() + max(0.1, timeout_ms / 1000.0)
         while time.monotonic() < deadline:
             try:
-                if str(self.adapter.execute_script("return document.readyState;") or "") in {"interactive", "complete"}:
+                state = str(self.adapter.execute_script("return document.readyState") or "")
+                if state in {"interactive", "complete"}:
                     return
             except Exception:
                 pass
             time.sleep(0.05)
-        raise TimeoutError("document.readyState did not become interactive")
 
     def _mouse(self, action: str, command: Dict[str, Any]) -> bool:
-        x, y = float(command.get("x") or 0), float(command.get("y") or 0)
-        marker = f"ares-pointer-{time.monotonic_ns()}"
-        selector = f'[data-ares-pointer-target="{marker}"]'
-        try:
-            found = self._execute_script_retry(
-                "const e=document.elementFromPoint(Number(arguments[0]),Number(arguments[1])); if(!e)return false; e.setAttribute('data-ares-pointer-target',String(arguments[2])); return true;",
-                x,
-                y,
-                marker,
-            )
-            if not found:
-                return False
-            element = self.sb.find_element(selector)
-            if action == "mouse-move":
-                move = getattr(element, "mouse_move", None)
-                if callable(move):
-                    move()
-                    return True
-            else:
-                click = getattr(element, "mouse_click", None) or getattr(element, "click", None)
-                if callable(click):
-                    click()
-                    self._sync_newest_target()
-                    return True
-            return False
-        finally:
-            try:
-                self._execute_script_retry(
-                    "document.querySelectorAll('[data-ares-pointer-target]').forEach(e=>e.removeAttribute('data-ares-pointer-target'));"
-                )
-            except Exception:
-                pass
+        x = float(command.get("x") or 0.0)
+        y = float(command.get("y") or 0.0)
+        script = """
+const x=Number(arguments[0]),y=Number(arguments[1]),kind=String(arguments[2]||'move');
+const el=document.elementFromPoint(x,y); if(!el)return false;
+if(kind==='move'){el.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,clientX:x,clientY:y}));return true;}
+el.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,clientX:x,clientY:y,button:0}));
+el.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,clientX:x,clientY:y,button:0}));
+el.click?.(); return true;
+"""
+        return bool(self._execute_script_retry(script, x, y, "move" if action == "mouse-move" else "click"))
 
 
 def run(start: Dict[str, Any]) -> int:
@@ -475,6 +460,14 @@ def run(start: Dict[str, Any]) -> int:
                         "requestId": request_id,
                         "ok": True,
                         "result": adapter.set_snapshot_cookies(cookies),
+                    })
+                    continue
+                if command_type == "add-init-script":
+                    emit({
+                        "type": "init-script-added",
+                        "requestId": request_id,
+                        "ok": True,
+                        **runtime.add_init_script(str(command.get("script") or "")),
                     })
                     continue
                 if command_type == "navigate":
