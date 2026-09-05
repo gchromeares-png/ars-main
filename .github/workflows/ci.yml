@@ -23,11 +23,26 @@ jobs:
       - name: Install SeleniumBase CDP PoC dependency
         run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
 
-      - name: Compile-check ARES vision runtime
-        run: python -m py_compile python/seleniumbase_cdp/vision_grid_classifier.py python/seleniumbase_cdp/vision_runtime_bootstrap.py
+      - name: Compile-check ARES vision and grounding runtime
+        run: >-
+          python -m py_compile
+          python/seleniumbase_cdp/vision_grid_classifier.py
+          python/seleniumbase_cdp/vision_runtime_bootstrap.py
+          python/seleniumbase_cdp/stable_marks.py
+          python/seleniumbase_cdp/cursor_path_provider.py
+          python/seleniumbase_cdp/slider_target_grounder.py
+          python/seleniumbase_cdp/interaction_trace.py
+          python/seleniumbase_cdp/visual_interaction_runtime.py
+          python/seleniumbase_cdp/auto_interaction_controller.py
+          python/seleniumbase_cdp/site_grid_adapter.py
+          python/seleniumbase_cdp/site_slider_adapter.py
+          python/seleniumbase_cdp/slider_action_executor.py
 
       - name: Verify stable visual marks contract
         run: python python/seleniumbase_cdp/stable_marks_probe.py
+
+      - name: Verify visual grounding and cursor planning
+        run: python python/seleniumbase_cdp/visual_grounding_probe.py
 
       - name: Verify SeleniumBase challenge state tracker
         run: python python/seleniumbase_cdp/challenge_state_tracker_probe.py
@@ -64,6 +79,9 @@ jobs:
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+
+      - name: Verify GhostCursor and Bezier path providers
+        run: node python/seleniumbase_cdp/cursor_path_helper_probe.cjs
 
       - name: Install Patchright Chrome
         run: npm run browser:install -- --with-deps
