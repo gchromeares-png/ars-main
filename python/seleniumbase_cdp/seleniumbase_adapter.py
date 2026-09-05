@@ -12,9 +12,12 @@ from seleniumbase import sb_cdp
 from authorized_grid_action_executor import AuthorizedGridActionExecutor
 from auto_interaction_controller import AutoInteractionController
 from challenge_state_tracker import ChallengeStateTracker
+from cursor_path_provider import CursorPathProvider
+from interaction_trace import InteractionTrace
 from site_grid_adapter import GridSiteAdapter
 from site_slider_adapter import SliderSiteAdapter
 from slider_action_executor import SliderActionExecutor
+from slider_target_grounder import SliderTargetGrounder
 from vision_grid_classifier import VisionGridClassifier
 
 
@@ -47,15 +50,20 @@ class SeleniumBaseCdpAdapter:
         self._challenge_tracker = ChallengeStateTracker(self._sb)
         self._site_adapter = GridSiteAdapter(self._sb, overrides=overrides)
         self._slider_adapter = SliderSiteAdapter(self._sb, overrides=overrides)
+        self._cursor_paths = CursorPathProvider()
         self._grid_actions = AuthorizedGridActionExecutor(self._sb, self._site_adapter)
-        self._slider_actions = SliderActionExecutor(self._sb, self._slider_adapter)
+        self._slider_actions = SliderActionExecutor(self._sb, self._slider_adapter, self._cursor_paths)
         self._vision = VisionGridClassifier()
+        self._slider_grounder = SliderTargetGrounder(self._sb, profile_dir=self.profile_dir)
+        self._interaction_trace = InteractionTrace(self.profile_dir)
         self._auto_interactions = AutoInteractionController(
             self._site_adapter,
             self._slider_adapter,
             self._grid_actions,
             self._slider_actions,
             self._vision,
+            self._slider_grounder,
+            self._interaction_trace,
         )
         self._next_auto_poll = 0.0
         self._last_auto_result: Dict[str, Any] = {"acted": False, "kind": "none"}
@@ -83,6 +91,9 @@ class SeleniumBaseCdpAdapter:
 
     def site_slider_state(self) -> Dict[str, Any]:
         return self._slider_adapter.poll()
+
+    def slider_target_state(self) -> Dict[str, Any]:
+        return self._slider_grounder.ground(self._slider_adapter.poll())
 
     def auto_interaction_state(self) -> Dict[str, Any]:
         return {**self._auto_interactions.status(), "lastResult": self._last_auto_result}
