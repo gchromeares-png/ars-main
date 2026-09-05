@@ -61,6 +61,7 @@ export interface BrowserPage extends BrowserFrame {
 
 export interface BrowserContext {
   addCookies(cookies: unknown[]): Promise<void>;
+  addInitScript(script: { content: string } | string): Promise<void>;
   close(): Promise<void>;
 }
 
