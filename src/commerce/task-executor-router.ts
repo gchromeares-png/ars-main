@@ -1,12 +1,48 @@
 import type { ITaskExecutor } from "../interfaces";
 import type { Task } from "../models";
 import { isCommerceMonitorTask } from "../monitor/commerce-monitor-service";
-import { isEarlyGateChildTask } from "../monitor/early-gate";
+import { isEarlyGateChildTask, isEarlyGateMonitorTask } from "../monitor/early-gate";
 import type { CommercePlatform, CommerceShop } from "./platforms";
 
 type RuntimeUpdateSource = ITaskExecutor & {
   onTaskUpdate?: (callback: (task: Task) => void) => () => void;
 };
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function materializeEarlyGateLane(task: Task): void {
+  const data = { ...(task.config.data ?? {}) };
+  const action = asRecord(data["monitorAction"]);
+  if (action?.["mode"] !== "auto-checkout") return;
+
+  const profileId = String(data["profileId"] ?? action["profileId"] ?? "").trim();
+  const cookieSnapshotId = String(data["cookieSnapshotId"] ?? action["cookieSnapshotId"] ?? "").trim();
+  const proxySelection = asRecord(data["proxySelection"]) ?? asRecord(action["proxySelection"]);
+  const browserConfig = asRecord(data["browserConfig"]) ?? {};
+
+  task.config.data = {
+    ...data,
+    ...(profileId ? { profileId } : {}),
+    ...(proxySelection ? { proxySelection } : {}),
+    ...(cookieSnapshotId ? { cookieSnapshotId } : {}),
+    browserConfig: {
+      ...browserConfig,
+      headless: typeof browserConfig["headless"] === "boolean"
+        ? browserConfig["headless"]
+        : Boolean(action["headless"])
+    },
+    earlyGateLane: {
+      mode: "browser-monitor",
+      monitorOnlyUntilProduct: true,
+      proxyBound: true,
+      profileId
+    }
+  };
+}
 
 export class CommerceTaskExecutorRouter implements ITaskExecutor {
   private readonly executors = new Map<CommercePlatform, ITaskExecutor>();
@@ -67,19 +103,21 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
       return false;
     }
 
-    const monitorTask = isCommerceMonitorTask(task);
-    const earlyGateChild = isEarlyGateChildTask(task);
-    const executor = monitorTask
-      ? this.monitorExecutor
-      : earlyGateChild
-        ? this.earlyGateExecutor
+    const earlyGateMonitor = isEarlyGateMonitorTask(task);
+    if (earlyGateMonitor) materializeEarlyGateLane(task);
+    const earlyGateBrowser = earlyGateMonitor || isEarlyGateChildTask(task);
+    const monitorTask = isCommerceMonitorTask(task) && !earlyGateBrowser;
+    const executor = earlyGateBrowser
+      ? this.earlyGateExecutor
+      : monitorTask
+        ? this.monitorExecutor
         : this.executors.get(shop.platform);
 
     if (!executor) {
-      task.lastError = monitorTask
-        ? "Für Monitoring ist noch kein CommerceMonitorService registriert."
-        : earlyGateChild
-          ? "Für Early-Gate-Browser-Children ist noch kein Browser-Executor registriert."
+      task.lastError = earlyGateBrowser
+        ? "Für Early-Gate-Browser-Lanes ist noch kein Browser-Executor registriert."
+        : monitorTask
+          ? "Für Monitoring ist noch kein CommerceMonitorService registriert."
           : `Für ${shop.platform} ist noch kein Task-Executor registriert. Die Plattform ist bereits im Commerce-/Monitor-Modell vorbereitet.`;
       return false;
     }
@@ -94,7 +132,7 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
 
   async updateDiscoveryKeywords(taskId: string, keywords: string[]): Promise<string[]> {
     const owner = this.taskOwners.get(taskId);
-    if (!owner) throw new Error(`Laufender Browser-Child ${taskId} wurde nicht gefunden.`);
+    if (!owner) throw new Error(`Laufende Browser-Lane ${taskId} wurde nicht gefunden.`);
     if (!owner.updateDiscoveryKeywords) {
       throw new Error(`Task ${taskId} unterstützt keine Live-Discovery-Keywords.`);
     }
