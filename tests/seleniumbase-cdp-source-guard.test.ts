@@ -9,6 +9,8 @@ describe("SeleniumBase CDP architecture guard", () => {
   const trackerProbe = read("python/seleniumbase_cdp/challenge_state_tracker_probe.py");
   const siteAdapter = read("python/seleniumbase_cdp/site_grid_adapter.py");
   const siteAdapterProbe = read("python/seleniumbase_cdp/site_grid_adapter_probe.py");
+  const gridActions = read("python/seleniumbase_cdp/authorized_grid_action_executor.py");
+  const gridActionProbe = read("python/seleniumbase_cdp/authorized_grid_action_probe.py");
   const worker = read("python/seleniumbase_cdp/worker.py");
   const manualWorker = read("python/seleniumbase_cdp/manual_profile_browser.py");
   const manualController = read("src/electron/seleniumbase-profile-browser-controller.ts");
@@ -34,7 +36,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("self._sb.set_all_cookies(params)");
     expect(adapter).toContain("self._sb.get_all_cookies()");
     expect(adapter).toContain("mycdp.network.CookieParam.from_json(payload)");
-    for (const source of [adapter, worker, manualWorker, siteAdapter]) {
+    for (const source of [adapter, worker, manualWorker, siteAdapter, gridActions]) {
       expect(source.toLowerCase()).not.toContain("playwright");
       expect(source).not.toContain("connect_over_cdp");
     }
@@ -54,7 +56,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).not.toContain("self._sb.sleep(2)");
     expect(adapter).toContain("self._challenge_tracker.poll()");
     expect(manualWorker).toContain("adapter.goto(start_url)");
-    expect(manualWorker).toContain("adapter.goto(url)");
+    expect(manualWorker).toContain("adapter.goto(");
     expect(manualController.toLowerCase()).not.toContain("patchright");
     expect(manualController).not.toContain("connectOverCDP");
   });
@@ -86,6 +88,18 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(siteAdapter).not.toContain(".click(");
     expect(siteAdapter).not.toContain("switch_to_frame");
     expect(siteAdapterProbe).toContain('assert framed["rows"] == 4 and framed["columns"] == 4');
+  });
+
+  it("keeps grid interaction separate from detection and revalidates state before clicking", () => {
+    expect(adapter).toContain("AuthorizedGridActionExecutor");
+    expect(adapter).toContain("def apply_grid_selection");
+    expect(gridActions).toContain("expected_signature");
+    expect(gridActions).toContain("shadowRoot");
+    expect(gridActions).toContain("contentDocument");
+    expect(gridActions).not.toContain("solve_captcha");
+    expect(manualWorker).toContain('command_type == "grid-act"');
+    expect(manualWorker).toContain('"type": "grid-action"');
+    expect(gridActionProbe).toContain('expected_signature="wrong"');
   });
 
   it("enables the structural site adapter by default and exposes selector overrides", () => {
@@ -130,7 +144,7 @@ describe("SeleniumBase CDP architecture guard", () => {
   });
 
   it("keeps the SeleniumBase worker isolated from Patchright and ARES protected cores", () => {
-    for (const source of [adapter, tracker, siteAdapter, worker, manualWorker, manualController]) {
+    for (const source of [adapter, tracker, siteAdapter, gridActions, worker, manualWorker, manualController]) {
       expect(source.toLowerCase()).not.toContain("patchright");
       expect(source).not.toContain("src/challenges");
       expect(source).not.toContain("field-semantic-resolver");
