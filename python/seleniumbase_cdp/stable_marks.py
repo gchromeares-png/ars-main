@@ -13,7 +13,12 @@ def build_stable_marks(
     viewport: Dict[str, Any] | None = None,
     observed_at: float | None = None,
 ) -> List[Dict[str, Any]]:
-    """Build coordinate-independent mark identities for one browser observation."""
+    """Build coordinate-independent mark identities for one browser observation.
+
+    A mark is not just a screen coordinate. It carries an identity seed, visual
+    bounds, confidence, frame/viewport context, observation timestamp, and a
+    semantic/visual signature so later observations can be compared reliably.
+    """
     timestamp = float(observed_at if observed_at is not None else time.time())
     viewport_data = _viewport(viewport or {})
     result: List[Dict[str, Any]] = []
@@ -23,10 +28,13 @@ def build_stable_marks(
         role = str(raw.get("role") or "element").strip() or "element"
         structural_key = str(raw.get("structuralKey") or raw.get("selector") or f"slot:{index}").strip()
         semantic_input = str(raw.get("semanticSignature") or raw.get("label") or raw.get("source") or role).strip()
+        visual_input = json.dumps(_bounds(raw.get("visualBounds") or raw.get("rect")) or {}, sort_keys=True)
         identity_seed = "|".join((str(scope), role, structural_key))
-        signature_seed = "|".join((role, semantic_input))
+        signature_seed = "|".join((role, semantic_input, str(raw.get("source") or "")))
         stable_id = f"{_prefix(role)}-{hashlib.sha256(identity_seed.encode('utf-8', errors='ignore')).hexdigest()[:12]}"
+        identity_signature = hashlib.sha256(identity_seed.encode("utf-8", errors="ignore")).hexdigest()
         semantic_visual_signature = hashlib.sha256(signature_seed.encode("utf-8", errors="ignore")).hexdigest()
+        visual_signature = hashlib.sha256(visual_input.encode("utf-8", errors="ignore")).hexdigest()
         confidence = _clamp(raw.get("confidence"), default=0.5)
         bounds = _bounds(raw.get("visualBounds") or raw.get("rect"))
         mark = {
@@ -34,15 +42,19 @@ def build_stable_marks(
             "role": role,
             "visualBounds": bounds,
             "confidence": confidence,
+            "frame": str(scope),
+            "viewport": viewport_data,
             "frameViewport": {
                 "scope": str(scope),
                 "viewport": viewport_data,
             },
             "observedAt": timestamp,
+            "identitySignature": identity_signature,
             "semanticVisualSignature": semantic_visual_signature,
+            "visualSignature": visual_signature,
             "structuralKey": structural_key,
         }
-        for key in ("label", "selector", "source", "fraction", "score"):
+        for key in ("label", "selector", "source", "fraction", "score", "index"):
             if key in raw and raw.get(key) is not None:
                 mark[key] = raw.get(key)
         result.append(mark)
@@ -93,6 +105,7 @@ def stable_mark_digest(values: Iterable[Dict[str, Any]]) -> str:
     compact = [
         {
             "markId": str(item.get("markId") or ""),
+            "identitySignature": str(item.get("identitySignature") or ""),
             "semanticVisualSignature": str(item.get("semanticVisualSignature") or ""),
         }
         for item in values
