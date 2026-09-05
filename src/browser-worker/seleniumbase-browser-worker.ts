@@ -2,7 +2,6 @@ import { spawn } from "child_process";
 import type { ChildProcessWithoutNullStreams } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import type { BrowserContext } from "patchright";
 import type { BrowserWorker } from "./browser-worker";
 import type { ProfileCookieSnapshotCookie } from "../cookies/profile-cookie-snapshot-vault";
 import {
@@ -18,6 +17,7 @@ import {
 import { collectBrowserEnvironment, failedBrowserEnvironmentAudit } from "./browser-environment-audit";
 import { SeleniumBaseRpcPage, SeleniumBaseRpcTransport } from "./seleniumbase-rpc-page";
 import type {
+  BrowserContext,
   BrowserContextConfig,
   BrowserContextHandle,
   BrowserProxyConfig,
@@ -139,10 +139,11 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
         {
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
-          env: { ...process.env }
+          env: { ...process.env, PYTHONUNBUFFERED: "1" }
         }
       );
-      const transport = new SeleniumBaseRpcTransport(child);
+      const runningChild = child;
+      const transport = new SeleniumBaseRpcTransport(runningChild);
 
       // Explicit startup barrier: no Page/Locator or task command exists until
       // Python has fully created Chrome/CDP and answered with READY.
@@ -164,8 +165,8 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
         },
         close: async () => {
           await page.closeTransport();
-          await this.waitForExit(child!, 5_000);
-          if (child!.exitCode == null) child!.kill("SIGKILL");
+          await this.waitForExit(runningChild, 5_000);
+          if (runningChild.exitCode == null) runningChild.kill("SIGKILL");
         }
       };
 
@@ -185,11 +186,11 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
         userDataDir: normalizedDir,
         environmentAudit
       };
-      this.sessions.set(config.taskId, { child, transport, page, context, handle });
+      this.sessions.set(config.taskId, { child: runningChild, transport, page, context, handle });
       this.lastError = undefined;
       return handle;
     } catch (error) {
-      if (child?.exitCode == null) child.kill("SIGKILL");
+      if (child && child.exitCode == null) child.kill("SIGKILL");
       this.profileLeases.delete(config.taskId);
       lease?.release();
       this.activeProfileDirs.delete(normalizedDir);
