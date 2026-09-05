@@ -103,7 +103,16 @@ describeBrowser("semantic checkout autofill - three isolated sessions", () => {
         const taskId = `semantic-session-${session.id}-${Date.now()}`;
         const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `ares-semantic-${session.id}-`));
         dirs.push(userDataDir);
-        runtime.setTaskCookieSnapshot(taskId, [{ name: "ares-session", value: session.cookie, url: origin }]);
+        runtime.setTaskCookieSnapshot(taskId, [{
+          name: "ares-session",
+          value: session.cookie,
+          domain: "127.0.0.1",
+          path: "/",
+          expires: -1,
+          httpOnly: false,
+          secure: false,
+          sameSite: "Lax"
+        }]);
         const handle = await runtime.createContext({ taskId, userDataDir, headless: true, userAgent: session.userAgent });
         try {
           const page = handle.page;
@@ -111,7 +120,7 @@ describeBrowser("semantic checkout autofill - three isolated sessions", () => {
 
           const interactions = new GhostCursorUiInteractionHelper(page);
           await interactions.click(page.locator("#probe"));
-          expect(await page.evaluate(() => document.body.dataset.clicked)).toBe("yes");
+          expect(await page.evaluate(() => document.body.dataset["clicked"])).toBe("yes");
 
           const source = semanticValues(session.values);
           const autofill = new SemanticFieldAutofill(page, interactions, resolver);
