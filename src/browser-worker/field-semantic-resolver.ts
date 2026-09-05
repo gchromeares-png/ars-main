@@ -230,8 +230,6 @@ export class FieldSemanticResolver {
   private readonly provider?: SemanticEmbeddingProvider;
 
   constructor(provider?: SemanticEmbeddingProvider) {
-    // The production checkout path used to inject Ollama explicitly. Keep that
-    // legacy construction source-compatible while disabling it at runtime.
     this.provider = provider instanceof OllamaEmbeddingProvider ? undefined : provider;
   }
 
@@ -256,9 +254,6 @@ export class FieldSemanticResolver {
       const intent = lexicalIntent ?? { value: "unknown" as FieldIntent, confidence: 0, source: "unknown" as const };
       const context = lexicalContext ?? { value: "unknown" as AddressContext, confidence: 0, source: "unknown" as const };
 
-      // Intent is the required dimension for checkout value mapping. An unknown
-      // shipping/billing context is valid and maps to the profile's default
-      // address, so it must never trigger an embedding/LLM call by itself.
       if (intent.value !== "unknown") {
         const resolution = this.toResolution(intent, context);
         this.cache.set(key, resolution);
@@ -530,7 +525,7 @@ export async function collectFieldDescriptors(page: Page): Promise<FieldDescript
       ariaLabel: element.getAttribute("aria-label") || ariaLabelledText,
       label: labels,
       nearbyText
-    } satisfies FieldDescriptor;
+    };
   }));
 }
 
