@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
-import mycdp
+from mycdp import input_ as cdp_input
 
 
 Point = Tuple[float, float]
@@ -81,23 +81,23 @@ class CursorPathProvider:
             return False
 
         async def drag() -> None:
-            button = mycdp.input_.MouseButton("left")
+            button = cdp_input.MouseButton("left")
             start_x, start_y = points[0]
-            await tab.send(mycdp.input_.dispatch_mouse_event(
+            await tab.send(cdp_input.dispatch_mouse_event(
                 "mouseMoved", x=start_x, y=start_y, button=button, buttons=0
             ))
-            await tab.send(mycdp.input_.dispatch_mouse_event(
+            await tab.send(cdp_input.dispatch_mouse_event(
                 "mousePressed", x=start_x, y=start_y, button=button, buttons=1, click_count=1
             ))
             try:
                 for x, y in points[1:]:
-                    await tab.send(mycdp.input_.dispatch_mouse_event(
+                    await tab.send(cdp_input.dispatch_mouse_event(
                         "mouseMoved", x=x, y=y, button=button, buttons=1
                     ))
                     await asyncio.sleep(0)
             finally:
                 end_x, end_y = points[-1]
-                await tab.send(mycdp.input_.dispatch_mouse_event(
+                await tab.send(cdp_input.dispatch_mouse_event(
                     "mouseReleased", x=end_x, y=end_y, button=button, buttons=0, click_count=1
                 ))
 
