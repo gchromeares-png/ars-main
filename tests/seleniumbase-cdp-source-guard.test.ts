@@ -49,7 +49,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     }
   });
 
-  it("keeps the manual SeleniumBase path state-based instead of using a fixed captcha delay", () => {
+  it("keeps the SeleniumBase path state-based instead of using a fixed captcha delay", () => {
     expect(adapter).toContain("self._sb.goto(url)");
     expect(adapter).toContain("self._challenge_tracker.wait_for_stable_challenge()");
     expect(adapter).toContain("self._sb.solve_captcha()");
@@ -90,7 +90,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(siteAdapterProbe).toContain('assert framed["rows"] == 4 and framed["columns"] == 4');
   });
 
-  it("keeps authorized test-grid actions separate from detection and protected cores", () => {
+  it("keeps grid actions separate from detection and protected cores", () => {
     expect(gridActions).toContain("class AuthorizedGridActionExecutor");
     expect(gridActions).toContain("def apply(self, indexes");
     expect(gridActions).toContain("mouse_click");
@@ -100,7 +100,8 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(gridActions).not.toContain("src/challenges");
     expect(adapter).toContain("def apply_grid_selection(self, indexes");
     expect(manualWorker).toContain('command_type == "apply-grid-selection"');
-    expect(manualWorker).toContain('command.get("authorizedTestMode")');
+    expect(manualWorker).not.toContain("authorizedTestMode");
+    expect(manualWorker).toContain('"gridActionsEnabled": True');
     expect(manualWorker).toContain('"type": "grid-selection-applied"');
     expect(gridActionsProbe).toContain('result = executor.apply([8, 3, 1, 3, -1, 99]');
   });
@@ -124,7 +125,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(awaitIndex).toBeGreaterThan(writeIndex);
   });
 
-  it("restores the previous manual SeleniumBase URL and waits for persistent-profile shutdown", () => {
+  it("restores the previous SeleniumBase URL and waits for persistent-profile shutdown", () => {
     expect(adapter).toContain("psutil.Process(chrome_pid).wait(timeout=5.0)");
     expect(adapter).toContain('time.sleep(1.0 if sys.platform.startswith("win") else 0.2)');
     expect(manualWorker).toContain('LAST_URL_FILENAME = ".ares-last-url"');
@@ -157,9 +158,11 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(manualController).toContain("resolveUserDataDir(profileId)");
   });
 
-  it("exposes SeleniumBase only as an explicit manual experimental browser path", () => {
-    expect(profileController).toContain('engine: "seleniumbase-cdp"');
-    expect(profileController).toContain("this.seleniumBase.open(");
+  it("uses SeleniumBase as the default profile-browser owner", () => {
+    expect(profileController).toContain("new SeleniumBaseProfileBrowserController");
+    expect(profileController).toContain("return this.seleniumBase.open(profile, options.startUrl, options.cookieSnapshotId)");
+    expect(profileController).not.toContain("manual-profile-browser.js");
+    expect(profileController).not.toContain("spawn(");
     expect(preload).toContain("openSeleniumBaseProfileBrowser");
     expect(preload).toContain("applySeleniumBaseCookieSnapshot");
     expect(preload).toContain("saveSeleniumBaseProfileCookieSnapshot");
