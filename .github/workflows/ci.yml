@@ -26,6 +26,9 @@ jobs:
       - name: Verify SeleniumBase challenge state tracker
         run: python python/seleniumbase_cdp/challenge_state_tracker_probe.py
 
+      - name: Verify SeleniumBase structural site adapter
+        run: python python/seleniumbase_cdp/site_grid_adapter_probe.py
+
       - name: Run isolated SeleniumBase CDP persistence PoC
         run: python python/seleniumbase_cdp/persistence_probe.py
 

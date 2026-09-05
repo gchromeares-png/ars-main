@@ -1,0 +1,6 @@
+{
+  "root": ".challenge-board",
+  "tiles": ".challenge-board .tile",
+  "instruction": ".challenge-instruction",
+  "submit": ".challenge-submit"
+}
