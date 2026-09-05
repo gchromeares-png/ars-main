@@ -23,12 +23,19 @@ function materializeEarlyGateLane(task: Task): void {
   const cookieSnapshotId = String(data["cookieSnapshotId"] ?? action["cookieSnapshotId"] ?? "").trim();
   const proxySelection = asRecord(data["proxySelection"]) ?? asRecord(action["proxySelection"]);
   const browserConfig = asRecord(data["browserConfig"]) ?? {};
+  const triggerSource = asRecord(data["triggerSource"]) ?? {
+    kind: "early-gate",
+    parentTaskId: task.id,
+    role: "browser-monitor-lane",
+    observedAt: new Date().toISOString()
+  };
 
   task.config.data = {
     ...data,
     ...(profileId ? { profileId } : {}),
     ...(proxySelection ? { proxySelection } : {}),
     ...(cookieSnapshotId ? { cookieSnapshotId } : {}),
+    triggerSource,
     browserConfig: {
       ...browserConfig,
       headless: typeof browserConfig["headless"] === "boolean"
