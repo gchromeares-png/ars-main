@@ -109,6 +109,14 @@
             (click)="closeProfileBrowser(profile)">
             {{ profileBrowserBusyIds.has(profile.id) ? 'SCHLIESST…' : 'BROWSER SCHLIESSEN' }}
           </button>
+          <button
+            type="button"
+            class="runtime-btn session-reset"
+            [disabled]="profileBrowserBusyIds.has(profile.id)"
+            title="Löscht Browserdaten, Cookie-Snapshots und gespeicherten User-Agent dieses Profils"
+            (click)="resetProfileBrowserSession(profile)">
+            SESSION LÖSCHEN
+          </button>
         </div>
       </div>
     </div>
