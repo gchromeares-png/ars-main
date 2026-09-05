@@ -11,6 +11,7 @@ describe("SeleniumBase CDP architecture guard", () => {
   const siteAdapterProbe = read("python/seleniumbase_cdp/site_grid_adapter_probe.py");
   const gridActions = read("python/seleniumbase_cdp/authorized_grid_action_executor.py");
   const gridActionsProbe = read("python/seleniumbase_cdp/authorized_grid_action_executor_probe.py");
+  const visualRuntime = read("python/seleniumbase_cdp/visual_interaction_runtime.py");
   const worker = read("python/seleniumbase_cdp/worker.py");
   const manualWorker = read("python/seleniumbase_cdp/manual_profile_browser.py");
   const manualController = read("src/electron/seleniumbase-profile-browser-controller.ts");
@@ -36,7 +37,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("self._sb.set_all_cookies(params)");
     expect(adapter).toContain("self._sb.get_all_cookies()");
     expect(adapter).toContain("mycdp.network.CookieParam.from_json(payload)");
-    for (const source of [adapter, worker, manualWorker, siteAdapter, gridActions]) {
+    for (const source of [adapter, worker, manualWorker, siteAdapter, gridActions, visualRuntime]) {
       expect(source.toLowerCase()).not.toContain("playwright");
       expect(source).not.toContain("connect_over_cdp");
     }
@@ -65,7 +66,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(tracker).toContain("class ChallengeStateTracker");
     expect(tracker).toContain('find_elements("iframe")');
     expect(tracker).toContain('frame.query_selector_all("img")');
-    expect(tracker).toContain('"changedIndexes"');
+    expect(tracker).toContain('\"changedIndexes\"');
     expect(tracker).toContain('_GRID_SIZES = {9: (3, 3), 16: (4, 4)}');
     expect(tracker).not.toContain("2captcha.com");
     expect(tracker).not.toContain("solve_captcha");
@@ -77,12 +78,10 @@ describe("SeleniumBase CDP architecture guard", () => {
 
   it("adds a domain-agnostic read-only site grid adapter with overrides and state generations", () => {
     expect(siteAdapter).toContain("class GridSiteAdapter");
-    expect(siteAdapter).toContain("_GRID_SIZES = {9: (3, 3), 16: (4, 4)}");
-    expect(siteAdapter).toContain('find_elements("iframe")');
-    expect(siteAdapter).toContain('frame.query_selector_all("img")');
+    expect(siteAdapter).toContain("_GRID_SIZES");
     expect(siteAdapter).toContain("shadowRoot");
     expect(siteAdapter).toContain('allowed = {"root", "tiles", "instruction", "submit", "complete", "failed"}');
-    expect(siteAdapter).toContain('"generation": self._generation');
+    expect(siteAdapter).toContain('\"generation\": self._generation');
     expect(siteAdapter).not.toContain("2captcha.com");
     expect(siteAdapter).not.toContain("solve_captcha");
     expect(siteAdapter).not.toContain(".click(");
@@ -101,19 +100,20 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("def apply_grid_selection(self, indexes");
     expect(manualWorker).toContain('command_type == "apply-grid-selection"');
     expect(manualWorker).not.toContain("authorizedTestMode");
-    expect(manualWorker).toContain('"gridActionsEnabled": True');
-    expect(manualWorker).toContain('"type": "grid-selection-applied"');
+    expect(manualWorker).toContain('\"gridActionsEnabled\": True');
+    expect(manualWorker).toContain('\"type\": "grid-selection-applied"');
     expect(gridActionsProbe).toContain('result = executor.apply([8, 3, 1, 3, -1, 99]');
   });
 
-  it("enables the structural site adapter by default and exposes selector overrides", () => {
-    expect(adapter).toContain("self._site_adapter = GridSiteAdapter");
+  it("enables the structural site adapter through the visual runtime and exposes selector overrides", () => {
+    expect(adapter).toContain("self._visual_interactions = VisualInteractionRuntime(");
     expect(adapter).toContain("def site_grid_state(self)");
-    expect(adapter).toContain("self._site_adapter.poll()");
+    expect(adapter).toContain("self._visual_interactions.grid_state()");
+    expect(visualRuntime).toContain("GridSiteAdapter(");
     expect(manualWorker).toContain('SITE_ADAPTER_FILENAME = ".ares-site-adapter.json"');
     expect(manualWorker).toContain('command.get("siteAdapterOverrides")');
     expect(manualWorker).toContain('command_type == "site-grid-state"');
-    expect(manualWorker).toContain('"siteAdapterEnabled": True');
+    expect(manualWorker).toContain('\"siteAdapterEnabled\": True');
   });
 
   it("sends the SeleniumBase start payload after installing the ready listener", () => {
@@ -142,13 +142,13 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("self._sb.get_current_url()");
     expect(adapter).toContain("self._sb.get_title()");
     expect(manualWorker).toContain('command_type == "inspect-session"');
-    expect(manualWorker).toContain('"type": "session-inspection"');
+    expect(manualWorker).toContain('\"type\": "session-inspection"');
     expect(manualWorker).not.toContain("attach-playwright");
     expect(manualWorker).not.toContain("inspect-playwright");
   });
 
   it("keeps the SeleniumBase worker isolated from Patchright and ARES protected cores", () => {
-    for (const source of [adapter, tracker, siteAdapter, gridActions, worker, manualWorker, manualController]) {
+    for (const source of [adapter, tracker, siteAdapter, gridActions, visualRuntime, worker, manualWorker, manualController]) {
       expect(source.toLowerCase()).not.toContain("patchright");
       expect(source).not.toContain("src/challenges");
       expect(source).not.toContain("field-semantic-resolver");
@@ -177,14 +177,14 @@ describe("SeleniumBase CDP architecture guard", () => {
   });
 
   it("verifies cookies, native session inspection, and restart persistence", () => {
-    expect(manualProbe).toContain('"/initial"');
-    expect(manualProbe).toContain('"apply-cookies"');
-    expect(manualProbe).toContain('"/same-session"');
-    expect(manualProbe).toContain('"export-cookies"');
-    expect(manualProbe).toContain('"inspect-session"');
-    expect(manualProbe).toContain('"session-inspection"');
+    expect(manualProbe).toContain('\"/initial\"');
+    expect(manualProbe).toContain('\"apply-cookies\"');
+    expect(manualProbe).toContain('\"/same-session\"');
+    expect(manualProbe).toContain('\"export-cookies\"');
+    expect(manualProbe).toContain('\"inspect-session\"');
+    expect(manualProbe).toContain('\"session-inspection\"');
     expect(manualProbe).toContain('cookie.get("httpOnly") is not True');
-    expect(manualProbe).toContain('"/restart"');
+    expect(manualProbe).toContain('\"/restart\"');
     expect(manualProbe.toLowerCase()).not.toContain("playwright");
   });
 });

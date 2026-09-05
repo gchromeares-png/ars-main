@@ -9,13 +9,8 @@ import mycdp
 import psutil
 from seleniumbase import sb_cdp
 
-from authorized_grid_action_executor import AuthorizedGridActionExecutor
-from auto_interaction_controller import AutoInteractionController
 from challenge_state_tracker import ChallengeStateTracker
-from site_grid_adapter import GridSiteAdapter
-from site_slider_adapter import SliderSiteAdapter
-from slider_action_executor import SliderActionExecutor
-from vision_grid_classifier import VisionGridClassifier
+from visual_interaction_runtime import VisualInteractionRuntime
 
 
 class SeleniumBaseCdpAdapter:
@@ -43,19 +38,11 @@ class SeleniumBaseCdpAdapter:
             kwargs["agent"] = user_agent
 
         self._sb = sb_cdp.Chrome(**kwargs)
-        overrides = site_adapter_overrides or {}
         self._challenge_tracker = ChallengeStateTracker(self._sb)
-        self._site_adapter = GridSiteAdapter(self._sb, overrides=overrides)
-        self._slider_adapter = SliderSiteAdapter(self._sb, overrides=overrides)
-        self._grid_actions = AuthorizedGridActionExecutor(self._sb, self._site_adapter)
-        self._slider_actions = SliderActionExecutor(self._sb, self._slider_adapter)
-        self._vision = VisionGridClassifier()
-        self._auto_interactions = AutoInteractionController(
-            self._site_adapter,
-            self._slider_adapter,
-            self._grid_actions,
-            self._slider_actions,
-            self._vision,
+        self._visual_interactions = VisualInteractionRuntime(
+            self._sb,
+            profile_dir=self.profile_dir,
+            overrides=site_adapter_overrides or {},
         )
         self._next_auto_poll = 0.0
         self._last_auto_result: Dict[str, Any] = {"acted": False, "kind": "none"}
@@ -79,19 +66,22 @@ class SeleniumBaseCdpAdapter:
         return self._challenge_tracker.poll()
 
     def site_grid_state(self) -> Dict[str, Any]:
-        return self._site_adapter.poll()
+        return self._visual_interactions.grid_state()
 
     def site_slider_state(self) -> Dict[str, Any]:
-        return self._slider_adapter.poll()
+        return self._visual_interactions.slider_state()
+
+    def slider_target_state(self) -> Dict[str, Any]:
+        return self._visual_interactions.slider_target_state()
 
     def auto_interaction_state(self) -> Dict[str, Any]:
-        return {**self._auto_interactions.status(), "lastResult": self._last_auto_result}
+        return {**self._visual_interactions.status(), "lastResult": self._last_auto_result}
 
     def apply_grid_selection(self, indexes: Iterable[int], *, submit: bool = True) -> Dict[str, Any]:
-        return self._grid_actions.apply(indexes, submit=submit)
+        return self._visual_interactions.apply_grid_selection(indexes, submit=submit)
 
     def apply_slider(self, target_fraction: float = 0.96) -> Dict[str, Any]:
-        return self._slider_actions.apply(target_fraction)
+        return self._visual_interactions.apply_slider(target_fraction)
 
     def inspect_session(self) -> Dict[str, Any]:
         return {
@@ -147,7 +137,7 @@ class SeleniumBaseCdpAdapter:
             return
         self._next_auto_poll = now + 0.8
         try:
-            self._last_auto_result = self._auto_interactions.poll_and_act()
+            self._last_auto_result = self._visual_interactions.poll_and_act()
         except Exception as exc:
             self._last_auto_result = {"acted": False, "kind": "error", "error": str(exc)}
 

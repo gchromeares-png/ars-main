@@ -8,7 +8,7 @@ _SUPPORTED_COUNTS = [4, 6, 8, 9, 12, 16, 20, 25]
 
 
 class AuthorizedGridActionExecutor:
-    """Apply classifier-selected tile indexes to the current structural test grid."""
+    """Apply classifier-selected stable marks to the current structural test grid."""
 
     def __init__(self, seleniumbase_cdp: Any, site_adapter: Any) -> None:
         self._sb = seleniumbase_cdp
@@ -17,6 +17,25 @@ class AuthorizedGridActionExecutor:
     def apply(self, indexes: Iterable[int], *, submit: bool = True) -> Dict[str, Any]:
         state = self._site_adapter.poll()
         selected = self._indexes(indexes, int(state.get("tileCount") or 0))
+        return self._apply_state(state, selected, submit=submit)
+
+    def apply_marks(self, mark_ids: Iterable[str], *, submit: bool = True) -> Dict[str, Any]:
+        state = self._site_adapter.poll()
+        requested = {str(value) for value in mark_ids if str(value)}
+        marks = [mark for mark in state.get("marks") or [] if isinstance(mark, dict) and mark.get("role") == "grid-tile"]
+        selected = [index for index, mark in enumerate(marks) if str(mark.get("markId") or "") in requested]
+        result = self._apply_state(state, selected, submit=submit)
+        clicked = set(result.get("clickedIndexes") or [])
+        result["requestedMarkIds"] = sorted(requested)
+        result["clickedMarkIds"] = [
+            str(mark.get("markId") or "")
+            for index, mark in enumerate(marks)
+            if index in clicked and mark.get("markId")
+        ]
+        return result
+
+    def _apply_state(self, state: Dict[str, Any], selected: List[int], *, submit: bool) -> Dict[str, Any]:
+        selected = self._indexes(selected, int(state.get("tileCount") or 0))
         if state.get("kind") != "image-grid" or not selected:
             return {"clickedIndexes": [], "submitted": False, "state": state}
 

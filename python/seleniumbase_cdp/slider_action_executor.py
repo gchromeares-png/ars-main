@@ -3,38 +3,121 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
+from cursor_path_provider import CursorPathProvider
+
 
 class SliderActionExecutor:
-    """Move the currently detected slider to a relative target position."""
+    """Move the currently detected slider to a grounded relative target position."""
 
-    def __init__(self, seleniumbase_cdp: Any, slider_adapter: Any) -> None:
+    def __init__(self, seleniumbase_cdp: Any, slider_adapter: Any, path_provider: CursorPathProvider | None = None) -> None:
         self._sb = seleniumbase_cdp
         self._slider_adapter = slider_adapter
+        self._paths = path_provider or CursorPathProvider()
 
-    def apply(self, target_fraction: float = 0.96) -> Dict[str, Any]:
-        state = self._slider_adapter.poll()
+    def apply(
+        self,
+        target_fraction: float = 0.96,
+        *,
+        state: Dict[str, Any] | None = None,
+        force_fallback: bool = False,
+    ) -> Dict[str, Any]:
+        state = state or self._slider_adapter.poll()
         if state.get("kind") != "slider":
             return {"moved": False, "targetFraction": 0.0, "mode": "none", "state": state}
 
         target = max(0.0, min(1.0, float(target_fraction)))
+        if not force_fallback:
+            planned = self._planned_drag(state, target)
+            if planned.get("moved"):
+                mode = f"path:{planned.get('provider') or 'unknown'}"
+                return {
+                    "moved": True,
+                    "targetFraction": target,
+                    "mode": mode,
+                    "pointCount": int(planned.get("pointCount") or 0),
+                    "state": self._slider_adapter.poll(),
+                }
+
         moved = self._native_drag(state, target)
         mode = "seleniumbase-native" if moved else "event-fallback"
         if not moved:
             moved = self._apply_document(target)
-        return {"moved": moved, "targetFraction": target, "mode": mode if moved else "none", "state": self._slider_adapter.poll()}
+        return {
+            "moved": moved,
+            "targetFraction": target,
+            "mode": mode if moved else "none",
+            "pointCount": 2 if moved and mode == "seleniumbase-native" else 0,
+            "state": self._slider_adapter.poll(),
+        }
 
-    def _native_drag(self, state: Dict[str, Any], target: float) -> bool:
+    def _planned_drag(self, state: Dict[str, Any], target: float) -> Dict[str, Any]:
+        viewport = self._viewport_points(state, target)
+        if viewport is None:
+            return {"moved": False, "provider": "none", "pointCount": 0}
+        gui = self._screen_points(state, target)
+        viewport_start, viewport_end = viewport
+        gui_start, gui_end = gui if gui is not None else (None, None)
+        try:
+            return self._paths.play_drag(
+                self._sb,
+                viewport_start,
+                viewport_end,
+                preferred="ghost-cursor",
+                gui_start=gui_start,
+                gui_end=gui_end,
+            )
+        except Exception:
+            return {"moved": False, "provider": "none", "pointCount": 0}
+
+    @staticmethod
+    def _viewport_points(state: Dict[str, Any], target: float):
+        track = state.get("trackRect") if isinstance(state.get("trackRect"), dict) else None
+        handle = state.get("handleRect") if isinstance(state.get("handleRect"), dict) else None
+        if not track or not handle:
+            return None
+        try:
+            tx = float(track.get("x") or 0.0)
+            ty = float(track.get("y") or 0.0)
+            width = float(track.get("width") or 0.0)
+            height = float(track.get("height") or 0.0)
+            hx = float(handle.get("x") or 0.0)
+            hy = float(handle.get("y") or 0.0)
+            hw = float(handle.get("width") or 0.0)
+            hh = float(handle.get("height") or 0.0)
+            current = max(0.0, min(1.0, float(state.get("fraction") or 0.0)))
+        except (TypeError, ValueError):
+            return None
+        if width <= 0 or height <= 0:
+            return None
+
+        if state.get("orientation") == "vertical":
+            start = (
+                tx + width / 2.0 if state.get("nativeRange") else hx + hw / 2.0,
+                ty + height - height * current if state.get("nativeRange") else hy + hh / 2.0,
+            )
+            end = (tx + width / 2.0, ty + height - height * target)
+        else:
+            start = (
+                tx + width * current if state.get("nativeRange") else hx + hw / 2.0,
+                ty + height / 2.0 if state.get("nativeRange") else hy + hh / 2.0,
+            )
+            end = (tx + width * target, ty + height / 2.0)
+        return start, end
+
+    def _screen_points(self, state: Dict[str, Any], target: float):
         handle_selector = str(state.get("handleSelector") or "")
         track_selector = str(state.get("trackSelector") or "")
         rect = state.get("trackRect") if isinstance(state.get("trackRect"), dict) else {}
         if not handle_selector or not track_selector or not rect:
-            return False
+            return None
         try:
             handle_x, handle_y = self._sb.get_gui_element_center(handle_selector)
             track_x, track_y = self._sb.get_gui_element_center(track_selector)
             width = float(rect.get("width") or 0)
             height = float(rect.get("height") or 0)
             current = max(0.0, min(1.0, float(state.get("fraction") or 0)))
+            if width <= 0 or height <= 0:
+                return None
             if state.get("orientation") == "vertical":
                 start_x = float(handle_x)
                 start_y = float(track_y) + height / 2 - height * current if state.get("nativeRange") else float(handle_y)
@@ -45,9 +128,19 @@ class SliderActionExecutor:
                 start_y = float(handle_y)
                 end_x = float(track_x) - width / 2 + width * target
                 end_y = float(track_y)
+            return (start_x, start_y), (end_x, end_y)
+        except Exception:
+            return None
+
+    def _native_drag(self, state: Dict[str, Any], target: float) -> bool:
+        points = self._screen_points(state, target)
+        if points is None:
+            return False
+        start, end = points
+        try:
             self._sb.gui_drag_drop_points(
-                int(round(start_x)), int(round(start_y)),
-                int(round(end_x)), int(round(end_y)),
+                int(round(start[0])), int(round(start[1])),
+                int(round(end[0])), int(round(end[1])),
                 timeframe=0.55,
             )
             return True
