@@ -87,10 +87,6 @@ class SeleniumBaseCdpAdapter:
 
     @property
     def chrome_pid(self) -> int | None:
-        # Only use the process handle SeleniumBase historically exposed for the
-        # Chromium process. Generic `.pid` attributes on wrapper objects are not
-        # guaranteed to be Chrome and can make Windows profile-flush waiting target
-        # the wrong process.
         driver = getattr(self._sb, "driver", None)
         if driver is None:
             return None
@@ -100,7 +96,6 @@ class SeleniumBaseCdpAdapter:
         return int(pid) if isinstance(pid, int) and pid > 0 else None
 
     def _profile_browser_pids(self) -> List[int]:
-        """Find browser owners for this exact user-data-dir without trusting wrapper PIDs."""
         target = os.path.normcase(str(self.profile_dir))
         matches: List[int] = []
         for process in psutil.process_iter(["pid", "cmdline"]):
@@ -130,7 +125,6 @@ class SeleniumBaseCdpAdapter:
         self._sb.goto(url)
         self._challenge_tracker.wait_for_stable_challenge()
         self._sb.solve_captcha()
-
         self._watchdog.reset()
         initial = self._watchdog.poll()
         self._last_watchdog_state = initial
@@ -213,7 +207,6 @@ class SeleniumBaseCdpAdapter:
     def execute_script(self, script: str, *args: Any) -> Any:
         if not args:
             return self._sb.execute_script(script)
-
         encoded_args = json.dumps(list(args), ensure_ascii=False, separators=(",", ":"))
         wrapped = (
             "(() => {"
@@ -239,14 +232,10 @@ class SeleniumBaseCdpAdapter:
         return [self._cookie_to_snapshot(cookie) for cookie in self._sb.get_all_cookies()]
 
     def is_running(self) -> bool:
-        """Fast, non-blocking liveness probe for the task-worker command loop."""
         if self._closed:
             return False
-
         pid = self.chrome_pid
         if not pid:
-            # Pure-CDP builds may not expose SeleniumBase's legacy driver wrapper.
-            # Missing optional process metadata is not evidence that Chrome died.
             return True
         try:
             process = psutil.Process(pid)
@@ -261,7 +250,6 @@ class SeleniumBaseCdpAdapter:
         if not force and now < self._next_watchdog_poll:
             return
         self._next_watchdog_poll = now + self._policy.watchdog_interval_seconds
-
         try:
             state = self._watchdog.poll()
         except Exception:
@@ -269,7 +257,6 @@ class SeleniumBaseCdpAdapter:
         self._last_watchdog_state = state
         if not force and not bool(state.get("changed")):
             return
-
         try:
             self._capture_for_events(state)
         except Exception:
@@ -329,15 +316,14 @@ class SeleniumBaseCdpAdapter:
         chrome_pid = self.chrome_pid
         if chrome_pid and chrome_pid not in browser_pids:
             browser_pids.insert(0, chrome_pid)
-        # Force a final cookie-store round trip before asking Chromium to shut down.
-        # This does not persist cookie payloads outside the browser profile.
         try:
             self._sb.get_all_cookies()
         except Exception:
             pass
-        # SeleniumBase/Chromium on Windows needs a short pre-close settle so
-        # persistent cookies and session state reach the user-data-dir on disk.
-        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
+        # Give Chromium's cookie store a deterministic settle window before close
+        # on every platform. This removes a Linux/CI race where localStorage had
+        # persisted but the persistent cookie had not reached the profile yet.
+        time.sleep(1.0)
         self._sb.quit()
         self._wait_for_profile_flush(browser_pids)
 
@@ -345,13 +331,8 @@ class SeleniumBaseCdpAdapter:
     def _wait_for_profile_flush(browser_pids: Iterable[int]) -> None:
         pids = list(dict.fromkeys(int(pid) for pid in browser_pids if isinstance(pid, int) and pid > 0))
         if not pids:
-            # Pure-CDP can omit a wrapper PID. In that case prefer a conservative
-            # profile settle window over releasing the lease immediately.
             time.sleep(1.0)
             return
-
-        # Wait for SeleniumBase's authoritative Chromium process first when it is
-        # available, then cover any additional browser owner found by user-data-dir.
         chrome_pid = pids[0]
         try:
             psutil.Process(chrome_pid).wait(timeout=5.0)
@@ -359,7 +340,6 @@ class SeleniumBaseCdpAdapter:
             pass
         except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.Error):
             pass
-
         deadline = time.monotonic() + 5.0
         for pid in pids[1:]:
             remaining = deadline - time.monotonic()
@@ -381,11 +361,9 @@ class SeleniumBaseCdpAdapter:
                 "Partitionierte Cookies werden im SeleniumBase-Testpfad nicht stillschweigend umgeschrieben. "
                 "Bitte Snapshot ohne partitionKey verwenden."
             )
-
         same_site = str(cookie.get("sameSite") or "Lax")
         if same_site not in {"Strict", "Lax", "None"}:
             same_site = "Lax"
-
         payload: Dict[str, Any] = {
             "name": str(cookie.get("name") or ""),
             "value": str(cookie.get("value") or ""),
@@ -402,7 +380,6 @@ class SeleniumBaseCdpAdapter:
             expires_number = -1
         if expires_number > 0:
             payload["expires"] = expires_number
-
         if not payload["name"] or not payload["domain"]:
             raise ValueError("Cookie ohne Name oder Domain kann nicht in SeleniumBase geladen werden.")
         return mycdp.network.CookieParam.from_json(payload)
@@ -419,14 +396,12 @@ class SeleniumBaseCdpAdapter:
                 for key in dir(cookie)
                 if not key.startswith("_") and not callable(getattr(cookie, key, None))
             }
-
         same_site = raw.get("sameSite") or raw.get("same_site") or "Lax"
         if hasattr(same_site, "to_json"):
             same_site = same_site.to_json()
         same_site = str(same_site)
         if same_site not in {"Strict", "Lax", "None"}:
             same_site = "Lax"
-
         expires = raw.get("expires", -1)
         if hasattr(expires, "to_json"):
             expires = expires.to_json()
@@ -434,7 +409,6 @@ class SeleniumBaseCdpAdapter:
             expires_number = float(expires)
         except (TypeError, ValueError):
             expires_number = -1
-
         snapshot: Dict[str, Any] = {
             "name": str(raw.get("name") or ""),
             "value": str(raw.get("value") or ""),
@@ -445,11 +419,9 @@ class SeleniumBaseCdpAdapter:
             "secure": bool(raw.get("secure", False)),
             "sameSite": same_site,
         }
-
         partition_key = raw.get("partitionKey") or raw.get("partition_key")
         if isinstance(partition_key, str) and partition_key.strip():
             snapshot["partitionKey"] = partition_key.strip()
         elif isinstance(partition_key, dict) and partition_key.get("topLevelSite"):
             snapshot["partitionKey"] = str(partition_key["topLevelSite"])
-
         return snapshot
