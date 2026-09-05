@@ -1,4 +1,4 @@
-import type { Database } from "sql.js";
+import Database from "better-sqlite3";
 
 const SENSITIVE_KEY = /(api[-_]?key|authorization|cookie|password|secret|token)/i;
 const SENSITIVE_VALUE = /\b(api[-_]?key|authorization|cookie|password|secret|token|card[-_]?number|pan|cvc|cvv|security[-_]?code)\s*[:=]\s*([^\s,;]+)/gi;
@@ -49,11 +49,10 @@ function asNumber(value: unknown): number {
  * Plaintext payment data is removed/redacted in place and is never migrated into the vault.
  */
 export function scrubLegacySensitiveData(db: Database): void {
-  const taskUpdates: Array<{ id: string; config: string; lastError: string | null }> = [];
-  const taskStatement = db.prepare("SELECT id, config_json, last_error FROM tasks");
-  try {
-    while (taskStatement.step()) {
-      const row = taskStatement.getAsObject();
+  const scrub = db.transaction(() => {
+    const taskRows = db.prepare("SELECT id, config_json, last_error FROM tasks").all() as Record<string, unknown>[];
+    const updateTask = db.prepare("UPDATE tasks SET config_json = ?, last_error = ? WHERE id = ?");
+    for (const row of taskRows) {
       const id = asString(row["id"]);
       const rawConfig = asString(row["config_json"]);
       const rawLastError = row["last_error"] == null ? null : asString(row["last_error"]);
@@ -61,54 +60,34 @@ export function scrubLegacySensitiveData(db: Database): void {
         const sanitizedConfig = JSON.stringify(sanitizePersistedValue(JSON.parse(rawConfig)));
         const sanitizedLastError = rawLastError == null ? null : sanitizePersistedMessage(rawLastError);
         if (sanitizedConfig !== rawConfig || sanitizedLastError !== rawLastError) {
-          taskUpdates.push({ id, config: sanitizedConfig, lastError: sanitizedLastError });
+          updateTask.run(sanitizedConfig, sanitizedLastError, id);
         }
       } catch {
         // Malformed legacy JSON remains untouched so normal read validation can surface it.
       }
     }
-  } finally {
-    taskStatement.free();
-  }
-  for (const update of taskUpdates) {
-    db.run("UPDATE tasks SET config_json = ?, last_error = ? WHERE id = ?", [update.config, update.lastError, update.id]);
-  }
 
-  const logUpdates: Array<{ id: number; message: string }> = [];
-  const logStatement = db.prepare("SELECT id, message FROM task_logs");
-  try {
-    while (logStatement.step()) {
-      const row = logStatement.getAsObject();
+    const logRows = db.prepare("SELECT id, message FROM task_logs").all() as Record<string, unknown>[];
+    const updateLog = db.prepare("UPDATE task_logs SET message = ? WHERE id = ?");
+    for (const row of logRows) {
       const id = asNumber(row["id"]);
       const rawMessage = asString(row["message"]);
       const sanitizedMessage = sanitizePersistedMessage(rawMessage);
-      if (sanitizedMessage !== rawMessage) logUpdates.push({ id, message: sanitizedMessage });
+      if (sanitizedMessage !== rawMessage) updateLog.run(sanitizedMessage, id);
     }
-  } finally {
-    logStatement.free();
-  }
-  for (const update of logUpdates) {
-    db.run("UPDATE task_logs SET message = ? WHERE id = ?", [update.message, update.id]);
-  }
 
-  const eventUpdates: Array<{ id: number; json: string }> = [];
-  const eventStatement = db.prepare("SELECT id, event_json FROM product_monitor_events");
-  try {
-    while (eventStatement.step()) {
-      const row = eventStatement.getAsObject();
+    const eventRows = db.prepare("SELECT id, event_json FROM product_monitor_events").all() as Record<string, unknown>[];
+    const updateEvent = db.prepare("UPDATE product_monitor_events SET event_json = ? WHERE id = ?");
+    for (const row of eventRows) {
       const id = asNumber(row["id"]);
       const rawJson = asString(row["event_json"]);
       try {
         const sanitizedJson = JSON.stringify(sanitizePersistedValue(JSON.parse(rawJson)));
-        if (sanitizedJson !== rawJson) eventUpdates.push({ id, json: sanitizedJson });
+        if (sanitizedJson !== rawJson) updateEvent.run(sanitizedJson, id);
       } catch {
         // Keep malformed legacy event JSON untouched for normal read validation.
       }
     }
-  } finally {
-    eventStatement.free();
-  }
-  for (const update of eventUpdates) {
-    db.run("UPDATE product_monitor_events SET event_json = ? WHERE id = ?", [update.json, update.id]);
-  }
+  });
+  scrub();
 }
