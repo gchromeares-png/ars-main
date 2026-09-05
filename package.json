@@ -39,6 +39,7 @@
     "@angular/platform-browser": "^14.0.0",
     "@angular/platform-browser-dynamic": "^14.0.0",
     "@zennolab_com/capmonstercloud-client": "^2.9.0",
+    "bezier-mouse-js": "^2.0.1",
     "electron": "^21.0.0",
     "ghost-cursor": "^1.4.2",
     "patchright": "^1.62.2",
