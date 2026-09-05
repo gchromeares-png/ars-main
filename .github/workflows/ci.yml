@@ -32,6 +32,9 @@ jobs:
       - name: Verify authorized SeleniumBase grid actions
         run: python python/seleniumbase_cdp/authorized_grid_action_executor_probe.py
 
+      - name: Verify vision grid state loop
+        run: python python/seleniumbase_cdp/vision_grid_runner_probe.py
+
       - name: Run isolated SeleniumBase CDP persistence PoC
         run: python python/seleniumbase_cdp/persistence_probe.py
 

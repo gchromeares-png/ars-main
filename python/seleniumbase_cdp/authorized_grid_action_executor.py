@@ -11,9 +11,11 @@ class AuthorizedGridActionExecutor:
         self._sb = seleniumbase_cdp
         self._site_adapter = site_adapter
 
-    def apply(self, indexes: Iterable[int], *, submit: bool = True) -> Dict[str, Any]:
+    def apply(self, indexes: Iterable[int], *, submit: bool = True, expected_signature: str = "") -> Dict[str, Any]:
         state = self._site_adapter.poll()
         selected = self._indexes(indexes, int(state.get("tileCount") or 0))
+        if expected_signature and state.get("signature") != expected_signature:
+            return {"clickedIndexes": [], "submitted": False, "state": state, "stale": True}
         if state.get("kind") != "image-grid" or not selected:
             return {"clickedIndexes": [], "submitted": False, "state": state}
 
