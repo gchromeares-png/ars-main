@@ -138,6 +138,8 @@ def _start(command: Dict[str, Any]) -> int:
             "appliedCookieCount": applied,
             "siteAdapterEnabled": True,
             "gridActionsEnabled": True,
+            "sliderActionsEnabled": True,
+            "autoInteractionsEnabled": True,
         })
 
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
@@ -187,14 +189,22 @@ def _start(command: Dict[str, Any]) -> int:
                     _emit({"type": "challenge-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.challenge_state()}); continue
                 if command_type == "site-grid-state":
                     _emit({"type": "site-grid-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.site_grid_state()}); continue
+                if command_type == "site-slider-state":
+                    _emit({"type": "site-slider-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.site_slider_state()}); continue
+                if command_type == "auto-interaction-state":
+                    _emit({"type": "auto-interaction-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.auto_interaction_state()}); continue
                 if command_type == "apply-grid-selection":
                     indexes = next_command.get("indexes")
                     if not isinstance(indexes, list):
                         raise ValueError("apply-grid-selection requires an indexes array")
                     result = adapter.apply_grid_selection(indexes, submit=bool(next_command.get("submit", True)))
                     _emit({"type": "grid-selection-applied", "requestId": next_request_id, "profileId": profile_id, **result}); continue
+                if command_type == "apply-slider":
+                    target = float(next_command.get("targetFraction", 0.96))
+                    result = adapter.apply_slider(target)
+                    _emit({"type": "slider-applied", "requestId": next_request_id, "profileId": profile_id, **result}); continue
                 if command_type == "status":
-                    _emit({"type": "status", "requestId": next_request_id, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True, "gridActionsEnabled": True}); continue
+                    _emit({"type": "status", "requestId": next_request_id, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True, "gridActionsEnabled": True, "sliderActionsEnabled": True, "autoInteractionsEnabled": True}); continue
                 raise ValueError(f"Unsupported SeleniumBase command: {command_type!r}")
             except Exception as exc:
                 _emit({"type": "error", "requestId": next_request_id, "profileId": profile_id, "errorType": type(exc).__name__, "error": str(exc)})
