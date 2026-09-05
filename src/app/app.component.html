@@ -72,7 +72,7 @@
       <ng-container *ngIf="activeTab === 'tasks'">
         <section class="section-heading clean-heading">
           <div><div class="eyebrow">WATCH</div><h2>Neue Überwachung</h2></div>
-          <p>Hier definierst du nur den Watch-Flow. Laufende und alte Runs sind weiter unten standardmäßig eingeklappt.</p>
+          <p>Nach dem Erstellen erscheint der Task direkt unter dem Formular und kann dort sofort gestartet werden.</p>
         </section>
 
         <section class="panel task-builder command-panel focused-builder">
@@ -85,7 +85,7 @@
               <span class="mode-icon">◎</span><strong>Produktmonitor</strong><small>Produktdaten beobachten und optional bei Verfügbarkeit Checkout vorbereiten.</small>
             </button>
             <button type="button" [class.active]="monitorStrategyMode === 'early-gate'" (click)="setMonitorStrategy('early-gate')">
-              <span class="mode-icon">◈</span><strong>Early Gate</strong><small>Auf ein passives Gate-/Queue-Signal reagieren und danach den Browser-Flow starten.</small>
+              <span class="mode-icon">◈</span><strong>Early Gate</strong><small>Gate/Queue mit der zugewiesenen Browser-Lane beobachten und danach denselben isolierten Browser-Flow weiterführen.</small>
             </button>
           </div>
 
@@ -151,16 +151,14 @@
           <div class="primary-action-row"><button class="btn btn-primary" (click)="createTask()">{{ monitorStrategyMode === 'early-gate' ? 'Early-Gate-Watch erstellen' : taskMode === 'auto-checkout' ? 'Checkout-Watch erstellen' : 'Watch erstellen' }}</button></div>
         </section>
 
-        <details class="history-disclosure">
-          <summary>
-            <span><strong>Runs & Verlauf</strong><small>{{ tasks.length }} Einträge · standardmäßig geschlossen</small></span>
+        <section class="panel task-panel history-panel">
+          <div class="panel-header">
+            <div><div class="eyebrow">TASKS</div><h3>Starten & beobachten</h3><small>Neueste Tasks stehen oben. Kein versteckter Verlauf, kein zusätzlicher Dropdown.</small></div>
             <span class="count-chip">{{ tasks.length }}</span>
-          </summary>
+          </div>
+          <div class="empty-state" *ngIf="!tasks.length">Noch keine Tasks vorhanden. Nach „Erstellen“ erscheint der neue Task genau hier.</div>
 
-          <section class="panel task-panel history-panel">
-            <div class="empty-state" *ngIf="!tasks.length">Noch keine Runs vorhanden.</div>
-
-            <article class="task-row" *ngFor="let task of tasks; trackBy: trackTask" [class.early-gate-row]="isEarlyGateFlowTask(task)">
+          <article class="task-row" *ngFor="let task of tasks.slice().reverse(); trackBy: trackTask" [class.early-gate-row]="isEarlyGateFlowTask(task)">
               <div class="task-name-block">
                 <div class="task-title-line"><span class="kind-chip" [class.monitor]="isMonitorTask(task)">{{ getTaskKind(task) }}</span><strong>{{ task.config.name }}</strong></div>
                 <small>{{ task.config.shopId || 'kein Shop' }} · Profil: {{ getTaskProfileName(task) }}</small>
@@ -193,11 +191,11 @@
                 <div class="runtime-detail payment-detail" *ngIf="!isMonitorOnlyTask(task)"><strong>Zahlung</strong><span>{{ getTaskPaymentStatus(task) }}</span><small *ngIf="getTaskDetectedPaymentMethods(task)">Erkannt: {{ getTaskDetectedPaymentMethods(task) }}</small></div>
               </div>
 
-              <div class="retry-info">{{ task.retries ?? 0 }}/{{ task.maxRetries ?? 0 }} retries</div>
+              <div class="retry-info">Fehlversuche {{ task.retries ?? 0 }}/{{ task.maxRetries ?? 0 }}</div>
               <span class="status" [ngClass]="task.state.toLowerCase()">{{ task.state }}</span>
 
               <div class="task-actions">
-                <button *ngIf="isStartable(task)" class="btn btn-small btn-primary" (click)="startTask(task.id)">Start</button>
+                <button *ngIf="isStartable(task)" class="btn btn-small btn-primary" (click)="startTask(task.id)">STARTEN</button>
                 <button *ngIf="isPausable(task)" class="btn btn-small btn-warning" (click)="pauseTask(task.id)">Pause</button>
                 <button *ngIf="isResumable(task)" class="btn btn-small btn-primary" (click)="resumeTask(task.id)">Fortsetzen</button>
                 <button *ngIf="isStoppable(task)" class="btn btn-small btn-danger" (click)="stopTask(task.id)">Stop</button>
@@ -210,8 +208,7 @@
                 <div class="task-log-entry" *ngFor="let log of taskLogs[task.id]" [class.warn]="log.level === 'warn'" [class.error]="log.level === 'error'"><time>{{ log.createdAt | date:'HH:mm:ss' }}</time><strong>{{ log.event }}</strong><span>{{ log.state || '-' }}</span><p>{{ log.message }}</p></div>
               </div>
             </article>
-          </section>
-        </details>
+        </section>
       </ng-container>
 
       <ng-container *ngIf="activeTab === 'profiles'">
