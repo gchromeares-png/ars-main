@@ -201,10 +201,9 @@ class SeleniumBaseCdpAdapter:
         """Return False only when ARES has positive evidence that Chrome is gone.
 
         Pure-CDP SeleniumBase builds do not consistently expose a ``.driver`` wrapper.
-        Treating a missing wrapper as a dead browser races the explicit READY handshake:
-        the worker can emit READY and then exit before Node issues its first RPC.  The
-        adapter itself is the browser owner, so absence of an optional wrapper is not
-        evidence of browser termination.
+        Treating a missing wrapper as a dead browser races the explicit READY handshake.
+        Background observation failures are also non-fatal: they must never terminate
+        the browser-owner worker after READY.
         """
         if self._closed:
             return False
@@ -218,16 +217,16 @@ class SeleniumBaseCdpAdapter:
             except psutil.NoSuchProcess:
                 return False
             except (psutil.AccessDenied, psutil.Error):
-                # An inaccessible process is not proof that the SeleniumBase session died.
                 pass
 
-        # Keep observation work best-effort. Transient CDP/navigation failures must not
-        # collapse the browser-owner process; RPC operations surface actionable errors.
         try:
             self._challenge_tracker.poll()
         except Exception:
             pass
-        self._poll_observation_watchdog()
+        try:
+            self._poll_observation_watchdog()
+        except Exception:
+            pass
         return True
 
     def _poll_observation_watchdog(self, *, force: bool = False) -> None:
@@ -244,8 +243,14 @@ class SeleniumBaseCdpAdapter:
         if not force and not bool(state.get("changed")):
             return
 
-        self._capture_for_events(state)
-        self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+        try:
+            self._capture_for_events(state)
+        except Exception:
+            pass
+        try:
+            self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+        except Exception:
+            pass
 
     def _capture_for_events(self, state: Dict[str, Any]) -> None:
         generation = int(state.get("generation") or 0)
