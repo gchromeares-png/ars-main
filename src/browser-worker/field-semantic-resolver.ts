@@ -490,7 +490,7 @@ export class FieldSemanticResolver {
       field.name,
       field.id,
       field.autocomplete
-    ].filter(Boolean).join(" | "));
+    ].filter(Boolean).join(" | ")).replace(/_/g, " ");
   }
 
   private toSemanticText(field: FieldDescriptor): string {
