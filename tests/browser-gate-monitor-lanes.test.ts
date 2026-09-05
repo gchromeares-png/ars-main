@@ -10,10 +10,14 @@ class CaptureExecutor implements ITaskExecutor {
 }
 
 function gateTask(): Task {
+  const now = new Date();
   return {
     id: "gate-lane-1",
     state: "QUEUED" as any,
     retries: 0,
+    maxRetries: 3,
+    createdAt: now,
+    updatedAt: now,
     config: {
       id: "gate-lane-1",
       name: "Gate Lane",
@@ -28,7 +32,7 @@ function gateTask(): Task {
         }
       }
     }
-  } as Task;
+  };
 }
 
 describe("browser gate monitor lanes", () => {
