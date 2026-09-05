@@ -40,8 +40,17 @@ describeBrowser("local payment fixture", () => {
       actionTimeoutMs: 15_000
     });
     const page = handle.page;
-    const fixtureUrl = `data:text/html;charset=utf-8,${encodeURIComponent(fixture)}`;
-    await page.goto(fixtureUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+
+    // This is a synthetic local DOM fixture, not a shop navigation. Loading it through
+    // page.goto() would intentionally enter the protected ARES navigation/challenge
+    // pipeline. Keep that production sequence untouched and inject the fixture into the
+    // READY about:blank document so this test isolates RPC locator/fill semantics.
+    await page.evaluate((html: string) => {
+      document.open();
+      document.write(html);
+      document.close();
+      return document.readyState;
+    }, fixture);
 
     const pan = Array.from({ length: 16 }, () => "4").join("");
     const securityCode = ["1", "2", "3"].join("");
