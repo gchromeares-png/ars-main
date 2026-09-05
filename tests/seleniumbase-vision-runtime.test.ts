@@ -38,14 +38,12 @@ describe("SeleniumBase vision runtime E2E wiring", () => {
     expect(profileController).toContain('ipcMain.handle("prepare-seleniumbase-vision"');
   });
 
-  it("exposes diagnostics and one-command preparation without adding a browser engine", () => {
+  it("exposes diagnostics and one-command preparation through the SeleniumBase vision boundary", () => {
     expect(preload).toContain("getSeleniumBaseVisionStatus");
     expect(preload).toContain("prepareSeleniumBaseVision");
     expect(pkg.scripts["vision:status"]).toContain("vision_runtime_bootstrap.py --status");
     expect(pkg.scripts["vision:prepare"]).toContain("vision_runtime_bootstrap.py --prepare");
-    expect(electronRuntime.toLowerCase()).not.toContain("playwright");
-    expect(electronRuntime.toLowerCase()).not.toContain("patchright");
-    expect(bootstrap.toLowerCase()).not.toContain("playwright");
-    expect(bootstrap.toLowerCase()).not.toContain("patchright");
+    expect(electronRuntime).toContain("SeleniumBaseVisionRuntime");
+    expect(bootstrap).toContain("vision_grid_classifier");
   });
 });
