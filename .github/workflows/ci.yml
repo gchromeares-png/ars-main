@@ -31,7 +31,11 @@ jobs:
           python/seleniumbase_cdp/stable_marks.py
           python/seleniumbase_cdp/cursor_path_provider.py
           python/seleniumbase_cdp/slider_target_grounder.py
+          python/seleniumbase_cdp/ddddocr_slider_provider.py
+          python/seleniumbase_cdp/composite_slider_grounder.py
           python/seleniumbase_cdp/interaction_trace.py
+          python/seleniumbase_cdp/interaction_outcome.py
+          python/seleniumbase_cdp/instruction_input_runtime.py
           python/seleniumbase_cdp/visual_interaction_runtime.py
           python/seleniumbase_cdp/semantic_interaction_runtime.py
           python/seleniumbase_cdp/auto_interaction_controller.py
@@ -44,6 +48,15 @@ jobs:
 
       - name: Verify visual grounding and cursor planning
         run: python python/seleniumbase_cdp/visual_grounding_probe.py
+
+      - name: Verify optional ddddocr slider fallback
+        run: python python/seleniumbase_cdp/ddddocr_slider_provider_probe.py
+
+      - name: Verify unified interaction outcome contract
+        run: python python/seleniumbase_cdp/interaction_outcome_probe.py
+
+      - name: Verify instruction text and numeric input fallback
+        run: python python/seleniumbase_cdp/instruction_input_probe.py
 
       - name: Verify semantic interaction runtime
         run: python python/seleniumbase_cdp/semantic_interaction_probe.py
