@@ -84,6 +84,7 @@ class WorkerClient:
             env=dict(os.environ),
         )
         if self.process.stdin is None or self.process.stdout is None:
+            self._terminate_process()
             raise RuntimeError("Could not open SeleniumBase worker stdio")
         self._stdout = self.process.stdout
         self._messages: queue.Queue[Dict[str, Any]] = queue.Queue()
@@ -99,8 +100,13 @@ class WorkerClient:
                 "cookies": cookies or [],
             }
         )
-        ready = self.wait("ready", "start", 35)
+        try:
+            ready = self.wait("ready", "start", 60)
+        except Exception:
+            self._terminate_process()
+            raise
         if not ready.get("profileDir"):
+            self._terminate_process()
             raise AssertionError("SeleniumBase worker did not report profileDir")
 
     def _read_stdout(self) -> None:
@@ -113,6 +119,17 @@ class WorkerClient:
                 continue
             if isinstance(payload, dict):
                 self._messages.put(payload)
+
+    def _terminate_process(self) -> None:
+        if self.process.poll() is not None:
+            return
+        try:
+            self.process.kill()
+        finally:
+            try:
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
 
     def send(self, payload: Dict[str, Any]) -> None:
         if self.process.stdin is None:
@@ -147,8 +164,12 @@ class WorkerClient:
         if self.process.poll() is not None:
             return
         self.send({"type": "close", "requestId": "close"})
-        self.wait("closed", "close", 15)
-        self.process.wait(timeout=10)
+        self.wait("closed", "close", 20)
+        self.process.wait(timeout=15)
+        # Windows can report the worker as exited slightly before Chrome has
+        # fully released/flushed its profile files. Give the profile store a
+        # short deterministic settle window before an immediate reopen.
+        time.sleep(1.5 if sys.platform.startswith("win") else 0.2)
 
 
 def _next_request(recorder: RequestRecorder, expected_path: str, timeout: float = 15) -> Dict[str, str]:
@@ -236,12 +257,12 @@ def _run(profile_dir: Path) -> None:
             try:
                 first.close()
             except Exception:
-                first.process.kill()
+                first._terminate_process()
         if second:
             try:
                 second.close()
             except Exception:
-                second.process.kill()
+                second._terminate_process()
         server.shutdown()
         server.server_close()
 
