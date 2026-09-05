@@ -349,7 +349,7 @@ class SeleniumBaseCdpAdapter:
         # SeleniumBase's underlying Pure-CDP stop path can terminate Chromium
         # directly. Ask Chromium itself to close first so Windows can commit the
         # profile cookie database and local storage before any hard fallback.
-        time.sleep(0.2)
+        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
         graceful_close = self._request_graceful_browser_close()
         if graceful_close:
             self._wait_for_profile_flush(browser_pids)
