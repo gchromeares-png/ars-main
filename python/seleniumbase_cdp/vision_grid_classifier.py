@@ -4,6 +4,7 @@ import base64
 import io
 import os
 import re
+import urllib.parse
 import urllib.request
 from typing import Any, Dict, Iterable, List
 
@@ -14,6 +15,7 @@ class VisionGridClassifier:
     def __init__(self) -> None:
         self.model_name = os.environ.get("ARES_VISION_MODEL", "google/siglip2-base-patch16-224").strip()
         self.threshold = self._threshold(os.environ.get("ARES_VISION_THRESHOLD", "0.58"))
+        self.offline = os.environ.get("ARES_VISION_OFFLINE", "0").strip() == "1"
         self._processor: Any = None
         self._model: Any = None
         self._torch: Any = None
@@ -30,7 +32,7 @@ class VisionGridClassifier:
 
     def status(self) -> Dict[str, Any]:
         ready = self._load()
-        return {"ready": ready, "model": self.model_name, "threshold": self.threshold, "error": self._error}
+        return {"ready": ready, "model": self.model_name, "threshold": self.threshold, "offline": self.offline, "error": self._error}
 
     def classify(self, instruction: str, sources: Iterable[str]) -> Dict[str, Any]:
         if not self._load():
@@ -87,12 +89,12 @@ class VisionGridClassifier:
 
             self._torch = torch
             self._image = Image
-            self._processor = AutoProcessor.from_pretrained(self.model_name, local_files_only=True)
-            self._model = AutoModel.from_pretrained(self.model_name, local_files_only=True)
+            self._processor = AutoProcessor.from_pretrained(self.model_name, local_files_only=self.offline)
+            self._model = AutoModel.from_pretrained(self.model_name, local_files_only=self.offline)
             self._model.eval()
             return True
         except Exception as exc:
-            self._error = f"Vision model unavailable locally: {exc}"
+            self._error = f"Vision model unavailable: {exc}"
             return False
 
     def _read_image(self, source: str) -> Any:
