@@ -31,6 +31,9 @@ class SeleniumBaseCdpAdapter:
         proxy: str | None = None,
         user_agent: str | None = None,
         site_adapter_overrides: Dict[str, str] | None = None,
+        browser_args: Iterable[str] | None = None,
+        language: str | None = None,
+        timezone: str | None = None,
     ) -> None:
         self.profile_dir = Path(profile_dir).expanduser().resolve()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -43,6 +46,13 @@ class SeleniumBaseCdpAdapter:
             kwargs["proxy"] = proxy
         if user_agent:
             kwargs["agent"] = user_agent
+        clean_args = [str(value).strip() for value in (browser_args or []) if str(value).strip()]
+        if clean_args:
+            kwargs["browser_args"] = clean_args
+        if language:
+            kwargs["lang"] = str(language)
+        if timezone:
+            kwargs["tzone"] = str(timezone)
 
         self._sb = sb_cdp.Chrome(**kwargs)
         self._challenge_tracker = ChallengeStateTracker(self._sb)
@@ -165,8 +175,8 @@ class SeleniumBaseCdpAdapter:
             "interactionOutcome": self.interaction_outcome_state(),
         }
 
-    def execute_script(self, script: str) -> Any:
-        return self._sb.execute_script(script)
+    def execute_script(self, script: str, *args: Any) -> Any:
+        return self._sb.execute_script(script, *args)
 
     def sleep(self, seconds: float) -> None:
         self._sb.sleep(seconds)
