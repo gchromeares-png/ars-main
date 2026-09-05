@@ -13,6 +13,7 @@ from seleniumbase_adapter import SeleniumBaseCdpAdapter
 RESULT_PREFIX = "ARES_SB_MANUAL\t"
 LAST_URL_FILENAME = ".ares-last-url"
 SITE_ADAPTER_FILENAME = ".ares-site-adapter.json"
+VISION_FILENAME = ".ares-vision.json"
 
 
 def _emit(payload: Dict[str, Any]) -> None:
@@ -47,20 +48,28 @@ def _proxy_value(command: Dict[str, Any]) -> str | None:
     return value or None
 
 
-def _site_adapter_overrides(command: Dict[str, Any], profile_dir: Path) -> Dict[str, str]:
-    inline = command.get("siteAdapterOverrides")
-    if isinstance(inline, dict):
-        return {str(key): str(value) for key, value in inline.items()}
-    path = profile_dir / SITE_ADAPTER_FILENAME
+def _profile_json(profile_dir: Path, filename: str) -> Dict[str, Any]:
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads((profile_dir / filename).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Invalid {SITE_ADAPTER_FILENAME}: {exc}") from exc
+        raise ValueError(f"Invalid {filename}: {exc}") from exc
     if not isinstance(raw, dict):
-        raise ValueError(f"{SITE_ADAPTER_FILENAME} must contain a JSON object")
+        raise ValueError(f"{filename} must contain a JSON object")
+    return raw
+
+
+def _site_adapter_overrides(command: Dict[str, Any], profile_dir: Path) -> Dict[str, str]:
+    raw = command.get("siteAdapterOverrides")
+    if not isinstance(raw, dict):
+        raw = _profile_json(profile_dir, SITE_ADAPTER_FILENAME)
     return {str(key): str(value) for key, value in raw.items()}
+
+
+def _vision_config(command: Dict[str, Any], profile_dir: Path) -> Dict[str, Any]:
+    raw = command.get("visionConfig")
+    return dict(raw) if isinstance(raw, dict) else _profile_json(profile_dir, VISION_FILENAME)
 
 
 def _restorable_url(value: str) -> bool:
@@ -110,6 +119,7 @@ def _start(command: Dict[str, Any]) -> int:
         proxy=_proxy_value(command),
         user_agent=str(command.get("userAgent") or "").strip() or None,
         site_adapter_overrides=_site_adapter_overrides(command, profile_dir),
+        vision_config=_vision_config(command, profile_dir),
     )
     closed = False
     last_url = _read_last_url(profile_dir)
@@ -160,6 +170,8 @@ def _start(command: Dict[str, Any]) -> int:
                 if command_type == "grid-act":
                     result = adapter.apply_grid_selection(next_command.get("indexes") or [], expected_signature=str(next_command.get("expectedSignature") or ""), submit=next_command.get("submit") is not False)
                     _emit({"type": "grid-action", "requestId": rid, "profileId": profile_id, "result": result}); continue
+                if command_type == "vision-tick":
+                    _emit({"type": "vision-result", "requestId": rid, "profileId": profile_id, "result": adapter.vision_tick()}); continue
                 if command_type == "status":
                     _emit({"type": "status", "requestId": rid, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True}); continue
                 raise ValueError(f"Unsupported SeleniumBase command: {command_type!r}")
