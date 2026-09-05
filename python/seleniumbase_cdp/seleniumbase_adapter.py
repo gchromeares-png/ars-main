@@ -13,6 +13,9 @@ from challenge_state_tracker import ChallengeStateTracker
 from instruction_input_runtime import InstructionInputRuntime
 from interaction_orchestrator import InteractionOrchestrator
 from interaction_outcome import from_semantic_result, from_visual_result
+from interaction_policy import InteractionPolicy
+from observation_capture import ObservationCapture
+from page_observation_watchdog import PageObservationWatchdog
 from semantic_interaction_runtime import SemanticInteractionRuntime
 from visual_interaction_runtime import VisualInteractionRuntime
 
@@ -51,7 +54,11 @@ class SeleniumBaseCdpAdapter:
         self._semantic_interactions = SemanticInteractionRuntime(self._sb)
         self._instruction_inputs = InstructionInputRuntime(self._sb)
         self._orchestrator = InteractionOrchestrator()
-        self._next_auto_poll = 0.0
+        self._policy = InteractionPolicy.from_profile(self.profile_dir)
+        self._watchdog = PageObservationWatchdog(self._sb, self._policy)
+        self._capture = ObservationCapture(self._sb, profile_dir=self.profile_dir, policy=self._policy)
+        self._next_watchdog_poll = 0.0
+        self._last_watchdog_state: Dict[str, Any] = {}
         self._last_auto_result: Dict[str, Any] = {
             "acted": False,
             "kind": "none",
@@ -76,9 +83,13 @@ class SeleniumBaseCdpAdapter:
 
     def goto(self, url: str) -> None:
         self._sb.goto(url)
+        self._watchdog.reset()
+        initial = self._watchdog.poll()
+        self._last_watchdog_state = initial
+        self._capture.capture("page-load", generation=int(initial.get("generation") or 0))
         self._challenge_tracker.wait_for_stable_challenge()
         self._sb.solve_captcha()
-        self._poll_auto_interactions(force=True)
+        self._poll_observation_watchdog(force=True)
 
     def challenge_state(self) -> Dict[str, Any]:
         return self._challenge_tracker.poll()
@@ -99,16 +110,20 @@ class SeleniumBaseCdpAdapter:
             "lastInstructionResult": self._last_instruction_result,
             "instructionInputsEnabled": True,
             "orchestrator": self._orchestrator.status(),
+            "watchdog": self._watchdog.status(),
+            "policy": self._policy.status(),
+            "capture": self._capture.status(),
         }
 
     def interaction_outcome_state(self) -> Dict[str, Any]:
         return {
             "enabled": True,
-            "mode": "default",
+            "mode": "event-driven-default",
             "semantic": self._last_semantic_outcome,
             "visual": self._last_auto_result.get("outcome", from_visual_result(self._last_auto_result)),
             "instructionInput": self._last_instruction_result,
             "orchestrator": self._orchestrator.status(),
+            "watchdog": self._last_watchdog_state,
         }
 
     def observe_semantic_fields(self) -> List[Dict[str, Any]]:
@@ -187,20 +202,50 @@ class SeleniumBaseCdpAdapter:
                 self._challenge_tracker.poll()
             except Exception:
                 pass
-            self._poll_auto_interactions()
+            self._poll_observation_watchdog()
         return running
 
-    def _poll_auto_interactions(self, *, force: bool = False) -> None:
+    def _poll_observation_watchdog(self, *, force: bool = False) -> None:
         now = time.monotonic()
-        if not force and now < self._next_auto_poll:
+        if not force and now < self._next_watchdog_poll:
             return
-        self._next_auto_poll = now + 0.8
+        self._next_watchdog_poll = now + self._policy.watchdog_interval_seconds
+
+        try:
+            state = self._watchdog.poll()
+        except Exception:
+            return
+        self._last_watchdog_state = state
+        if not force and not bool(state.get("changed")):
+            return
+
+        self._capture_for_events(state)
         self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+
+    def _capture_for_events(self, state: Dict[str, Any]) -> None:
+        generation = int(state.get("generation") or 0)
+        events = [str(event) for event in state.get("events") or []]
+        priority = (
+            "navigation",
+            "iframe-added",
+            "modal-opened",
+            "grid-candidate",
+            "slider-candidate",
+            "canvas-candidate",
+            "layout-generation-changed",
+        )
+        for event in priority:
+            if event in events and self._policy.capture_enabled(event):
+                self._capture.capture(event, generation=generation)
+                return
 
     def _run_visual_auto(self) -> Dict[str, Any]:
         try:
             result = self._visual_interactions.poll_and_act()
             self._last_auto_result = {**result, "outcome": from_visual_result(result)}
+            if bool(result.get("acted")) and result.get("verified") is False:
+                generation = int(self._last_watchdog_state.get("generation") or 0)
+                self._capture.capture("verification-failure", generation=generation)
         except Exception as exc:
             result = {"acted": False, "kind": "error", "error": str(exc)}
             self._last_auto_result = {**result, "outcome": from_visual_result(result)}
