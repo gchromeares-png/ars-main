@@ -270,11 +270,16 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
   private resolveWorkerScript(): string {
     const configured = process.env["ARES_SELENIUMBASE_TASK_WORKER"]?.trim();
     const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath || "";
+    const oopifWorker = "task_browser_worker_oopif.py";
+    const legacyWorker = "task_browser_worker.py";
     const candidates = [
       configured,
-      path.join(process.cwd(), "python", "seleniumbase_cdp", "task_browser_worker.py"),
-      path.join(__dirname, "../../python/seleniumbase_cdp/task_browser_worker.py"),
-      resourcesPath ? path.join(resourcesPath, "python", "seleniumbase_cdp", "task_browser_worker.py") : undefined
+      path.join(process.cwd(), "python", "seleniumbase_cdp", oopifWorker),
+      path.join(__dirname, "../../python/seleniumbase_cdp", oopifWorker),
+      resourcesPath ? path.join(resourcesPath, "python", "seleniumbase_cdp", oopifWorker) : undefined,
+      path.join(process.cwd(), "python", "seleniumbase_cdp", legacyWorker),
+      path.join(__dirname, "../../python/seleniumbase_cdp", legacyWorker),
+      resourcesPath ? path.join(resourcesPath, "python", "seleniumbase_cdp", legacyWorker) : undefined
     ].filter((value): value is string => Boolean(value));
     const worker = candidates.find(candidate => fs.existsSync(candidate));
     if (!worker) throw new Error("SeleniumBase task worker was not found. Set ARES_SELENIUMBASE_TASK_WORKER if needed.");
