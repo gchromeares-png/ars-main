@@ -22,7 +22,7 @@ describe("SeleniumBase task-runtime source guard", () => {
     expect(owner).toContain("await transport.start(");
     expect(rpc).toContain("rejected before explicit READY");
     expect(rpc).toContain("Cannot create SeleniumBase page before worker READY");
-    expect(py).toContain('\"type\":\"ready\"');
+    expect(py).toContain('"type": "ready"');
   });
 
   it("keeps locator construction local and executes actions through one RPC", () => {
@@ -45,11 +45,40 @@ describe("SeleniumBase task-runtime source guard", () => {
     expect(py).not.toContain("pyautogui");
   });
 
-  it("preserves response telemetry through native CDP events", () => {
+  it("keeps queue telemetry bounded and reads bodies only for relevant text responses", () => {
+    expect(py).toContain("deque(maxlen=MAX_NETWORK_EVENTS)");
+    expect(py).toContain("MAX_NETWORK_EVENTS = 50");
+    expect(py).toContain("_QUEUE_URL_RE.search(url)");
+    expect(py).toContain("_TEXT_MIME_RE.search(mime)");
     expect(py).toContain("mycdp.network.ResponseReceived");
     expect(py).toContain("mycdp.network.get_response_body");
     expect(rpc).toContain("headers(): Record<string, string>");
     expect(rpc).toContain("async text(): Promise<string>");
+  });
+
+  it("recovers transient DOM RPCs across redirects", () => {
+    expect(py).toContain("execution context was destroyed");
+    expect(py).toContain("for attempt in range(3)");
+    expect(py).toContain("time.sleep(0.10 * (attempt + 1))");
+  });
+
+  it("tracks newly opened tabs and windows before further RPC work", () => {
+    expect(py).toContain("self.sb.get_tabs()");
+    expect(py).toContain("self.sb.switch_to_tab(tabs[-1])");
+    expect(py).toContain("self.sb.switch_to_newest_window()");
+    expect(py).toContain("self._sync_newest_target()");
+  });
+
+  it("handles native JavaScript dialogs without freezing the task worker", () => {
+    expect(py).toContain("JavascriptDialogOpening");
+    expect(py).toContain("handle_java_script_dialog");
+    expect(py).toContain("accept=True");
+  });
+
+  it("uses browser-internal pointer methods and never a global OS cursor", () => {
+    expect(py).toContain('getattr(element, "mouse_move"');
+    expect(py).toContain('getattr(element, "mouse_click"');
+    expect(py).not.toContain("pyautogui");
   });
 
   it("uses CDP cookies before first navigation and keeps protected navigation order", () => {
