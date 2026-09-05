@@ -5,12 +5,12 @@ from typing import Any, Dict, Iterable
 
 from authorized_grid_action_executor import AuthorizedGridActionExecutor
 from auto_interaction_controller import AutoInteractionController
+from composite_slider_grounder import CompositeSliderGrounder
 from cursor_path_provider import CursorPathProvider
 from interaction_trace import InteractionTrace
 from site_grid_adapter import GridSiteAdapter
 from site_slider_adapter import SliderSiteAdapter
 from slider_action_executor import SliderActionExecutor
-from slider_target_grounder import SliderTargetGrounder
 from vision_grid_classifier import VisionGridClassifier
 
 
@@ -32,7 +32,7 @@ class VisualInteractionRuntime:
         self._grid_actions = AuthorizedGridActionExecutor(self._sb, self._grid)
         self._slider_actions = SliderActionExecutor(self._sb, self._slider, self._paths)
         self._vision = VisionGridClassifier()
-        self._slider_grounder = SliderTargetGrounder(self._sb, profile_dir=self._profile_dir)
+        self._slider_grounder = CompositeSliderGrounder(self._sb, profile_dir=self._profile_dir)
         self._trace = InteractionTrace(self._profile_dir)
         self._controller = AutoInteractionController(
             self._grid,
@@ -52,6 +52,7 @@ class VisualInteractionRuntime:
             **self._controller.status(),
             "runtime": "visual-interaction-runtime",
             "markIdentity": "structural+semantic-visual",
+            "sliderProviders": self._slider_grounder.status(),
         }
 
     def grid_state(self) -> Dict[str, Any]:
