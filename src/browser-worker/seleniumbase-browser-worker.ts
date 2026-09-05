@@ -16,6 +16,7 @@ import {
 } from "./profile-session-manager";
 import { collectBrowserEnvironment, failedBrowserEnvironmentAudit } from "./browser-environment-audit";
 import { SeleniumBaseRpcPage, SeleniumBaseRpcTransport } from "./seleniumbase-rpc-page";
+import { installWebRtcProxyPolicy } from "./webrtc/webrtc-proxy-policy";
 import type {
   BrowserContext,
   BrowserContextConfig,
@@ -163,12 +164,22 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
         addCookies: async cookies => {
           await transport.request("apply-cookies", { cookies }, 12_000);
         },
+        addInitScript: async script => {
+          const content = typeof script === "string" ? script : script.content;
+          if (!content?.trim()) return;
+          await transport.request("add-init-script", { script: content }, 8_000);
+        },
         close: async () => {
           await page.closeTransport();
           await this.waitForExit(runningChild, 5_000);
           if (runningChild.exitCode == null) runningChild.kill("SIGKILL");
         }
       };
+
+      // Preserve the former proxied-session privacy layer before any shop code runs.
+      // Browser transport hardening stays in Chromium flags; this masks page-visible
+      // local/private ICE candidates without disabling RTCPeerConnection itself.
+      if (config.proxy) await installWebRtcProxyPolicy(context);
 
       const snapshot = this.taskCookieSnapshots.get(config.taskId);
       if (snapshot?.length) {
