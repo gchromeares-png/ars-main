@@ -58,6 +58,8 @@ export interface BrowserPage extends BrowserFrame {
   mouse: {
     move(x: number, y: number): Promise<void>;
     click(x: number, y: number, options?: Record<string, unknown>): Promise<void>;
+    down(options?: Record<string, unknown>): Promise<void>;
+    up(options?: Record<string, unknown>): Promise<void>;
   };
 }
 

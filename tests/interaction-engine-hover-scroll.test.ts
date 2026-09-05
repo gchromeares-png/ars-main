@@ -29,10 +29,11 @@ function fakePage(): Page {
   } as unknown as Page;
 }
 
-function pointerDriver(): PointerDriver & { moveTo: jest.Mock; click: jest.Mock } {
+function pointerDriver(): PointerDriver & { moveTo: jest.Mock; click: jest.Mock; drag: jest.Mock } {
   return {
     moveTo: jest.fn(async () => undefined),
-    click: jest.fn(async () => undefined)
+    click: jest.fn(async () => undefined),
+    drag: jest.fn(async () => undefined)
   };
 }
 

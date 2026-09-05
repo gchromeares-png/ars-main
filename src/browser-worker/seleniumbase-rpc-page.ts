@@ -103,7 +103,7 @@ class SeleniumBaseRpcLocator implements Locator {
   async isEnabled(options: { timeout?: number } = {}): Promise<boolean> { return Boolean(await this.op("is-enabled", {}, options.timeout ?? 2_000).catch(() => false)); }
   async click(options: Record<string, unknown> = {}): Promise<void> { await this.op("click", { options }, Number(options["timeout"] ?? 15_000)); }
   async fill(value: string, options: Record<string, unknown> = {}): Promise<void> { await this.op("fill", { value, options }, Number(options["timeout"] ?? 15_000)); }
-  async inputValue(options: { timeout?: number } = {}): Promise<string> { return String(await this.op("input-value", {}, options.timeout ?? 5_000) ?? ""); }
+  async inputValue(options: { timeout?: number } = {}): Promise<string> { return String(await this.op("input-value", {}, options.timeout ?? 5_000).catch(() => false) ?? ""); }
   async innerText(options: { timeout?: number } = {}): Promise<string> { return String(await this.op("inner-text", {}, options.timeout ?? 5_000) ?? ""); }
   async allTextContents(): Promise<string[]> { const value = await this.op("all-text-contents"); return Array.isArray(value) ? value.map(item => String(item ?? "")) : []; }
   async selectOption(value: string): Promise<unknown> { return this.op("select-option", { value }); }
@@ -149,6 +149,8 @@ export class SeleniumBaseRpcPage implements Page {
   private eventPollInFlight = false;
   readonly mouse = {
     move: async (x: number, y: number): Promise<void> => { await this.command("rpc", { action:"mouse-move", x, y }, 5_000); },
+    down: async (options: Record<string, unknown> = {}): Promise<void> => { await this.command("rpc", { action:"mouse-down", options }, 5_000); },
+    up: async (options: Record<string, unknown> = {}): Promise<void> => { await this.command("rpc", { action:"mouse-up", options }, 5_000); },
     click: async (x: number, y: number, options: Record<string, unknown> = {}): Promise<void> => { await this.command("rpc", { action:"mouse-click", x, y, options }, 10_000); }
   };
   constructor(private readonly transport: SeleniumBaseRpcTransport) {
@@ -208,75 +210,61 @@ export class SeleniumBaseRpcPage implements Page {
     this.responseListeners.clear();
     this.loadListeners.clear();
     this.frameNavigationListeners.clear();
-    this.frameCache.clear();
-    if(!this.transport.closed&&this.transport.isReady)await this.transport.request("close",{},10_000).catch(()=>undefined);
+    if(!this.transport.closed)await this.transport.request("close",{},5_000).catch(()=>undefined);
   }
-  private command(type:string,payload:Record<string,unknown>,timeoutMs:number):Promise<RpcReply>{return this.transport.request(type,payload,timeoutMs);}
   private hasLifecycleListeners():boolean{return this.loadListeners.size>0||this.frameNavigationListeners.size>0;}
   private ensureEventPoll():void{
     if(this.eventPoll)return;
-    this.eventPoll=setInterval(()=>void this.pollEvents(),250);
-    this.eventPoll.unref?.();
+    this.eventPoll=setInterval(()=>{void this.pollEvents();},100);
+    void this.pollEvents();
   }
   private stopEventPollIfIdle():void{
-    if(this.responseListeners.size||this.loadListeners.size||this.frameNavigationListeners.size||!this.eventPoll)return;
-    clearInterval(this.eventPoll);this.eventPoll=undefined;
+    if(this.responseListeners.size||this.loadListeners.size||this.frameNavigationListeners.size)return;
+    if(this.eventPoll)clearInterval(this.eventPoll);
+    this.eventPoll=undefined;
   }
   private async pollEvents():Promise<void>{
-    if(this.eventPollInFlight||this.transport.closed||!this.transport.isReady)return;
+    if(this.eventPollInFlight||this.transport.closed)return;
     this.eventPollInFlight=true;
     try{
-      if(this.responseListeners.size)await this.pollNetworkEvents();
-      if(this.hasLifecycleListeners())await this.refreshPageState(true);
-    }catch{/* passive lifecycle/network observation must not break checkout */}
-    finally{this.eventPollInFlight=false;}
-  }
-  private async pollNetworkEvents():Promise<void>{
-    if(!this.responseListeners.size)return;
-    const reply=await this.command("network-events",{},4_000);
-    for(const event of reply.events??[]){const response=new RpcResponse(event);for(const listener of this.responseListeners)listener(response);}
+      if(this.responseListeners.size){
+        const reply=await this.command("network-events",{},2_000).catch(()=>({events:[]} as RpcReply));
+        for(const event of reply.events??[])for(const listener of this.responseListeners)listener(new RpcResponse(event));
+      }
+      if(this.loadListeners.size||this.frameNavigationListeners.size)await this.refreshPageState(true).catch(()=>undefined);
+    }finally{this.eventPollInFlight=false;}
   }
   private async refreshPageState(emitEvents:boolean):Promise<void>{
-    if(this.transport.closed||!this.transport.isReady)return;
+    const reply=await this.command("rpc",{action:"page-state"},5_000);
+    const snapshot=(reply.result&&typeof reply.result==="object"?reply.result:{}) as PageSnapshot;
+    const nextUrl=String(snapshot.url??reply.url??this.currentUrl);
+    const nextReady=String(snapshot.readyState??"");
     const previousUrl=this.currentUrl;
-    const previousReadyState=this.currentReadyState;
-    const previousFrames=new Map<string,string>();
-    for(const [key,frame] of this.frameCache)previousFrames.set(key,frame.url());
-
-    const reply=await this.command("rpc",{action:"page-state"},6_000);
-    const raw=(reply.result&&typeof reply.result==="object"?reply.result:{}) as PageSnapshot;
-    const nextUrl=String(raw.url??reply.url??this.currentUrl);
-    const nextReadyState=String(raw.readyState??"");
-    const snapshots=Array.isArray(raw.frames)?raw.frames as FrameSnapshot[]:[];
-    const nextCache=new Map<string,SeleniumBaseRpcFrame>();
-
-    for(const snapshot of snapshots){
-      if(!snapshot||typeof snapshot!=="object"||!Array.isArray(snapshot.path))continue;
-      const path=(snapshot.path as unknown[]).map(value=>String(value||"")).filter(Boolean);
+    const previousReady=this.currentReadyState;
+    const previousFrames=new Map(this.frameCache);
+    this.currentUrl=nextUrl;
+    this.currentReadyState=nextReady;
+    this.mainFrameRef.update(nextUrl,"main");
+    const nextFrames=new Map<string,SeleniumBaseRpcFrame>();
+    const rawFrames=Array.isArray(snapshot.frames)?snapshot.frames:[];
+    for(const raw of rawFrames){
+      if(!raw||typeof raw!=="object")continue;
+      const item=raw as FrameSnapshot;
+      const path=Array.isArray(item.path)?item.path.map(value=>String(value)).filter(Boolean):[];
       if(!path.length)continue;
       const key=frameKey(path);
-      const url=String(snapshot.url??"");
-      const name=String(snapshot.name??"");
-      const frame=this.frameCache.get(key)??new SeleniumBaseRpcFrame(this,path,url,name);
-      frame.update(url,name);
-      nextCache.set(key,frame);
+      const existing=this.frameCache.get(key)??new SeleniumBaseRpcFrame(this,path);
+      existing.update(String(item.url??""),String(item.name??""));
+      nextFrames.set(key,existing);
     }
-
-    this.currentUrl=nextUrl;
-    this.currentReadyState=nextReadyState;
-    this.mainFrameRef.update(nextUrl,"main");
-    this.frameCache=nextCache;
-
+    this.frameCache=nextFrames;
     if(!emitEvents)return;
-    if(nextUrl!==previousUrl){for(const listener of this.frameNavigationListeners)listener(this.mainFrameRef);}
-    for(const [key,frame] of nextCache){
-      const previousFrameUrl=previousFrames.get(key);
-      if(previousFrameUrl===undefined||previousFrameUrl!==frame.url()){
-        for(const listener of this.frameNavigationListeners)listener(frame);
-      }
+    if(nextUrl!==previousUrl)for(const listener of this.frameNavigationListeners)listener(this.mainFrameRef);
+    for(const [key,frame] of nextFrames){
+      const previous=previousFrames.get(key);
+      if(!previous||previous.url()!==frame.url())for(const listener of this.frameNavigationListeners)listener(frame);
     }
-    if(nextReadyState==="complete"&&(previousReadyState!=="complete"||nextUrl!==previousUrl)){
-      for(const listener of this.loadListeners)listener();
-    }
+    if(nextReady==="complete"&&previousReady!=="complete")for(const listener of this.loadListeners)listener();
   }
+  private async command(type:string,payload:Record<string,unknown>,timeoutMs:number):Promise<RpcReply>{return this.transport.request(type,payload,timeoutMs);}
 }

@@ -70,7 +70,79 @@ def _child_frame_id(self: Any, frame_id: str, selector: str) -> str:
     raise RuntimeError("Frame owner resolution failed without an error")
 
 
+def _left_button(runtime: Any) -> Any:
+    input_domain = getattr(impl.base.mycdp, "input_", None)
+    mouse_button = getattr(input_domain, "MouseButton", None)
+    left = getattr(mouse_button, "LEFT", None)
+    if left is None:
+        raise RuntimeError("CDP left mouse button enum is unavailable")
+    return left
+
+
+def _pointer_mouse(self: Any, action: str, command: dict[str, Any]) -> bool:
+    """Drive generic pointer actions through the existing top-level CDP input.
+
+    Coordinates are viewport coordinates. The pressed state is kept only so
+    mouseMoved carries the correct CDP buttons bitmask while a drag is active.
+    """
+    if action in {"mouse-move", "mouse-click"}:
+        x = float(command.get("x") or 0)
+        y = float(command.get("y") or 0)
+        self._pointer_x = x
+        self._pointer_y = y
+    else:
+        x = float(getattr(self, "_pointer_x", 0.0))
+        y = float(getattr(self, "_pointer_y", 0.0))
+
+    if action != "mouse-up":
+        hit = self._execute_script_retry_for_path(
+            [],
+            "return !!document.elementFromPoint(Number(arguments[0]), Number(arguments[1]));",
+            x,
+            y,
+        )
+        if not hit:
+            return False
+
+    if action == "mouse-move":
+        self._dispatch_mouse_event(
+            "mouseMoved",
+            x,
+            y,
+            buttons=1 if bool(getattr(self, "_pointer_pressed", False)) else 0,
+        )
+        return True
+    if action == "mouse-down":
+        self._dispatch_mouse_event("mousePressed", x, y, button=_left_button(self), buttons=1, click_count=1)
+        self._pointer_pressed = True
+        return True
+    if action == "mouse-up":
+        try:
+            self._dispatch_mouse_event("mouseReleased", x, y, button=_left_button(self), buttons=0, click_count=1)
+        finally:
+            self._pointer_pressed = False
+        return True
+    if action == "mouse-click":
+        self._dispatch_native_click(x, y)
+        self._sync_newest_target()
+        return True
+    raise ValueError(f"Unsupported pointer action: {action!r}")
+
+
+_original_rpc = impl.base.TaskRpcRuntime.rpc
+
+
+def _pointer_rpc(self: Any, command: dict[str, Any]) -> dict[str, Any]:
+    action = str(command.get("action") or "")
+    if action in {"mouse-down", "mouse-up"}:
+        self._sync_newest_target()
+        return {"result": self._mouse(action, command)}
+    return _original_rpc(self, command)
+
+
 impl.FlatCdpTargetRegistry._child_frame_id = _child_frame_id
+impl.base.TaskRpcRuntime._mouse = _pointer_mouse
+impl.base.TaskRpcRuntime.rpc = _pointer_rpc
 
 FlatCdpTargetRegistry = impl.FlatCdpTargetRegistry
 main = impl.main
