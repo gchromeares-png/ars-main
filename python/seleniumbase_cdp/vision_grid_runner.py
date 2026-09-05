@@ -63,7 +63,7 @@ class VisionGridRunner:
         }})()
         """
         try:
-            resolved = self.adapter.execute_script(script)
+            resolved = self.adapter.execute_async_script(script)
             return [str(value) for value in resolved] if isinstance(resolved, list) and len(resolved) == len(sources) else [str(value) for value in sources]
         except Exception:
             return [str(value) for value in sources]
