@@ -57,7 +57,7 @@ class VisualInteractionRuntime:
             "gridGeometry": "dynamic-2x2-through-8x8",
             "gridClickOrder": "nearest-neighbour",
             "gridTiming": {
-                "clickDelaySeconds": self._policy.grid_click_delay_range_seconds,
+                "clickDelaySeconds": self._policy.grid_click_delay_seconds,
                 "submitDelaySeconds": self._policy.grid_submit_delay_seconds,
             },
             "sliderProviders": self._slider_grounder.status(),
