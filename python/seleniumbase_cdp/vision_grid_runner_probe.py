@@ -30,7 +30,7 @@ class FakeAdapter:
     def site_grid_state(self):
         return {"kind": "image-grid", "signature": self.signature, "tileCount": 9, "instruction": "Select bus", "sources": [f"data:image/png;base64,{i}" for i in range(9)]}
 
-    def execute_script(self, _script):
+    def execute_async_script(self, _script):
         return self.site_grid_state()["sources"]
 
     def apply_grid_selection(self, indexes, expected_signature="", submit=True):
