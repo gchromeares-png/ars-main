@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
+import psutil
+
 from seleniumbase_adapter import SeleniumBaseCdpAdapter
 
 RESULT_PREFIX = "ARES_SB_MANUAL\t"
@@ -99,6 +101,60 @@ def _remember_last_url(profile_dir: Path, adapter: SeleniumBaseCdpAdapter, previ
     return value
 
 
+def _close_adapter(adapter: SeleniumBaseCdpAdapter) -> None:
+    owned_pids = adapter._profile_browser_pids()
+    chrome_pid = adapter.chrome_pid
+    if chrome_pid and chrome_pid not in owned_pids:
+        owned_pids.insert(0, chrome_pid)
+
+    adapter.quit()
+
+    # A clean SeleniumBase quit can return on Windows while one of Chromium's
+    # profile-owning child processes is still winding down. An immediate reopen
+    # of the same user-data-dir then blocks on the stale profile lock. Only
+    # processes captured for this exact profile are considered here.
+    deadline = time.monotonic() + (12.0 if sys.platform.startswith("win") else 3.0)
+    remaining: list[psutil.Process] = []
+    for pid in dict.fromkeys(owned_pids):
+        try:
+            process = psutil.Process(int(pid))
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+            continue
+        timeout = max(0.0, deadline - time.monotonic())
+        if timeout <= 0:
+            remaining.append(process)
+            continue
+        try:
+            process.wait(timeout=timeout)
+        except psutil.NoSuchProcess:
+            continue
+        except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.Error):
+            if process.is_running():
+                remaining.append(process)
+
+    if sys.platform.startswith("win"):
+        for process in remaining:
+            try:
+                process.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                continue
+        if remaining:
+            try:
+                _, alive = psutil.wait_procs(remaining, timeout=3.0)
+            except psutil.Error:
+                alive = []
+            for process in alive:
+                try:
+                    process.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                    pass
+            if alive:
+                try:
+                    psutil.wait_procs(alive, timeout=2.0)
+                except psutil.Error:
+                    pass
+
+
 def _start(command: Dict[str, Any]) -> int:
     if str(command.get("type") or "") != "start":
         raise ValueError("First SeleniumBase command must be type='start'")
@@ -168,7 +224,7 @@ def _start(command: Dict[str, Any]) -> int:
             try:
                 if command_type == "close":
                     last_url = _remember_last_url(profile_dir, adapter, last_url)
-                    adapter.quit(); closed = True
+                    _close_adapter(adapter); closed = True
                     _emit({"type": "closed", "requestId": next_request_id, "profileId": profile_id})
                     break
                 if command_type == "export-cookies":
@@ -224,7 +280,7 @@ def _start(command: Dict[str, Any]) -> int:
         if not closed:
             try:
                 _remember_last_url(profile_dir, adapter, last_url)
-                adapter.quit()
+                _close_adapter(adapter)
             except Exception:
                 pass
     return 0
