@@ -11,6 +11,7 @@ import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, Tuple
+from urllib.parse import parse_qs, urlsplit
 
 RESULT_PREFIX = "ARES_SB_RESULT\t"
 WORKER_PATH = Path(__file__).with_name("worker.py")
@@ -23,6 +24,12 @@ class QuietHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
         body = b"<!doctype html><html><body>ARES SeleniumBase CDP persistence probe</body></html>"
         self.send_response(200)
+        token = parse_qs(urlsplit(self.path).query).get("ares_seed_cookie", [""])[0]
+        if token:
+            self.send_header(
+                "Set-Cookie",
+                f"{COOKIE_NAME}={token}; Path=/; Max-Age=31536000; SameSite=Lax",
+            )
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
