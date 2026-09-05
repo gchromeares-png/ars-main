@@ -3,7 +3,7 @@ import * as path from "path";
 
 const root = path.resolve(__dirname, "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-const executor = fs.readFileSync(path.join(root, "src/shopify/patchright-shopify-executor.ts"), "utf8");
+const executor = fs.readFileSync(path.join(root, "src/shopify/shopify-task-executor.ts"), "utf8");
 const runtime = fs.readFileSync(path.join(root, "src/browser-worker/ares-browser-runtime.ts"), "utf8");
 const browserWorker = fs.readFileSync(path.join(root, "src/browser-worker/seleniumbase-browser-worker.ts"), "utf8");
 const rpcPage = fs.readFileSync(path.join(root, "src/browser-worker/seleniumbase-rpc-page.ts"), "utf8");
@@ -18,6 +18,8 @@ describe("ARES browser core migration", () => {
     expect(pkg.scripts["browser:install"]).toContain("requirements-seleniumbase-cdp.txt");
     expect(runtime).toContain('engine = "seleniumbase-cdp"');
     expect(runtime).toContain("extends SeleniumBaseBrowserWorker");
+    expect(executor).toContain("new SeleniumBaseBrowserWorker()");
+    expect(executor).toContain('type: "seleniumbase-cdp"');
   });
 
   it("routes persistent isolation and per-profile proxies through BrowserWorker", () => {
