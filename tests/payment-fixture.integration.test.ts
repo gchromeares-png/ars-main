@@ -1,33 +1,27 @@
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
-import { chromium, type BrowserContext, type Page } from "patchright";
+import { AresBrowserRuntime } from "../src/browser-worker/ares-browser-runtime";
 import { CheckoutPaymentPreparer } from "../src/browser-worker/checkout-payment-preparer";
 
 const describeBrowser = process.env["ARES_RUN_BROWSER_INTEGRATION"] === "1" ? describe : describe.skip;
 
 describeBrowser("local payment fixture", () => {
-  jest.setTimeout(30_000);
+  jest.setTimeout(45_000);
 
-  let browser: Awaited<ReturnType<typeof chromium.launch>>;
-  let context: BrowserContext;
-  let page: Page;
+  const runtime = new AresBrowserRuntime();
+  let taskId = "";
+  let userDataDir = "";
 
-  beforeAll(async () => {
-    browser = await chromium.launch({ headless: true, channel: "chrome" })
-      .catch(() => chromium.launch({ headless: true }));
+  afterEach(async () => {
+    if (taskId) await runtime.closeContext(taskId).catch(() => undefined);
+    if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true });
+    taskId = "";
+    userDataDir = "";
   });
 
   afterAll(async () => {
-    await browser.close();
-  });
-
-  beforeEach(async () => {
-    context = await browser.newContext();
-    page = await context.newPage();
-  });
-
-  afterEach(async () => {
-    await context.close();
+    await runtime.shutdown();
   });
 
   it("fills holderName, cardNumber, expiry and securityCode without any order submission", async () => {
@@ -35,7 +29,19 @@ describeBrowser("local payment fixture", () => {
       path.resolve(__dirname, "fixtures/checkout/synthetic/payment-card.html"),
       "utf8"
     );
-    await page.setContent(fixture, { waitUntil: "domcontentloaded" });
+
+    taskId = `payment-fixture-${Date.now()}`;
+    userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ares-payment-fixture-"));
+    const handle = await runtime.createContext({
+      taskId,
+      userDataDir,
+      headless: true,
+      navigationTimeoutMs: 30_000,
+      actionTimeoutMs: 15_000
+    });
+    const page = handle.page;
+    const fixtureUrl = `data:text/html;charset=utf-8,${encodeURIComponent(fixture)}`;
+    await page.goto(fixtureUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
 
     const pan = Array.from({ length: 16 }, () => "4").join("");
     const securityCode = ["1", "2", "3"].join("");
