@@ -31,8 +31,25 @@ class FakeSb:
                 "handleSelector": "input[type=\"range\"]",
                 "trackSelector": "input[type=\"range\"]",
                 "nativeRange": True,
-                "targetCandidates": [],
-                "marks": [],
+                "rawMarks": [
+                    {
+                        "role": "slider-handle",
+                        "visualBounds": {"x": 20, "y": 20, "width": 24, "height": 24},
+                        "confidence": 0.98,
+                        "selector": "input[type=\"range\"]",
+                        "structuralKey": "input[type=range]#main",
+                        "semanticSignature": "slider-handle|value",
+                    },
+                    {
+                        "role": "slider-track",
+                        "visualBounds": {"x": 20, "y": 20, "width": 300, "height": 24},
+                        "confidence": 0.96,
+                        "selector": "input[type=\"range\"]",
+                        "structuralKey": "input[type=range]#main-track",
+                        "semanticSignature": "slider-track|range",
+                    },
+                ],
+                "viewport": {"width": 1024, "height": 768, "scrollX": 0, "scrollY": 0, "devicePixelRatio": 1},
                 "complete": False,
                 "failed": False,
                 "override": False,
@@ -69,6 +86,19 @@ class FakeGridAdapter:
             "instruction": "Select all images with bicycles",
             "sources": [f"data:image/png;base64,{index}" for index in range(9)],
             "signature": self.signature,
+            "marks": [
+                {
+                    "markId": f"GRI-{index}",
+                    "role": "grid-tile",
+                    "visualBounds": {"x": index * 10, "y": 0, "width": 8, "height": 8},
+                    "confidence": 0.9,
+                    "frame": "document",
+                    "viewport": {"width": 100, "height": 100, "scrollX": 0, "scrollY": 0, "devicePixelRatio": 1},
+                    "observedAt": 1.0,
+                    "semanticVisualSignature": f"sig-{index}",
+                }
+                for index in range(9)
+            ],
             "override": False,
         }
 
@@ -109,6 +139,13 @@ def main() -> int:
     slider = SliderSiteAdapter(sb)
     first = slider.poll()
     assert first["kind"] == "slider" and first["orientation"] == "horizontal"
+    assert len(first["marks"]) == 2
+    for mark in first["marks"]:
+        assert mark["visualBounds"] and mark["confidence"] > 0
+        assert mark["frame"] == "document" and mark["viewport"]["width"] == 1024
+        assert mark["observedAt"] > 0 and mark["semanticVisualSignature"]
+        assert mark["identitySignature"]
+
     moved = SliderActionExecutor(sb, slider, FakePaths()).apply(0.96)
     assert moved["moved"] is True and moved["mode"] == "path:ghost-cursor"
     assert moved["state"]["fraction"] == 0.96 and len(sb.drags) == 1
