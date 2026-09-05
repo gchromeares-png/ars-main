@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from seleniumbase_adapter import SeleniumBaseCdpAdapter
 
@@ -26,6 +27,12 @@ def _read_command() -> Dict[str, Any]:
     return command
 
 
+def _seed_url(url: str, token: str) -> str:
+    parts = urlsplit(url)
+    query = urlencode({"ares_seed_cookie": token})
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+
+
 def _run(command: Dict[str, Any]) -> Dict[str, Any]:
     action = str(command.get("action", "")).strip()
     if action not in {"seed-persistence", "read-persistence"}:
@@ -40,25 +47,18 @@ def _run(command: Dict[str, Any]) -> Dict[str, Any]:
 
     adapter = SeleniumBaseCdpAdapter(profile_dir=profile_dir, headless=headless)
     try:
-        adapter.goto(url)
-
         if action == "seed-persistence":
             if not token:
                 raise ValueError("seed-persistence requires a non-empty token")
-
-            # This probe verifies Chrome's native profile persistence only.
-            # Cookie snapshot injection has its own dedicated bridge probe.
-            adapter.execute_script(
-                "document.cookie = "
-                f"{json.dumps(f'{COOKIE_NAME}={token}; Path=/; Max-Age=34560000; SameSite=Lax')};"
-            )
+            adapter.goto(_seed_url(url, token))
             adapter.execute_script(
                 "localStorage.setItem("
                 f"{json.dumps(STORAGE_KEY)}, {json.dumps(token)}"
                 ");"
             )
-            # Give Chromium time to commit its profile stores before graceful quit.
-            adapter.sleep(1.5)
+            adapter.sleep(1.0)
+        else:
+            adapter.goto(url)
 
         cookies = adapter.get_snapshot_cookies()
         storage_value = adapter.execute_script(
