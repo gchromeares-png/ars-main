@@ -9,6 +9,7 @@ import mycdp
 import psutil
 from seleniumbase import sb_cdp
 
+from authorized_grid_action_executor import AuthorizedGridActionExecutor
 from challenge_state_tracker import ChallengeStateTracker
 from site_grid_adapter import GridSiteAdapter
 
@@ -30,6 +31,7 @@ class SeleniumBaseCdpAdapter:
         proxy: str | None = None,
         user_agent: str | None = None,
         site_adapter_overrides: Dict[str, str] | None = None,
+        authorized_test_mode: bool = False,
     ) -> None:
         self.profile_dir = Path(profile_dir).expanduser().resolve()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -45,10 +47,12 @@ class SeleniumBaseCdpAdapter:
 
         self._sb = sb_cdp.Chrome(**kwargs)
         self._challenge_tracker = ChallengeStateTracker(self._sb)
-        # Always enabled in the experimental SeleniumBase path. It is read-only
-        # and returns kind='none' when no matching authorized test-grid structure
-        # is present, so normal browsing remains unaffected.
         self._site_adapter = GridSiteAdapter(self._sb, overrides=site_adapter_overrides)
+        self._grid_actions = AuthorizedGridActionExecutor(
+            self._sb,
+            self._site_adapter,
+            authorized=authorized_test_mode,
+        )
         self._closed = False
 
     @property
@@ -59,28 +63,43 @@ class SeleniumBaseCdpAdapter:
         pid = getattr(driver, "_process_pid", None)
         return int(pid) if isinstance(pid, int) else None
 
+    @property
+    def authorized_test_mode(self) -> bool:
+        return self._grid_actions.authorized
+
     def goto(self, url: str) -> None:
         self._sb.goto(url)
-        # No fixed post-navigation sleep. If a challenge structure is already
-        # present, observe it until the visible state settles; pages without a
-        # challenge return immediately.
         self._challenge_tracker.wait_for_stable_challenge()
         self._sb.solve_captcha()
 
     def challenge_state(self) -> Dict[str, Any]:
-        """Return the latest structure-only challenge observation."""
         return self._challenge_tracker.poll()
 
     def site_grid_state(self) -> Dict[str, Any]:
-        """Return the neutral structural grid snapshot for authorized test pages."""
         return self._site_adapter.poll()
 
+    def apply_grid_selection(
+        self,
+        indexes: Iterable[int],
+        *,
+        expected_signature: str = "",
+        expected_tile_count: int | None = None,
+        submit: bool = True,
+    ) -> Dict[str, Any]:
+        """Apply externally selected indexes only in an authorized test session."""
+        return self._grid_actions.apply(
+            indexes,
+            expected_signature=expected_signature,
+            expected_tile_count=expected_tile_count,
+            submit=submit,
+        )
+
     def inspect_session(self) -> Dict[str, Any]:
-        """Inspect the active SeleniumBase-owned page without a second browser layer."""
         return {
             "url": str(self._sb.get_current_url() or ""),
             "title": str(self._sb.get_title() or ""),
             "cookies": self.get_snapshot_cookies(),
+            "authorizedTestMode": self.authorized_test_mode,
         }
 
     def execute_script(self, script: str) -> Any:
@@ -116,9 +135,6 @@ class SeleniumBaseCdpAdapter:
         else:
             running = True
 
-        # manual_profile_browser calls is_running() continuously. Poll both
-        # structural observers so manual navigation/reloads are reflected without
-        # introducing another browser layer or changing solver behavior.
         if running:
             try:
                 self._challenge_tracker.poll()
@@ -140,7 +156,6 @@ class SeleniumBaseCdpAdapter:
 
     @staticmethod
     def _wait_for_profile_flush(chrome_pid: int | None) -> None:
-        """Do not reopen a persistent profile while Chrome is still settling."""
         if chrome_pid:
             try:
                 psutil.Process(chrome_pid).wait(timeout=5.0)
