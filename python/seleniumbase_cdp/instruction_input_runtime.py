@@ -66,13 +66,22 @@ return {
         if not value:
             return {"matched": False, "reason": "no-simple-instruction"}
 
-        target = controls[0]
+        empty = [item for item in controls if not str(item.get("value") or "").strip()]
+        numeric = re.fullmatch(r"[-+]?\d+(?:[.,]\d+)?", value) is not None
+        candidates = empty or controls
+        if numeric:
+            number_fields = [item for item in candidates if str(item.get("inputType") or "").lower() in {"number", "range"}]
+            if number_fields:
+                candidates = number_fields
+        target = candidates[0]
+        if str(target.get("value") or "") == value:
+            return {"matched": False, "reason": "already-satisfied", "fieldId": str(target.get("fieldId") or ""), "value": value}
         return {"matched": True, "fieldId": str(target.get("fieldId") or ""), "value": value}
 
     def apply(self) -> Dict[str, Any]:
         decision = self.infer()
         if not decision.get("matched"):
-            return {"acted": False, "verified": False, "kind": "instruction-input", **decision}
+            return {"acted": False, "verified": decision.get("reason") == "already-satisfied", "kind": "instruction-input", **decision}
 
         script = r"""
 const fieldId = arguments[0];
