@@ -35,6 +35,7 @@ jobs:
           python/seleniumbase_cdp/composite_slider_grounder.py
           python/seleniumbase_cdp/interaction_trace.py
           python/seleniumbase_cdp/interaction_outcome.py
+          python/seleniumbase_cdp/interaction_orchestrator.py
           python/seleniumbase_cdp/instruction_input_runtime.py
           python/seleniumbase_cdp/visual_interaction_runtime.py
           python/seleniumbase_cdp/semantic_interaction_runtime.py
@@ -54,6 +55,9 @@ jobs:
 
       - name: Verify unified interaction outcome contract
         run: python python/seleniumbase_cdp/interaction_outcome_probe.py
+
+      - name: Verify single-owner interaction orchestration
+        run: python python/seleniumbase_cdp/interaction_orchestrator_probe.py
 
       - name: Verify instruction text and numeric input fallback
         run: python python/seleniumbase_cdp/instruction_input_probe.py
