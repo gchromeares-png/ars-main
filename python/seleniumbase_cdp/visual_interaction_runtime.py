@@ -3,15 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-from authorized_grid_action_executor import AuthorizedGridActionExecutor
 from auto_interaction_controller import AutoInteractionController
 from composite_slider_grounder import CompositeSliderGrounder
 from cursor_path_provider import CursorPathProvider
+from extended_grid_site_adapter import ExtendedGridSiteAdapter
 from interaction_trace import InteractionTrace
-from site_grid_adapter import GridSiteAdapter
+from proximity_grid_action_executor import ProximityGridActionExecutor
+from robust_vision_grid_classifier import RobustVisionGridClassifier
 from site_slider_adapter import SliderSiteAdapter
 from slider_action_executor import SliderActionExecutor
-from vision_grid_classifier import VisionGridClassifier
 
 
 class VisualInteractionRuntime:
@@ -26,12 +26,12 @@ class VisualInteractionRuntime:
     ) -> None:
         self._sb = seleniumbase_cdp
         self._profile_dir = Path(profile_dir).expanduser().resolve()
-        self._grid = GridSiteAdapter(self._sb, overrides=overrides or {})
+        self._grid = ExtendedGridSiteAdapter(self._sb, overrides=overrides or {})
         self._slider = SliderSiteAdapter(self._sb, overrides=overrides or {})
         self._paths = CursorPathProvider()
-        self._grid_actions = AuthorizedGridActionExecutor(self._sb, self._grid)
+        self._grid_actions = ProximityGridActionExecutor(self._sb, self._grid)
         self._slider_actions = SliderActionExecutor(self._sb, self._slider, self._paths)
-        self._vision = VisionGridClassifier()
+        self._vision = RobustVisionGridClassifier()
         self._slider_grounder = CompositeSliderGrounder(self._sb, profile_dir=self._profile_dir)
         self._trace = InteractionTrace(self._profile_dir)
         self._controller = AutoInteractionController(
@@ -52,6 +52,8 @@ class VisualInteractionRuntime:
             **self._controller.status(),
             "runtime": "visual-interaction-runtime",
             "markIdentity": "structural+semantic-visual",
+            "gridGeometry": "dynamic-2x2-through-8x8",
+            "gridClickOrder": "nearest-neighbour",
             "sliderProviders": self._slider_grounder.status(),
         }
 
