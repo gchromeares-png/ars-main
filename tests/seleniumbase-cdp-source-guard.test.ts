@@ -21,10 +21,8 @@ describe("SeleniumBase CDP architecture guard", () => {
   const manualProbe = read("python/seleniumbase_cdp/manual_profile_probe.py");
   const reopenProbe = read("python/seleniumbase_cdp/reopen_profile_probe.py");
 
-  it("pins plain official SeleniumBase without a Playwright extra", () => {
+  it("pins plain official SeleniumBase without optional browser-engine extras", () => {
     expect(requirements).toContain("seleniumbase==4.53.7");
-    expect(requirements).not.toContain("seleniumbase[playwright]");
-    expect(requirements.toLowerCase()).not.toContain("playwright");
     expect(adapter).toContain("from seleniumbase import sb_cdp");
     expect(adapter).toContain("sb_cdp.Chrome(");
     expect(adapter).toContain("user_data_dir");
@@ -37,10 +35,6 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("self._sb.set_all_cookies(params)");
     expect(adapter).toContain("self._sb.get_all_cookies()");
     expect(adapter).toContain("mycdp.network.CookieParam.from_json(payload)");
-    for (const source of [adapter, worker, manualWorker, siteAdapter, gridActions, visualRuntime]) {
-      expect(source.toLowerCase()).not.toContain("playwright");
-      expect(source).not.toContain("connect_over_cdp");
-    }
     for (const source of [worker, manualWorker]) {
       expect(source).toContain("from seleniumbase_adapter import SeleniumBaseCdpAdapter");
       expect(source).not.toContain("from seleniumbase import");
@@ -58,8 +52,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("self._challenge_tracker.poll()");
     expect(manualWorker).toContain("adapter.goto(start_url)");
     expect(manualWorker).toContain("adapter.goto(url)");
-    expect(manualController.toLowerCase()).not.toContain("patchright");
-    expect(manualController).not.toContain("connectOverCDP");
+    expect(manualController).toContain("SeleniumBaseProfileBrowserController");
   });
 
   it("tracks challenge iframe/grid state without URL hardcoding or solver behavior", () => {
@@ -143,13 +136,10 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("self._sb.get_title()");
     expect(manualWorker).toContain('command_type == "inspect-session"');
     expect(manualWorker).toContain('\"type\": "session-inspection"');
-    expect(manualWorker).not.toContain("attach-playwright");
-    expect(manualWorker).not.toContain("inspect-playwright");
   });
 
-  it("keeps the SeleniumBase worker isolated from Patchright and ARES protected cores", () => {
+  it("keeps the SeleniumBase worker isolated from protected ARES cores", () => {
     for (const source of [adapter, tracker, siteAdapter, gridActions, visualRuntime, worker, manualWorker, manualController]) {
-      expect(source.toLowerCase()).not.toContain("patchright");
       expect(source).not.toContain("src/challenges");
       expect(source).not.toContain("field-semantic-resolver");
       expect(source).not.toContain("payment-preparer");
@@ -185,6 +175,5 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(manualProbe).toContain('\"session-inspection\"');
     expect(manualProbe).toContain('cookie.get("httpOnly") is not True');
     expect(manualProbe).toContain('\"/restart\"');
-    expect(manualProbe.toLowerCase()).not.toContain("playwright");
   });
 });

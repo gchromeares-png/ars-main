@@ -4,7 +4,7 @@ import * as http from "http";
 import type { AddressInfo } from "net";
 import * as os from "os";
 import * as path from "path";
-import { PatchrightBrowserWorker } from "../src/browser-worker/patchright-browser-worker";
+import { SeleniumBaseBrowserWorker } from "../src/browser-worker/seleniumbase-browser-worker";
 
 const describeBrowserIntegration = process.env["ARES_RUN_BROWSER_INTEGRATION"] === "1"
   ? describe
@@ -120,7 +120,7 @@ describeBrowserIntegration("real browser runtime integration", () => {
     }
   });
 
-  it("launches a real Patchright Chrome context, loads a local page and cleans it up", async () => {
+  it("launches a real SeleniumBase Chrome context, loads a local page and cleans it up", async () => {
     const server = http.createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end("<!doctype html><html><head><title>ARES Browser Smoke</title></head><body><main id=\"status\">browser-ok</main></body></html>");
@@ -134,7 +134,7 @@ describeBrowserIntegration("real browser runtime integration", () => {
     const address = server.address() as AddressInfo;
     const url = `http://127.0.0.1:${address.port}/smoke`;
     const userDataDir = await mkdtemp(path.join(os.tmpdir(), "ares-browser-integration-"));
-    const browserWorker = new PatchrightBrowserWorker();
+    const browserWorker = new SeleniumBaseBrowserWorker();
 
     try {
       const handle = await browserWorker.createContext({
@@ -146,10 +146,9 @@ describeBrowserIntegration("real browser runtime integration", () => {
         actionTimeoutMs: 5_000
       });
 
-      const response = await handle.page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
-      expect(response?.ok()).toBe(true);
+      await handle.page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
       expect(await handle.page.title()).toBe("ARES Browser Smoke");
-      expect(await handle.page.locator("#status").textContent()).toBe("browser-ok");
+      expect(await handle.page.locator("#status").innerText()).toBe("browser-ok");
 
       const health = await browserWorker.health();
       expect(health.state).toBe("healthy");

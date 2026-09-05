@@ -3,7 +3,8 @@ import { BrowserConfig } from '../models';
 
 export class BrowserFactory {
   static createBrowser(config: BrowserConfig): IBrowserService {
-    // Diese Factory wird später durch konkrete Implementierung (Playwright/Patchright) ersetzt
+    // Diese Legacy-Core-Factory bleibt für Mock-/Kompatibilitätstests bestehen;
+    // der aktive Task-Browserpfad wird separat durch SeleniumBase CDP bereitgestellt.
     return new MockBrowserService(config);
   }
 }

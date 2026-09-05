@@ -41,10 +41,9 @@ export class ProfileBrowserController {
     const options = typeof startUrlOrOptions === "string"
       ? { startUrl: startUrlOrOptions }
       : (startUrlOrOptions ?? {});
-    const vision = await this.visionRuntime.prepare();
-    if (!vision.ready) {
-      throw new Error(`ARES Vision Runtime ist nicht bereit: ${vision.error || "unbekannter Fehler"}`);
-    }
+    // Vision is optional. Preparation is kicked off best-effort, but browser
+    // startup never waits for or fails because of the heavy vision module.
+    void this.visionRuntime.prepare().catch(() => undefined);
     return this.seleniumBase.open(profile, options.startUrl, options.cookieSnapshotId);
   }
 

@@ -82,7 +82,7 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
       if (!result?.success) this.error = result?.error || "Profil-Browser konnte nicht geöffnet werden.";
       else {
         this.browserOpen = true;
-        this.info = "Patchright-Profilbrowser geöffnet. Einloggen/navigieren und danach Snapshot speichern.";
+        this.info = "ARES-Profilbrowser geöffnet. Einloggen/navigieren und danach Snapshot speichern.";
       }
     } finally {
       this.busy = false;
@@ -170,7 +170,7 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
       return;
     }
     if (!this.browserOpen) {
-      this.error = "Patchright-Profilbrowser zuerst öffnen. Gespeichert werden nur die Cookies der aktuell geöffneten Session.";
+      this.error = "ARES-Profilbrowser zuerst öffnen. Gespeichert werden nur die Cookies der aktuell geöffneten Session.";
       return;
     }
 
@@ -183,7 +183,7 @@ export class ProfileCookieSnapshotsComponent implements OnChanges {
         return;
       }
       this.snapshotName = "";
-      this.info = `${result.snapshot?.cookieCount ?? 0} Patchright-Cookies verschlüsselt gespeichert.`;
+      this.info = `${result.snapshot?.cookieCount ?? 0} Browser-Cookies verschlüsselt gespeichert.`;
       await this.refresh();
       if (result.snapshot?.id) this.select(result.snapshot.id);
     } finally {

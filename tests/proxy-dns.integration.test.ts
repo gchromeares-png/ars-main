@@ -4,7 +4,7 @@ import * as http from "http";
 import type { AddressInfo } from "net";
 import * as os from "os";
 import * as path from "path";
-import { PatchrightBrowserWorker } from "../src/browser-worker/patchright-browser-worker";
+import { SeleniumBaseBrowserWorker } from "../src/browser-worker/seleniumbase-browser-worker";
 
 const describeBrowserIntegration = process.env["ARES_RUN_BROWSER_INTEGRATION"] === "1"
   ? describe
@@ -122,7 +122,7 @@ describeBrowserIntegration("proxy DNS integration", () => {
     const socksAddress = socksServer.address() as AddressInfo;
 
     const userDataDir = await mkdtemp(path.join(os.tmpdir(), "ares-proxy-dns-"));
-    const browserWorker = new PatchrightBrowserWorker();
+    const browserWorker = new SeleniumBaseBrowserWorker();
 
     try {
       const handle = await browserWorker.createContext({
@@ -139,15 +139,13 @@ describeBrowserIntegration("proxy DNS integration", () => {
         actionTimeoutMs: 5_000
       });
 
-      const response = await handle.page.goto(
-        `http://${destinationHost}:${httpAddress.port}/smoke`,
-        { waitUntil: "domcontentloaded", timeout: 15_000 }
-      );
+      const targetUrl = `http://${destinationHost}:${httpAddress.port}/smoke`;
+      await handle.page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 15_000 });
 
-      expect(response?.ok()).toBe(true);
+      expect(handle.page.url()).toContain(destinationHost);
       expect(await handle.page.title()).toBe("SOCKS Remote DNS");
       expect(observedHosts).toContain(destinationHost);
-      expect(await handle.page.locator("#host").textContent()).toContain(destinationHost);
+      expect(await handle.page.locator("#host").innerText()).toContain(destinationHost);
     } finally {
       await browserWorker.shutdown().catch(() => undefined);
       await closeServer(socksServer).catch(() => undefined);

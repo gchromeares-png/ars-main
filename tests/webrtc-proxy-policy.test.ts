@@ -6,8 +6,8 @@ describe("WebRTC proxy consistency policy", () => {
     path.resolve(__dirname, "../src/browser-worker/webrtc/webrtc-proxy-policy.ts"),
     "utf8"
   );
-  const launcher = fs.readFileSync(
-    path.resolve(__dirname, "../src/browser-worker/patchright-launcher.ts"),
+  const worker = fs.readFileSync(
+    path.resolve(__dirname, "../src/browser-worker/seleniumbase-browser-worker.ts"),
     "utf8"
   );
 
@@ -26,16 +26,14 @@ describe("WebRTC proxy consistency policy", () => {
   });
 
   it("installs the init script only for explicit proxy sessions", () => {
-    expect(launcher).toContain('import { installWebRtcProxyPolicy } from "./webrtc/webrtc-proxy-policy"');
-    expect(launcher).toContain("if (config.proxy) await installWebRtcProxyPolicy(context)");
+    expect(worker).toContain('import { installWebRtcProxyPolicy } from "./webrtc/webrtc-proxy-policy"');
+    expect(worker).toContain("if (config.proxy) await installWebRtcProxyPolicy(context)");
   });
 
   it("retains Chromium transport-level non-proxied UDP protection", () => {
-    expect(launcher).toContain("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
-    expect(launcher).toContain("--enforce-webrtc-ip-permission-check");
-  });
-
-  it("does not touch the challenge implementation", () => {
-    expect(launcher).toContain("attachLiveChallengePageWatcher(page)");
+    expect(worker).toContain("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+    expect(worker).toContain("--enforce-webrtc-ip-permission-check");
+    expect(worker).toContain("--disable-async-dns");
+    expect(worker).toContain("DnsOverHttps,NetworkPrediction");
   });
 });

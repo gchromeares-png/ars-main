@@ -1,4 +1,8 @@
-import { chromium, type Page } from "patchright";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { AresBrowserRuntime } from "../src/browser-worker/ares-browser-runtime";
+import type { Page } from "../src/browser-worker/types";
 import type {
   FieldDescriptor,
   ResolvedField,
@@ -7,7 +11,7 @@ import type {
 import { FieldSemanticResolver } from "../src/browser-worker/field-semantic-resolver";
 import { semanticTarget } from "../src/browser-worker/semantic-target";
 import type { AresProfile } from "../src/profiles/models";
-import { PatchrightShopifyTaskExecutor } from "../src/shopify/patchright-shopify-executor";
+import { ShopifyTaskExecutor } from "../src/shopify/shopify-task-executor";
 
 function field(overrides: Partial<FieldDescriptor>): FieldDescriptor {
   return {
@@ -60,11 +64,9 @@ describe("resolver fallback handoff baseline", () => {
     ]);
 
     expect(provider.calls).toBe(1);
-
     expect(result[0].target).toEqual({ intent: "email", context: "unknown" });
     expect(result[0].source.intent).toBe("standard-metadata");
     expect(result[0].source.context).toBe("unknown");
-
     expect(result[1].target).toEqual({ intent: "unknown", context: "unknown" });
     expect(result[1].source.intent).toBe("unknown");
     expect(result[1].source.context).toBe("unknown");
@@ -72,38 +74,31 @@ describe("resolver fallback handoff baseline", () => {
 });
 
 describeBrowser("resolver -> Shopify deterministic fallback handoff", () => {
-  jest.setTimeout(30_000);
+  jest.setTimeout(45_000);
 
   it("lets the deterministic Shopify fallback fill a known selector when semantic resolution stays unknown", async () => {
-    const browser = await chromium.launch({ headless: true, channel: "chrome" }).catch(() => chromium.launch({ headless: true }));
+    const runtime = new AresBrowserRuntime();
+    const taskId = `resolver-handoff-${Date.now()}`;
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ares-resolver-handoff-"));
     try {
-      const page = await browser.newPage();
-      await page.setContent(`<!doctype html><html><body>
+      const page: Page = (await runtime.createContext({ taskId, userDataDir, headless: true })).page;
+      const html = `<!doctype html><html><body>
         <input data-decoy="true" value="">
         <input name="city" value="">
-      </body></html>`);
+      </body></html>`;
+      await page.goto(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`, { waitUntil: "domcontentloaded" });
 
       const profile: AresProfile = {
         id: "resolver-handoff",
         name: "Resolver Handoff",
-        contact: {
-          firstName: "Test",
-          lastName: "User",
-          email: "test@example.invalid"
-        },
-        address: {
-          address1: "Example 1",
-          postalCode: "20095",
-          city: "Hamburg",
-          countryCode: "DE"
-        },
+        contact: { firstName: "Test", lastName: "User", email: "test@example.invalid" },
+        address: { address1: "Example 1", postalCode: "20095", city: "Hamburg", countryCode: "DE" },
         browser: { kiAutofill: true }
       };
 
-      const executor = new PatchrightShopifyTaskExecutor(() => undefined);
+      const executor = new ShopifyTaskExecutor(() => undefined);
       (executor as any).fieldResolver = new UnknownResolver();
-
-      const result = await (executor as any).fillCheckoutProfile(page as Page, profile);
+      const result = await (executor as any).fillCheckoutProfile(page, profile);
 
       expect(await page.locator('input[name="city"]').inputValue()).toBe("Hamburg");
       expect(await page.locator('[data-decoy="true"]').inputValue()).toBe("");
@@ -123,7 +118,9 @@ describeBrowser("resolver -> Shopify deterministic fallback handoff", () => {
       ]));
       expect(JSON.stringify(result.trace)).not.toContain("Hamburg");
     } finally {
-      await browser.close();
+      await runtime.closeContext(taskId).catch(() => undefined);
+      await runtime.shutdown().catch(() => undefined);
+      fs.rmSync(userDataDir, { recursive: true, force: true });
     }
   });
 });

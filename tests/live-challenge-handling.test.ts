@@ -1,7 +1,7 @@
 import { LiveChallengeDetector } from "../src/challenges/live-challenge-detector";
 import { LiveChallengeHandler } from "../src/challenges/live-challenge-handler";
-import type { Page } from "patchright";
-import { PatchrightShopifyTaskExecutor } from "../src/shopify/patchright-shopify-executor";
+import type { Page } from "../src/browser-worker/types";
+import { ShopifyTaskExecutor } from "../src/shopify/shopify-task-executor";
 import { Task, TaskState } from "../src/models";
 
 describe("Live Challenge Handling in Browser", () => {
@@ -190,7 +190,7 @@ describe("Live Challenge Handling in Browser", () => {
     });
   });
 
-  describe("PatchrightShopifyTaskExecutor Integration", () => {
+  describe("ShopifyTaskExecutor challenge integration", () => {
     it("fails task cleanly if live challenge cannot be resolved", async () => {
       const product = {
         title: "Pokemon Booster",
@@ -202,6 +202,8 @@ describe("Live Challenge Handling in Browser", () => {
         isClosed: () => false,
         url: () => "https://shop.example.com/checkpoint",
         goto: jest.fn().mockResolvedValue(undefined),
+        on: jest.fn(),
+        off: jest.fn(),
         evaluate: jest.fn().mockImplementation(async (_fn: unknown, targetUrl?: string) => {
           const url = String(targetUrl ?? "");
           if (url.includes("/search/suggest.json")) {
@@ -221,7 +223,7 @@ describe("Live Challenge Handling in Browser", () => {
           }
           return {};
         })
-      };
+      } as unknown as Page;
 
       const mockBrowserWorker = {
         createContext: jest.fn().mockResolvedValue({
@@ -252,7 +254,7 @@ describe("Live Challenge Handling in Browser", () => {
         })
       } as unknown as LiveChallengeHandler;
 
-      const executor = new PatchrightShopifyTaskExecutor(
+      const executor = new ShopifyTaskExecutor(
         (shopId) => ({ id: shopId, name: "Shop", baseUrl: "https://shop.example.com", platform: "shopify", config: {} }),
         () => ({
           id: "p1",

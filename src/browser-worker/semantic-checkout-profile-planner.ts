@@ -1,4 +1,4 @@
-import type { Locator, Page } from "patchright";
+import type { Locator, Page } from "./types";
 import type { AresProfile } from "../profiles/models";
 import {
   SemanticCheckoutTraceRecorder,
@@ -84,7 +84,7 @@ export class SemanticCheckoutProfilePlanner {
       const text = await this.candidateText(candidate).catch(() => "");
       if (!SAME_AS_SHIPPING_TEXT.test(text)) continue;
 
-      const control = await this.resolveControl(page, candidate);
+      const control = await this.resolveControl(candidate);
       if (!control || !await control.isVisible({ timeout: 120 }).catch(() => false)) continue;
       if (await this.isSelected(control)) return true;
 
@@ -117,30 +117,41 @@ export class SemanticCheckoutProfilePlanner {
     });
   }
 
-  private async resolveControl(page: Page, candidate: Locator): Promise<Locator | undefined> {
-    const tag = await candidate.evaluate(element => element.tagName.toLowerCase()).catch(() => "");
-    const type = await candidate.getAttribute("type").catch(() => null);
-    const role = await candidate.getAttribute("role").catch(() => null);
+  private async resolveControl(candidate: Locator): Promise<Locator | undefined> {
+    const usable = await candidate.evaluate(element => {
+      const tag = element.tagName.toLowerCase();
+      const type = (element.getAttribute("type") || "").toLowerCase();
+      const role = (element.getAttribute("role") || "").toLowerCase();
+      if (tag === "input" && (type === "checkbox" || type === "radio")) return true;
+      if (role === "checkbox" || role === "radio" || tag === "button") return true;
+      if (tag !== "label") return false;
 
-    if (tag === "input" && (type === "checkbox" || type === "radio")) return candidate;
-    if (role === "checkbox" || role === "radio" || tag === "button") return candidate;
-
-    if (tag === "label") {
-      const forId = await candidate.getAttribute("for").catch(() => null);
-      if (forId) {
-        const escaped = forId.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-        return page.locator(`[id="${escaped}"]`).first();
-      }
-      const nested = candidate.locator('input[type="checkbox"], input[type="radio"], [role="checkbox"], [role="radio"]').first();
-      if (await nested.count().catch(() => 0)) return nested;
-    }
-
-    return undefined;
+      const htmlFor = (element as HTMLLabelElement).htmlFor || element.getAttribute("for") || "";
+      if (htmlFor && document.getElementById(htmlFor)) return true;
+      return Boolean(element.querySelector('input[type="checkbox"], input[type="radio"], [role="checkbox"], [role="radio"]'));
+    }).catch(() => false);
+    return usable ? candidate : undefined;
   }
 
   private async isSelected(control: Locator): Promise<boolean> {
-    const checked = await control.isChecked().catch(() => false);
-    if (checked) return true;
-    return (await control.getAttribute("aria-checked").catch(() => null)) === "true";
+    return control.evaluate(element => {
+      const ariaChecked = element.getAttribute("aria-checked");
+      if (ariaChecked === "true") return true;
+      if (ariaChecked === "false") return false;
+
+      if (element instanceof HTMLInputElement && (element.type === "checkbox" || element.type === "radio")) {
+        return element.checked;
+      }
+
+      if (element instanceof HTMLLabelElement) {
+        const explicit = element.htmlFor ? document.getElementById(element.htmlFor) : null;
+        const nested = element.querySelector('input[type="checkbox"], input[type="radio"], [role="checkbox"], [role="radio"]');
+        const target = explicit || nested;
+        if (target instanceof HTMLInputElement) return target.checked;
+        return target?.getAttribute("aria-checked") === "true";
+      }
+
+      return false;
+    }).catch(() => false);
   }
 }

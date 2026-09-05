@@ -3,7 +3,7 @@ import * as http from "http";
 import type { AddressInfo } from "net";
 import * as os from "os";
 import * as path from "path";
-import { PatchrightBrowserWorker } from "../src/browser-worker/patchright-browser-worker";
+import { SeleniumBaseBrowserWorker } from "../src/browser-worker/seleniumbase-browser-worker";
 import { resolveProfileUserDataDir } from "../src/browser-worker/profile-session-manager";
 
 const describeBrowserIntegration = process.env["ARES_RUN_BROWSER_INTEGRATION"] === "1"
@@ -31,7 +31,7 @@ describeBrowserIntegration("explicit profile cookie snapshot injection", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ares-cookie-injection-"));
     const profileId = "cookie-profile";
     const taskId = "cookie-task";
-    const worker = new PatchrightBrowserWorker();
+    const worker = new SeleniumBaseBrowserWorker();
 
     try {
       worker.bindTaskProfile(taskId, profileId);

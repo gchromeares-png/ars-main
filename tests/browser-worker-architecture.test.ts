@@ -7,6 +7,8 @@ describe("external Node browser worker architecture", () => {
   const worker = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/worker.ts"), "utf8");
   const contract = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/browser-worker.ts"), "utf8");
   const runtime = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/ares-browser-runtime.ts"), "utf8");
+  const seleniumWorker = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/seleniumbase-browser-worker.ts"), "utf8");
+  const rpcPage = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/seleniumbase-rpc-page.ts"), "utf8");
 
   it("exposes createContext, closeContext and health as the browser-core contract", () => {
     expect(contract).toContain("createContext(config: BrowserContextConfig)");
@@ -14,17 +16,25 @@ describe("external Node browser worker architecture", () => {
     expect(contract).toContain("health(): Promise<BrowserWorkerHealth>");
   });
 
-  it("routes task browser ownership through the central ARES runtime boundary", () => {
+  it("routes task browser ownership through the central SeleniumBase ARES runtime boundary", () => {
     expect(worker).toContain('require("./ares-browser-runtime")');
     expect(worker).toContain("new AresBrowserRuntime()");
-    expect(worker).not.toContain('require("./patchright-browser-worker")');
     expect(runtime).toContain("class AresBrowserRuntime");
-    expect(runtime).toContain('engine = "patchright-legacy"');
+    expect(runtime).toContain('engine = "seleniumbase-cdp"');
+    expect(runtime).toContain("extends SeleniumBaseBrowserWorker");
+    expect(seleniumWorker).toContain("class SeleniumBaseBrowserWorker");
+  });
+
+  it("keeps locator construction lazy and defers RPC until a real operation", () => {
+    expect(rpcPage).toContain("constructor(private readonly page: SeleniumBaseRpcPage, private readonly descriptor: LocatorDescriptor) {}");
+    expect(rpcPage).toContain("locator(selector: string): Locator { return new SeleniumBaseRpcLocator(this, { selector }); }");
+    expect(rpcPage).toContain("return this.page.locatorOperation(action, this.descriptor, extra, timeoutMs)");
+    expect(rpcPage).toContain('this.op("click"');
+    expect(rpcPage).toContain('this.op("fill"');
   });
 
   it("runs browser executors only after a Node 20+ worker runtime gate", () => {
     expect(worker).toContain("if (nodeMajor < 20)");
-    expect(worker).toContain('require("../shopify/patchright-shopify-executor")');
   });
 
   it("provides a resource-conscious process pool and task ownership routing", () => {
@@ -46,24 +56,22 @@ describe("external Node browser worker architecture", () => {
     const interfaces = fs.readFileSync(path.resolve(__dirname, "../src/interfaces/index.ts"), "utf8");
     const orchestrator = fs.readFileSync(path.resolve(__dirname, "../src/orchestrator/index.ts"), "utf8");
     const electronMain = fs.readFileSync(path.resolve(__dirname, "../src/electron/main.ts"), "utf8");
-
     expect(interfaces).toContain("cancelTask?(taskId: string): Promise<void>");
     expect(orchestrator).toContain("this.executor.cancelTask?.(taskId)");
     expect(electronMain).not.toContain("await browserWorker.cancelTask(taskId)");
   });
 
-  it("keeps concrete browser runtime imports outside Electron main", () => {
+  it("keeps task browser runtime ownership outside Electron main", () => {
     const electronMain = fs.readFileSync(path.resolve(__dirname, "../src/electron/main.ts"), "utf8");
-    expect(electronMain).not.toContain('from "patchright"');
-    expect(electronMain).not.toContain('require("patchright")');
     expect(electronMain).toContain('from "../browser-worker/client"');
+    expect(electronMain).not.toContain('from "../browser-worker/seleniumbase-browser-worker"');
+    expect(electronMain).not.toContain("new SeleniumBaseBrowserWorker(");
   });
 
   it("performs graceful async executor shutdown before Electron exits", () => {
     const clientSource = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/client.ts"), "utf8");
     const routerSource = fs.readFileSync(path.resolve(__dirname, "../src/commerce/task-executor-router.ts"), "utf8");
     const electronMain = fs.readFileSync(path.resolve(__dirname, "../src/electron/main.ts"), "utf8");
-
     expect(clientSource).toContain("async close(): Promise<void>");
     expect(clientSource).toContain('type: "shutdown"');
     expect(routerSource).toContain("async close(): Promise<void>");

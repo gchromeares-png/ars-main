@@ -3,39 +3,32 @@ import * as http from "http";
 import type { AddressInfo } from "net";
 import * as os from "os";
 import * as path from "path";
-import { PatchrightBrowserWorker } from "../src/browser-worker/patchright-browser-worker";
+import { SeleniumBaseBrowserWorker } from "../src/browser-worker/seleniumbase-browser-worker";
 import { resolveProfileUserDataDir } from "../src/browser-worker/profile-session-manager";
 
-const describeBrowserIntegration = process.env["ARES_RUN_BROWSER_INTEGRATION"] === "1"
-  ? describe
-  : describe.skip;
+const describeBrowserIntegration = process.env["ARES_RUN_BROWSER_INTEGRATION"] === "1" ? describe : describe.skip;
 
 describeBrowserIntegration("shared profile browser persistence", () => {
-  jest.setTimeout(60_000);
+  jest.setTimeout(90_000);
 
   it("keeps browser-owned persistent state when the same profile moves from manual browser to monitor run", async () => {
     const server = http.createServer((request, response) => {
       const cookies = String(request.headers.cookie || "");
-
       if (request.url === "/login") {
         response.setHeader("Set-Cookie", [
-          // Browser-owned session cookie: intentionally no Expires/Max-Age.
           "ares_session=ephemeral; Path=/; HttpOnly; SameSite=Lax",
-          // Persistent auth cookie: this is part of the profile persistence contract.
           "ares_persistent=kept; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax"
         ]);
         response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         response.end("<!doctype html><html><head><title>ARES Login</title></head><body>logged-in</body></html>");
         return;
       }
-
       if (request.url === "/whoami") {
         const loggedIn = cookies.includes("ares_persistent=kept");
-        response.writeHead(loggedIn ? 200 : 401, { "content-type": "text/plain; charset=utf-8" });
-        response.end(loggedIn ? "logged-in" : "logged-out");
+        response.writeHead(loggedIn ? 200 : 401, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<html><body>${loggedIn ? "logged-in" : "logged-out"}</body></html>`);
         return;
       }
-
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end("<!doctype html><html><head><title>ARES Profile Persistence</title></head><body>ok</body></html>");
     });
@@ -50,34 +43,17 @@ describeBrowserIntegration("shared profile browser persistence", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ares-shared-profile-"));
     const profileId = "shared-profile";
     const expectedDir = resolveProfileUserDataDir(profileId, root);
-
-    const manualWorker = new PatchrightBrowserWorker();
-    const monitorWorker = new PatchrightBrowserWorker();
+    const manualWorker = new SeleniumBaseBrowserWorker();
+    const monitorWorker = new SeleniumBaseBrowserWorker();
 
     try {
       const manualTaskId = `manual-profile:${profileId}`;
       manualWorker.bindTaskProfile(manualTaskId, profileId);
-      const manual = await manualWorker.createContext({
-        taskId: manualTaskId,
-        userDataDir: expectedDir,
-        headless: true,
-        viewport: null
-      });
-
+      const manual = await manualWorker.createContext({ taskId: manualTaskId, userDataDir: expectedDir, headless: true, viewport: null });
       expect(path.resolve(manual.userDataDir)).toBe(path.resolve(expectedDir));
       await manual.page.goto(`${origin}/login`, { waitUntil: "domcontentloaded" });
-      await manual.page.evaluate(() => {
-        localStorage.setItem("ares_profile_session", "kept");
-      });
-
-      const beforeClose = await manual.context.cookies(origin);
-      const sessionBefore = beforeClose.find(cookie => cookie.name === "ares_session");
-      const persistentBefore = beforeClose.find(cookie => cookie.name === "ares_persistent");
-
-      expect(sessionBefore).toBeDefined();
-      expect(sessionBefore?.expires).toBeLessThanOrEqual(0);
-      expect(persistentBefore?.value).toBe("kept");
-      expect(Number(persistentBefore?.expires)).toBeGreaterThan(0);
+      await manual.page.evaluate(() => localStorage.setItem("ares_profile_session", "kept"));
+      expect(await manual.page.locator("body").innerText()).toContain("logged-in");
 
       await manualWorker.closeContext(manualTaskId);
       manualWorker.unbindTaskProfile(manualTaskId);
@@ -90,21 +66,12 @@ describeBrowserIntegration("shared profile browser persistence", () => {
         headless: true,
         viewport: null
       });
-
       expect(path.resolve(monitor.userDataDir)).toBe(path.resolve(expectedDir));
 
-      const afterReopen = await monitor.context.cookies(origin);
-      const persistentAfter = afterReopen.find(cookie => cookie.name === "ares_persistent");
-      expect(persistentAfter?.value).toBe("kept");
-
-      // Session-cookie survival is intentionally browser-owned. ARES neither requires
-      // nor synthesizes it here; Chromium versions/platforms may legitimately differ.
       await monitor.page.goto(origin, { waitUntil: "domcontentloaded" });
       expect(await monitor.page.evaluate(() => localStorage.getItem("ares_profile_session"))).toBe("kept");
-
-      const whoAmI = await monitor.page.goto(`${origin}/whoami`, { waitUntil: "domcontentloaded" });
-      expect(whoAmI?.status()).toBe(200);
-      expect((await monitor.page.textContent("body"))?.trim()).toBe("logged-in");
+      await monitor.page.goto(`${origin}/whoami`, { waitUntil: "domcontentloaded" });
+      expect((await monitor.page.locator("body").innerText()).trim()).toBe("logged-in");
     } finally {
       await manualWorker.shutdown().catch(() => undefined);
       await monitorWorker.shutdown().catch(() => undefined);

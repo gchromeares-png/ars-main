@@ -5,7 +5,7 @@ import {
   RecaptchaV2Request,
   HCaptchaRequest,
 } from "@zennolab_com/capmonstercloud-client";
-import type { Page } from "patchright";
+import type { Page } from "../browser-worker/types";
 
 export interface SolverProxyOptions {
   server: string;

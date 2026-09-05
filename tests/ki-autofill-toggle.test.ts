@@ -1,4 +1,4 @@
-import type { Page } from "patchright";
+import type { Page } from "../src/browser-worker/types";
 import { SemanticFieldAutofill } from "../src/browser-worker/semantic-field-autofill";
 import { SemanticCheckoutProfilePlanner } from "../src/browser-worker/semantic-checkout-profile-planner";
 import { toPersistedAresProfile, toProfileV2Draft } from "../src/profiles/profile-v2";

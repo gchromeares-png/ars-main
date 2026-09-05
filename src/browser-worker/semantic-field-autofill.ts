@@ -1,4 +1,4 @@
-import type { Locator, Page } from "patchright";
+import type { Locator, Page } from "./types";
 import type { UiInteractionHelper } from "./ui-interaction-helper";
 import {
   collectFieldDescriptors,

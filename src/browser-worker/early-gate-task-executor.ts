@@ -7,6 +7,7 @@ import type { CommerceShop } from "../commerce/platforms";
 import type { AresProfile } from "../profiles/models";
 import type { CheckoutPaymentSession, PaymentPreparationResult } from "../payments/models";
 import type { BrowserWorker } from "./browser-worker";
+import type { Page } from "./types";
 import { BrowserQueueWaiter } from "./queue-waiter";
 import { CheckoutPaymentPreparer } from "./checkout-payment-preparer";
 import { SemanticCheckoutPreparer, type SemanticCheckoutPreparationResult } from "./semantic-checkout-preparer";
@@ -92,7 +93,7 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
       const page = handle.page;
       task.config.data = {
         ...(task.config.data ?? {}),
-        browserSession: { type: "patchright-chromium", isolatedPerTask: true, userDataDir },
+        browserSession: { type: "seleniumbase-cdp", isolatedPerTask: true, userDataDir },
         browserEnvironment: handle.environmentAudit
       };
       setEarlyGateRuntime(task, { activeArea: "browser-child", stage: "browser-child" });
@@ -226,7 +227,7 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
     task: Task,
     session: ActiveDiscoverySession,
     journey: ReleaseJourney,
-    page: import("patchright").Page,
+    page: Page,
     shop: CommerceShop,
     profile: AresProfile,
     paymentSession?: CheckoutPaymentSession

@@ -15,7 +15,7 @@
     "native:node": "npm rebuild better-sqlite3",
     "electron": "npm run native:electron && electron .",
     "start": "ng serve",
-    "browser:install": "patchright install chrome",
+    "browser:install": "python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt",
     "vision:status": "python python/seleniumbase_cdp/vision_runtime_bootstrap.py --status",
     "vision:prepare": "python python/seleniumbase_cdp/vision_runtime_bootstrap.py --prepare",
     "worker:run": "node dist/backend/browser-worker/worker.js",
@@ -45,7 +45,6 @@
     "bezier-mouse-js": "^2.0.1",
     "electron": "^21.0.0",
     "ghost-cursor": "^1.4.2",
-    "patchright": "^1.62.2",
     "rxjs": "~7.5.0",
     "tslib": "^2.3.0",
     "zone.js": "~0.11.4"

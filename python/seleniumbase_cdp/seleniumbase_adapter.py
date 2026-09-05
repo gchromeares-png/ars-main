@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -31,6 +33,9 @@ class SeleniumBaseCdpAdapter:
         proxy: str | None = None,
         user_agent: str | None = None,
         site_adapter_overrides: Dict[str, str] | None = None,
+        browser_args: Iterable[str] | None = None,
+        language: str | None = None,
+        timezone: str | None = None,
     ) -> None:
         self.profile_dir = Path(profile_dir).expanduser().resolve()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -43,6 +48,13 @@ class SeleniumBaseCdpAdapter:
             kwargs["proxy"] = proxy
         if user_agent:
             kwargs["agent"] = user_agent
+        clean_args = [str(value).strip() for value in (browser_args or []) if str(value).strip()]
+        if clean_args:
+            kwargs["browser_args"] = clean_args
+        if language:
+            kwargs["lang"] = str(language)
+        if timezone:
+            kwargs["tzone"] = str(timezone)
 
         self._sb = sb_cdp.Chrome(**kwargs)
         self._challenge_tracker = ChallengeStateTracker(self._sb)
@@ -75,11 +87,44 @@ class SeleniumBaseCdpAdapter:
 
     @property
     def chrome_pid(self) -> int | None:
+        # Only use the process handle SeleniumBase historically exposed for the
+        # Chromium process. Generic `.pid` attributes on wrapper objects are not
+        # guaranteed to be Chrome and can make Windows profile-flush waiting target
+        # the wrong process.
         driver = getattr(self._sb, "driver", None)
+        if driver is None:
+            return None
         if hasattr(driver, "cdp_base"):
             driver = driver.cdp_base
         pid = getattr(driver, "_process_pid", None)
-        return int(pid) if isinstance(pid, int) else None
+        return int(pid) if isinstance(pid, int) and pid > 0 else None
+
+    def _profile_browser_pids(self) -> List[int]:
+        """Find browser owners for this exact user-data-dir without trusting wrapper PIDs."""
+        target = os.path.normcase(str(self.profile_dir))
+        matches: List[int] = []
+        for process in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                command_line = [str(value) for value in (process.info.get("cmdline") or [])]
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                continue
+            for index, argument in enumerate(command_line):
+                profile_value = ""
+                if argument.startswith("--user-data-dir="):
+                    profile_value = argument.split("=", 1)[1]
+                elif argument == "--user-data-dir" and index + 1 < len(command_line):
+                    profile_value = command_line[index + 1]
+                if not profile_value:
+                    continue
+                clean = profile_value.strip().strip('"')
+                try:
+                    candidate = os.path.normcase(str(Path(clean).expanduser().resolve()))
+                except (OSError, RuntimeError):
+                    candidate = os.path.normcase(os.path.abspath(os.path.expanduser(clean)))
+                if candidate == target:
+                    matches.append(int(process.pid))
+                    break
+        return matches
 
     def goto(self, url: str) -> None:
         self._sb.goto(url)
@@ -165,8 +210,20 @@ class SeleniumBaseCdpAdapter:
             "interactionOutcome": self.interaction_outcome_state(),
         }
 
-    def execute_script(self, script: str) -> Any:
-        return self._sb.execute_script(script)
+    def execute_script(self, script: str, *args: Any) -> Any:
+        if not args:
+            return self._sb.execute_script(script)
+
+        encoded_args = json.dumps(list(args), ensure_ascii=False, separators=(",", ":"))
+        wrapped = (
+            "(() => {"
+            f"const __aresArgs={encoded_args};"
+            "return (function(){"
+            f"{script}"
+            "}).apply(null,__aresArgs);"
+            "})()"
+        )
+        return self._sb.execute_script(wrapped)
 
     def sleep(self, seconds: float) -> None:
         self._sb.sleep(seconds)
@@ -182,29 +239,22 @@ class SeleniumBaseCdpAdapter:
         return [self._cookie_to_snapshot(cookie) for cookie in self._sb.get_all_cookies()]
 
     def is_running(self) -> bool:
+        """Fast, non-blocking liveness probe for the task-worker command loop."""
         if self._closed:
             return False
-        driver = getattr(self._sb, "driver", None)
-        if driver is None:
-            return False
-        if hasattr(driver, "cdp_base"):
-            driver = driver.cdp_base
-        checker = getattr(driver, "is_running", None)
-        if callable(checker):
-            try:
-                running = checker() is not False
-            except Exception:
-                return False
-        else:
-            running = True
 
-        if running:
-            try:
-                self._challenge_tracker.poll()
-            except Exception:
-                pass
-            self._poll_observation_watchdog()
-        return running
+        pid = self.chrome_pid
+        if not pid:
+            # Pure-CDP builds may not expose SeleniumBase's legacy driver wrapper.
+            # Missing optional process metadata is not evidence that Chrome died.
+            return True
+        try:
+            process = psutil.Process(pid)
+            return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+        except (psutil.AccessDenied, psutil.Error):
+            return True
 
     def _poll_observation_watchdog(self, *, force: bool = False) -> None:
         now = time.monotonic()
@@ -220,8 +270,14 @@ class SeleniumBaseCdpAdapter:
         if not force and not bool(state.get("changed")):
             return
 
-        self._capture_for_events(state)
-        self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+        try:
+            self._capture_for_events(state)
+        except Exception:
+            pass
+        try:
+            self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+        except Exception:
+            pass
 
     def _capture_for_events(self, state: Dict[str, Any]) -> None:
         generation = int(state.get("generation") or 0)
@@ -269,18 +325,53 @@ class SeleniumBaseCdpAdapter:
         if self._closed:
             return
         self._closed = True
+        browser_pids = self._profile_browser_pids()
         chrome_pid = self.chrome_pid
+        if chrome_pid and chrome_pid not in browser_pids:
+            browser_pids.insert(0, chrome_pid)
+        # Force a final cookie-store round trip before asking Chromium to shut down.
+        # This does not persist cookie payloads outside the browser profile.
+        try:
+            self._sb.get_all_cookies()
+        except Exception:
+            pass
+        # SeleniumBase/Chromium on Windows needs a short pre-close settle so
+        # persistent cookies and session state reach the user-data-dir on disk.
+        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
         self._sb.quit()
-        self._wait_for_profile_flush(chrome_pid)
+        self._wait_for_profile_flush(browser_pids)
 
     @staticmethod
-    def _wait_for_profile_flush(chrome_pid: int | None) -> None:
-        if chrome_pid:
+    def _wait_for_profile_flush(browser_pids: Iterable[int]) -> None:
+        pids = list(dict.fromkeys(int(pid) for pid in browser_pids if isinstance(pid, int) and pid > 0))
+        if not pids:
+            # Pure-CDP can omit a wrapper PID. In that case prefer a conservative
+            # profile settle window over releasing the lease immediately.
+            time.sleep(1.0)
+            return
+
+        # Wait for SeleniumBase's authoritative Chromium process first when it is
+        # available, then cover any additional browser owner found by user-data-dir.
+        chrome_pid = pids[0]
+        try:
+            psutil.Process(chrome_pid).wait(timeout=5.0)
+        except psutil.NoSuchProcess:
+            pass
+        except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.Error):
+            pass
+
+        deadline = time.monotonic() + 5.0
+        for pid in pids[1:]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                psutil.Process(chrome_pid).wait(timeout=5.0)
-            except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                psutil.Process(pid).wait(timeout=remaining)
+            except psutil.NoSuchProcess:
                 pass
-        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
+            except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.Error):
+                continue
+        time.sleep(0.25)
 
     @staticmethod
     def _cookie_param(cookie: Dict[str, Any]) -> mycdp.network.CookieParam:

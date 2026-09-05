@@ -1,4 +1,4 @@
-import type { Page } from "patchright";
+import type { Page } from "./types";
 import type { AresProfile } from "../profiles/models";
 import { FieldSemanticResolver, OllamaEmbeddingProvider } from "./field-semantic-resolver";
 import { SemanticFieldAutofill } from "./semantic-field-autofill";

@@ -1,4 +1,4 @@
-import type { Page, Frame } from "patchright";
+import type { Page, Frame } from "../browser-worker/types";
 import { LiveChallengeHandler } from "./live-challenge-handler";
 
 const activePages = new WeakSet<Page>();

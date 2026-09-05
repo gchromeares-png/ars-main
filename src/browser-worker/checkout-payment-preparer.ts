@@ -1,4 +1,4 @@
-import type { Frame, Locator, Page } from "patchright";
+import type { Frame, Locator, Page } from "./types";
 import type {
   CheckoutPaymentSession,
   PaymentMethod,

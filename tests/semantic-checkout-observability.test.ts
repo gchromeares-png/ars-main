@@ -1,4 +1,4 @@
-import type { Locator } from "patchright";
+import type { Locator } from "../src/browser-worker/types";
 import { SemanticCheckoutTraceRecorder } from "../src/browser-worker/semantic-checkout-observability";
 import { SemanticFieldAutofill } from "../src/browser-worker/semantic-field-autofill";
 import { semanticTarget } from "../src/browser-worker/semantic-target";

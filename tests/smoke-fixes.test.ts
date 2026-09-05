@@ -120,7 +120,7 @@ describe("Smoke Tests for System Fixes", () => {
   describe("Bug 3: Shopify Executor Header & Proxy Leak Prevention", () => {
     it("uses authentic browser User-Agent rather than bot-flagged ARES/1.0", () => {
       const source = fs.readFileSync(
-        path.resolve(__dirname, "../src/shopify/patchright-shopify-executor.ts"),
+        path.resolve(__dirname, "../src/shopify/shopify-task-executor.ts"),
         "utf8"
       );
       expect(source).not.toContain('"User-Agent": "ARES/1.0"');
@@ -179,15 +179,15 @@ describe("Smoke Tests for System Fixes", () => {
     });
   });
 
-  describe("Bug 6: Chrome Channel Resiliency", () => {
-    it("has fallback when launching persistent context", () => {
-      const launcherSource = fs.readFileSync(
-        path.resolve(__dirname, "../src/browser-worker/patchright-launcher.ts"),
+  describe("Bug 6: SeleniumBase Process Resiliency", () => {
+    it("starts the Python worker unbuffered and keeps a configurable executable fallback", () => {
+      const workerSource = fs.readFileSync(
+        path.resolve(__dirname, "../src/browser-worker/seleniumbase-browser-worker.ts"),
         "utf8"
       );
-      expect(launcherSource).toContain('channel: "chrome"');
-      expect(launcherSource).toContain("catch (channelError)");
-      expect(launcherSource).toContain("chromium.launchPersistentContext(config.userDataDir, launchOptions)");
+      expect(workerSource).toContain('process.env["ARES_PYTHON_EXECUTABLE"]');
+      expect(workerSource).toContain('["-u", this.resolveWorkerScript()]');
+      expect(workerSource).toContain('PYTHONUNBUFFERED: "1"');
     });
   });
 });
