@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from stable_marks import build_stable_marks, stable_mark_digest
+
 
 _GRID_SIZES = {9: (3, 3), 16: (4, 4)}
 _GRID_SIZES.update({4: (2, 2), 6: (2, 3), 8: (2, 4), 12: (3, 4), 20: (4, 5), 25: (5, 5)})
@@ -41,12 +43,39 @@ class GridSiteAdapter:
         (() => {{
           const overrides = {overrides};
           const GRID = new Map(Object.entries({grid_sizes}).map(([k,v]) => [Number(k), v]));
+          const viewport = {{
+            width: window.innerWidth || document.documentElement.clientWidth || 0,
+            height: window.innerHeight || document.documentElement.clientHeight || 0,
+            scrollX: window.scrollX || 0,
+            scrollY: window.scrollY || 0,
+            devicePixelRatio: window.devicePixelRatio || 1,
+          }};
           const visible = el => {{
             if (!el?.getBoundingClientRect) return false;
             const r = el.getBoundingClientRect(), s = getComputedStyle(el);
             return r.width >= 24 && r.height >= 24 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
           }};
-          const text = el => (el?.innerText || el?.textContent || '').trim().replace(/\\s+/g, ' ');
+          const text = el => (el?.innerText || el?.textContent || el?.getAttribute?.('aria-label') || '').trim().replace(/\\s+/g, ' ');
+          const rectOf = el => {{ const r=el.getBoundingClientRect(); return {{x:r.x,y:r.y,width:r.width,height:r.height}}; }};
+          const selectorFor = el => {{
+            if (!el || el.getRootNode?.() !== document) return '';
+            if (el.id) return '#' + CSS.escape(el.id);
+            const testId = el.getAttribute?.('data-testid');
+            if (testId) return '[data-testid="' + CSS.escape(testId) + '"]';
+            const name = el.getAttribute?.('name');
+            if (name) return `${{el.tagName.toLowerCase()}}[name="${{CSS.escape(name)}}"]`;
+            return '';
+          }};
+          const structuralKey = (el, index) => {{
+            const selector = selectorFor(el);
+            if (selector) return selector;
+            const id = el?.getAttribute?.('id') || '';
+            const testId = el?.getAttribute?.('data-testid') || '';
+            const aria = el?.getAttribute?.('aria-label') || '';
+            const role = el?.getAttribute?.('role') || '';
+            const cls = typeof el?.className === 'string' ? el.className.trim().split(/\\s+/).slice(0,4).join('.') : '';
+            return ['grid-tile',el?.tagName||'',id,testId,aria,role,cls,`slot:${{index}}`].join('|');
+          }};
           const bgUrl = el => {{
             if (!el || !visible(el)) return '';
             const bg = getComputedStyle(el).backgroundImage || '';
@@ -63,6 +92,11 @@ class GridSiteAdapter:
             const canvas = tile.matches?.('canvas') ? tile : tile.querySelector?.('canvas');
             if (canvas) return canvasSource(canvas);
             return bgUrl(tile);
+          }};
+          const semanticSignature = (tile, source) => {{
+            const img = tile?.matches?.('img') ? tile : tile?.querySelector?.('img');
+            const alt = img?.getAttribute?.('alt') || tile?.getAttribute?.('aria-label') || text(tile).slice(0,180);
+            return ['grid-tile',alt,source].join('|');
           }};
           const tileFor = visual => visual.closest?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i]') || visual;
           const visualsIn = root => {{
@@ -119,9 +153,21 @@ class GridSiteAdapter:
               const avgW = rects.reduce((a,r) => a+r.width,0)/count;
               const avgH = rects.reduce((a,r) => a+r.height,0)/count;
               const regular = rects.filter(r => Math.abs(r.width-avgW)<=Math.max(12,avgW*.35) && Math.abs(r.height-avgH)<=Math.max(12,avgH*.35)).length;
-              const clickable = group.tiles.filter(tile => Boolean(tile.matches?.('button,[role="button"],[tabindex],label') || tile.onclick)).length;
+              const clickableFlags = group.tiles.map(tile => Boolean(tile.matches?.('button,[role="button"],[tabindex],label') || tile.onclick));
+              const clickable = clickableFlags.filter(Boolean).length;
               const sources = group.tiles.map(sourceOf);
               const sourceCount = sources.filter(Boolean).length;
+              const rawMarks = group.tiles.map((tile,index) => ({{
+                role:'grid-tile',
+                visualBounds:rectOf(tile),
+                confidence:Math.max(0.58,Math.min(0.98,0.68 + (sources[index] ? 0.18 : 0) + (clickableFlags[index] ? 0.10 : 0))),
+                selector:selectorFor(tile),
+                structuralKey:structuralKey(tile,index),
+                semanticSignature:semanticSignature(tile,sources[index]),
+                source:sources[index],
+                label:text(tile).slice(0,160),
+                score:index,
+              }}));
               const instructionEl = instructionNear(root, group.root);
               const submitEl = overrides.submit
                 ? root.querySelector(overrides.submit)
@@ -137,11 +183,12 @@ class GridSiteAdapter:
                 kind:'image-grid', scope, score, rows, columns, tileCount:count,
                 instruction:text(instructionEl).slice(0,600), sources,
                 submitText:text(submitEl).slice(0,120), override:group.override,
+                rawMarks, viewport,
               }});
             }}
           }}
           candidates.sort((a,b) => b.score-a.score);
-          return candidates[0] || {{kind:'none',scope:'document',score:0,rows:0,columns:0,tileCount:0,instruction:'',sources:[],submitText:'',override:false}};
+          return candidates[0] || {{kind:'none',scope:'document',score:0,rows:0,columns:0,tileCount:0,instruction:'',sources:[],submitText:'',override:false,rawMarks:[],viewport}};
         }})()
         """
         try:
@@ -166,10 +213,26 @@ class GridSiteAdapter:
                 continue
             rows, columns = _GRID_SIZES[len(images)]
             sources = [self._element_image_source(img) for img in images]
+            scope = f"iframe:{frame_index}"
+            raw_marks = []
+            for index, image in enumerate(images):
+                alt = self._element_attribute(image, "alt")
+                identity = self._element_attribute(image, "id") or self._element_attribute(image, "data-testid") or f"slot:{index}"
+                raw_marks.append({
+                    "role": "grid-tile",
+                    "visualBounds": self._element_position(image),
+                    "confidence": 0.92 if sources[index] else 0.70,
+                    "structuralKey": f"img|{identity}",
+                    "semanticSignature": f"grid-tile|{alt}|{sources[index]}",
+                    "source": sources[index],
+                    "label": alt,
+                    "score": index,
+                })
+            marks = build_stable_marks(raw_marks, scope=scope, viewport={})
             score = 55 + (25 if all(sources) else 10)
             candidate = {
                 "kind": "image-grid",
-                "scope": f"iframe:{frame_index}",
+                "scope": scope,
                 "score": score,
                 "rows": rows,
                 "columns": columns,
@@ -178,6 +241,7 @@ class GridSiteAdapter:
                 "sources": sources,
                 "submitText": "",
                 "override": False,
+                "marks": marks,
             }
             if score > int(best.get("score") or 0):
                 best = candidate
@@ -189,7 +253,7 @@ class GridSiteAdapter:
             str(snapshot.get("scope") or ""),
             str(snapshot.get("tileCount") or 0),
             str(snapshot.get("instruction") or ""),
-            *(str(value) for value in snapshot.get("sources") or []),
+            stable_mark_digest(snapshot.get("marks") or []),
         ])
         signature = hashlib.sha256(signature_input.encode("utf-8", errors="ignore")).hexdigest()
         if signature != self._last_signature:
@@ -215,9 +279,15 @@ class GridSiteAdapter:
     def _normalize(value: Any, *, default_scope: str) -> Dict[str, Any]:
         if not isinstance(value, dict):
             return GridSiteAdapter._empty(default_scope)
+        scope = str(value.get("scope") or default_scope)
+        marks = build_stable_marks(
+            [dict(item) for item in value.get("rawMarks") or [] if isinstance(item, dict)],
+            scope=scope,
+            viewport=value.get("viewport") if isinstance(value.get("viewport"), dict) else {},
+        )
         return {
             "kind": str(value.get("kind") or "none"),
-            "scope": str(value.get("scope") or default_scope),
+            "scope": scope,
             "score": int(value.get("score") or 0),
             "rows": int(value.get("rows") or 0),
             "columns": int(value.get("columns") or 0),
@@ -226,18 +296,16 @@ class GridSiteAdapter:
             "sources": [str(item) for item in value.get("sources") or []],
             "submitText": str(value.get("submitText") or ""),
             "override": bool(value.get("override")),
+            "marks": marks,
         }
 
     @staticmethod
     def _empty(scope: str) -> Dict[str, Any]:
-        return {"kind":"none","scope":scope,"score":0,"rows":0,"columns":0,"tileCount":0,"instruction":"","sources":[],"submitText":"","override":False}
+        return {"kind":"none","scope":scope,"score":0,"rows":0,"columns":0,"tileCount":0,"instruction":"","sources":[],"submitText":"","override":False,"marks":[]}
 
     @staticmethod
     def _element_visible(element: Any) -> bool:
-        try:
-            position = element.get_position()
-        except Exception:
-            position = None
+        position = GridSiteAdapter._element_position(element)
         if isinstance(position, dict):
             try:
                 return float(position.get("width") or 0) >= 24 and float(position.get("height") or 0) >= 24
@@ -246,24 +314,34 @@ class GridSiteAdapter:
         return True
 
     @staticmethod
+    def _element_position(element: Any) -> Dict[str, Any] | None:
+        try:
+            position = element.get_position()
+        except Exception:
+            return None
+        return dict(position) if isinstance(position, dict) else None
+
+    @staticmethod
+    def _element_attribute(element: Any, name: str) -> str:
+        try:
+            value = element.get_attribute(name)
+        except Exception:
+            value = None
+        return str(value or "")
+
+    @staticmethod
     def _element_image_source(element: Any) -> str:
         for name in ("src", "currentSrc", "data-src"):
-            try:
-                value = element.get_attribute(name)
-            except Exception:
-                value = None
+            value = GridSiteAdapter._element_attribute(element, name)
             if value:
-                return str(value)
+                return value
         return ""
 
     @staticmethod
     def _frame_descriptor(frame: Any) -> str:
         parts: List[str] = []
         for name in ("title", "name", "id", "src"):
-            try:
-                value = frame.get_attribute(name)
-            except Exception:
-                value = None
+            value = GridSiteAdapter._element_attribute(frame, name)
             if value:
-                parts.append(str(value))
+                parts.append(value)
         return " ".join(parts)[:600]
