@@ -29,6 +29,17 @@ class SliderSiteAdapter:
             return r.width >= 18 && r.height >= 12 && s.display !== 'none' && s.visibility !== 'hidden';
           }};
           const text = el => (el?.innerText || el?.textContent || '').trim().replace(/\\s+/g, ' ');
+          const selectorFor = el => {{
+            if (!el || el.getRootNode?.() !== document) return '';
+            if (el.id) return '#' + CSS.escape(el.id);
+            const testId = el.getAttribute?.('data-testid');
+            if (testId) return '[data-testid="' + CSS.escape(testId) + '"]';
+            if (el.matches?.('input[type="range"]')) {{
+              const name = el.getAttribute('name');
+              return name ? 'input[type="range"][name="' + CSS.escape(name) + '"]' : 'input[type="range"]';
+            }}
+            return '';
+          }};
           const roots = [], seen = new Set();
           const walk = (root, scope) => {{
             if (!root || seen.has(root)) return;
@@ -42,15 +53,16 @@ class SliderSiteAdapter:
 
           const candidates = [];
           for (const [root, scope] of roots) {{
+            const scopedRoot = overrides.sliderRoot ? root.querySelector(overrides.sliderRoot) || root : root;
             let handles = [];
-            if (overrides.sliderHandle) handles = [...root.querySelectorAll(overrides.sliderHandle)].filter(visible);
-            if (!handles.length) handles = [...root.querySelectorAll('input[type="range"],[role="slider"],[aria-valuenow]')].filter(visible);
-            if (!handles.length) {{
-              handles = [...root.querySelectorAll('[class*="slider" i] [class*="thumb" i],[class*="slider" i] [class*="handle" i],[class*="drag" i] [class*="handle" i]')].filter(visible);
-            }}
+            if (overrides.sliderHandle) handles = [...scopedRoot.querySelectorAll(overrides.sliderHandle)].filter(visible);
+            if (!handles.length) handles = [...scopedRoot.querySelectorAll('input[type="range"],[role="slider"],[aria-valuenow]')].filter(visible);
+            if (!handles.length) handles = [...scopedRoot.querySelectorAll('[class*="slider" i] [class*="thumb" i],[class*="slider" i] [class*="handle" i],[class*="drag" i] [class*="handle" i]')].filter(visible);
 
             for (const handle of handles) {{
-              let track = overrides.sliderTrack ? root.querySelector(overrides.sliderTrack) : null;
+              const nativeRange = handle.matches('input[type="range"]');
+              let track = overrides.sliderTrack ? scopedRoot.querySelector(overrides.sliderTrack) : null;
+              if (!track && nativeRange) track = handle;
               if (!track) track = handle.closest('[role="slider"]')?.parentElement || handle.closest('[class*="slider" i],[class*="track" i],[class*="drag" i]') || handle.parentElement;
               if (!track || !visible(track)) continue;
               const h = handle.getBoundingClientRect(), t = track.getBoundingClientRect();
@@ -61,7 +73,7 @@ class SliderSiteAdapter:
               const span = Math.max(1, max - min);
               const fraction = Math.max(0, Math.min(1, (value - min) / span));
               const instruction = overrides.sliderInstruction
-                ? root.querySelector(overrides.sliderInstruction)
+                ? scopedRoot.querySelector(overrides.sliderInstruction)
                 : track.parentElement?.previousElementSibling || track.parentElement;
               let score = 45;
               if (handle.matches('input[type="range"],[role="slider"]')) score += 25;
@@ -75,12 +87,15 @@ class SliderSiteAdapter:
                 instruction:text(instruction).slice(0,600),
                 handleRect:{{x:h.x,y:h.y,width:h.width,height:h.height}},
                 trackRect:{{x:t.x,y:t.y,width:t.width,height:t.height}},
-                override:Boolean(overrides.sliderHandle || overrides.sliderTrack)
+                handleSelector: overrides.sliderHandle || selectorFor(handle),
+                trackSelector: overrides.sliderTrack || selectorFor(track),
+                nativeRange,
+                override:Boolean(overrides.sliderRoot || overrides.sliderHandle || overrides.sliderTrack)
               }});
             }}
           }}
           candidates.sort((a,b) => b.score-a.score);
-          return candidates[0] || {{kind:'none',scope:'document',score:0,orientation:'horizontal',fraction:0,min:0,max:0,value:0,instruction:'',handleRect:null,trackRect:null,override:false}};
+          return candidates[0] || {{kind:'none',scope:'document',score:0,orientation:'horizontal',fraction:0,min:0,max:0,value:0,instruction:'',handleRect:null,trackRect:null,handleSelector:'',trackSelector:'',nativeRange:false,override:false}};
         }})()
         """
         try:
@@ -131,9 +146,12 @@ class SliderSiteAdapter:
             "instruction": str(value.get("instruction") or ""),
             "handleRect": value.get("handleRect"),
             "trackRect": value.get("trackRect"),
+            "handleSelector": str(value.get("handleSelector") or ""),
+            "trackSelector": str(value.get("trackSelector") or ""),
+            "nativeRange": bool(value.get("nativeRange")),
             "override": bool(value.get("override")),
         }
 
     @staticmethod
     def _empty() -> Dict[str, Any]:
-        return {"kind": "none", "scope": "document", "score": 0, "orientation": "horizontal", "fraction": 0.0, "min": 0.0, "max": 0.0, "value": 0.0, "instruction": "", "handleRect": None, "trackRect": None, "override": False}
+        return {"kind": "none", "scope": "document", "score": 0, "orientation": "horizontal", "fraction": 0.0, "min": 0.0, "max": 0.0, "value": 0.0, "instruction": "", "handleRect": None, "trackRect": None, "handleSelector": "", "trackSelector": "", "nativeRange": False, "override": False}

@@ -3,20 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
 
 
 _GRID_SIZES = {9: (3, 3), 16: (4, 4)}
+_GRID_SIZES.update({4: (2, 2), 6: (2, 3), 8: (2, 4), 12: (3, 4), 20: (4, 5), 25: (5, 5)})
 
 
 class GridSiteAdapter:
-    """Read-only structural adapter for authorized image-grid test pages.
-
-    The adapter is domain-agnostic. It first tries optional selector overrides,
-    then generic DOM/open-shadow-root discovery, and finally SeleniumBase CDP
-    iframe element traversal. It returns one neutral snapshot consumed by later
-    demo/vision layers; it never clicks, submits, or invokes solver behavior.
-    """
+    """Read-only, domain-agnostic structural adapter for visual test grids."""
 
     def __init__(self, seleniumbase_cdp: Any, *, overrides: Dict[str, str] | None = None) -> None:
         self._sb = seleniumbase_cdp
@@ -41,61 +36,78 @@ class GridSiteAdapter:
 
     def _snapshot_document(self) -> Dict[str, Any]:
         overrides = json.dumps(self._overrides)
+        grid_sizes = json.dumps({str(k): list(v) for k, v in _GRID_SIZES.items()})
         script = f"""
         (() => {{
           const overrides = {overrides};
-          const GRID = new Map([[9, [3, 3]], [16, [4, 4]]]);
-          const visible = (el) => {{
-            if (!el || !el.getBoundingClientRect) return false;
-            const r = el.getBoundingClientRect();
-            const s = getComputedStyle(el);
-            return r.width >= 24 && r.height >= 24 && s.display !== 'none' && s.visibility !== 'hidden';
+          const GRID = new Map(Object.entries({grid_sizes}).map(([k,v]) => [Number(k), v]));
+          const visible = el => {{
+            if (!el?.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+            return r.width >= 24 && r.height >= 24 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
           }};
-          const text = (el) => (el && (el.innerText || el.textContent) || '').trim().replace(/\\s+/g, ' ');
-          const imgSource = (tile) => {{
-            const img = tile && tile.matches && tile.matches('img') ? tile : tile && tile.querySelector && tile.querySelector('img');
-            if (img) return img.currentSrc || img.src || img.getAttribute('src') || '';
-            if (!tile || !getComputedStyle) return '';
-            const bg = getComputedStyle(tile).backgroundImage || '';
-            return bg === 'none' ? '' : bg;
+          const text = el => (el?.innerText || el?.textContent || '').trim().replace(/\\s+/g, ' ');
+          const bgUrl = el => {{
+            if (!el || !visible(el)) return '';
+            const bg = getComputedStyle(el).backgroundImage || '';
+            const match = bg.match(/url\\(["']?(.*?)["']?\\)/i);
+            return match?.[1] || '';
           }};
-          const roots = [];
-          const seen = new Set();
+          const canvasSource = canvas => {{
+            try {{ return canvas?.toDataURL?.('image/png') || ''; }} catch (_) {{ return ''; }}
+          }};
+          const sourceOf = tile => {{
+            if (!tile) return '';
+            const img = tile.matches?.('img') ? tile : tile.querySelector?.('img');
+            if (img) return img.currentSrc || img.src || img.getAttribute('src') || img.getAttribute('data-src') || '';
+            const canvas = tile.matches?.('canvas') ? tile : tile.querySelector?.('canvas');
+            if (canvas) return canvasSource(canvas);
+            return bgUrl(tile);
+          }};
+          const tileFor = visual => visual.closest?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i]') || visual;
+          const visualsIn = root => {{
+            const items = [...(root.querySelectorAll?.('img,canvas') || [])].filter(visible);
+            const bgCandidates = [...(root.querySelectorAll?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i],[class*="image" i]') || [])]
+              .filter(el => visible(el) && bgUrl(el));
+            return [...new Set([...items, ...bgCandidates])];
+          }};
+          const roots = [], seen = new Set();
           const walkRoot = (root, label) => {{
             if (!root || seen.has(root)) return;
             seen.add(root); roots.push([root, label]);
-            const all = root.querySelectorAll ? [...root.querySelectorAll('*')] : [];
-            for (const el of all) if (el.shadowRoot) walkRoot(el.shadowRoot, label + '/shadow');
-            for (const frame of root.querySelectorAll ? [...root.querySelectorAll('iframe')] : []) {{
+            for (const el of root.querySelectorAll?.('*') || []) if (el.shadowRoot) walkRoot(el.shadowRoot, label + '/shadow');
+            for (const frame of root.querySelectorAll?.('iframe') || []) {{
               try {{ if (frame.contentDocument) walkRoot(frame.contentDocument, label + '/iframe'); }} catch (_) {{}}
             }}
           }};
+          const instructionNear = (root, groupRoot) => {{
+            if (overrides.instruction) return root.querySelector(overrides.instruction);
+            if (groupRoot?.previousElementSibling) return groupRoot.previousElementSibling;
+            const parent = groupRoot?.parentElement;
+            if (!parent) return null;
+            const choices = [...parent.querySelectorAll('h1,h2,h3,h4,p,[class*="instruction" i],[class*="prompt" i],[class*="question" i]')].filter(visible);
+            return choices.find(el => el.compareDocumentPosition(groupRoot) & Node.DOCUMENT_POSITION_FOLLOWING) || choices[0] || null;
+          }};
           walkRoot(document, 'document');
-
-          const resolveOverride = (root, key) => overrides[key] && root.querySelector ? root.querySelector(overrides[key]) : null;
-          const resolveOverrideAll = (root, key) => overrides[key] && root.querySelectorAll ? [...root.querySelectorAll(overrides[key])] : [];
 
           const candidates = [];
           for (const [root, scope] of roots) {{
-            let groups = [];
+            const groups = [];
             if (overrides.tiles) {{
-              const tiles = resolveOverrideAll(root, 'tiles').filter(visible);
-              if (GRID.has(tiles.length)) groups.push({{root: resolveOverride(root, 'root') || root, tiles, override: true}});
+              const tiles = [...root.querySelectorAll(overrides.tiles)].filter(visible);
+              if (GRID.has(tiles.length)) groups.push({{root: overrides.root ? root.querySelector(overrides.root) || root : root, tiles, override:true}});
             }}
+
             if (!groups.length) {{
               const parents = new Set();
-              const images = root.querySelectorAll ? [...root.querySelectorAll('img')].filter(visible) : [];
-              for (const img of images) {{
-                let node = img;
-                for (let depth = 0; node && depth < 5; depth++, node = node.parentElement) {{
-                  if (node.parentElement) parents.add(node.parentElement);
-                }}
+              for (const visual of visualsIn(root)) {{
+                let node = tileFor(visual);
+                for (let depth=0; node && depth<5; depth++, node=node.parentElement) if (node.parentElement) parents.add(node.parentElement);
               }}
               for (const parent of parents) {{
-                const descendants = [...parent.querySelectorAll('img')].filter(visible);
-                if (!GRID.has(descendants.length)) continue;
-                const tiles = descendants.map((img) => img.closest('button,[role="button"],[tabindex],label,li,div') || img);
-                groups.push({{root: parent, tiles, override: false}});
+                const tiles = [...new Set(visualsIn(parent).map(tileFor))].filter(visible);
+                if (!GRID.has(tiles.length)) continue;
+                groups.push({{root:parent, tiles, override:false}});
               }}
             }}
 
@@ -103,33 +115,33 @@ class GridSiteAdapter:
               const count = group.tiles.length;
               if (!GRID.has(count)) continue;
               const [rows, columns] = GRID.get(count);
-              const rects = group.tiles.map((tile) => tile.getBoundingClientRect());
-              const avgW = rects.reduce((a, r) => a + r.width, 0) / count;
-              const avgH = rects.reduce((a, r) => a + r.height, 0) / count;
-              const regular = rects.filter((r) => Math.abs(r.width-avgW) <= Math.max(12, avgW*.35) && Math.abs(r.height-avgH) <= Math.max(12, avgH*.35)).length;
-              const clickable = group.tiles.filter((tile) => tile.matches && tile.matches('button,[role="button"],[tabindex],label') || tile.onclick).length;
-              const sources = group.tiles.map(imgSource);
+              const rects = group.tiles.map(tile => tile.getBoundingClientRect());
+              const avgW = rects.reduce((a,r) => a+r.width,0)/count;
+              const avgH = rects.reduce((a,r) => a+r.height,0)/count;
+              const regular = rects.filter(r => Math.abs(r.width-avgW)<=Math.max(12,avgW*.35) && Math.abs(r.height-avgH)<=Math.max(12,avgH*.35)).length;
+              const clickable = group.tiles.filter(tile => Boolean(tile.matches?.('button,[role="button"],[tabindex],label') || tile.onclick)).length;
+              const sources = group.tiles.map(sourceOf);
               const sourceCount = sources.filter(Boolean).length;
-              const instructionEl = resolveOverride(root, 'instruction') || group.root.previousElementSibling || group.root.parentElement;
-              const submitEl = resolveOverride(root, 'submit') || [...(group.root.parentElement?.querySelectorAll('button,input[type="submit"],[role="button"]') || [])].find(visible) || null;
+              const instructionEl = instructionNear(root, group.root);
+              const submitEl = overrides.submit
+                ? root.querySelector(overrides.submit)
+                : [...(group.root.parentElement?.querySelectorAll('button[type="submit"],input[type="submit"],button,[role="button"]') || [])].find(el => visible(el) && !group.tiles.includes(el)) || null;
               let score = 40;
-              score += sourceCount === count ? 25 : Math.round(15 * sourceCount / count);
-              score += Math.round(15 * regular / count);
-              score += Math.round(10 * clickable / count);
+              score += sourceCount === count ? 25 : Math.round(15*sourceCount/count);
+              score += Math.round(15*regular/count);
+              score += Math.round(10*clickable/count);
               if (group.override) score += 20;
               if (submitEl) score += 5;
               if (text(instructionEl)) score += 5;
               candidates.push({{
-                kind: 'image-grid', scope, score, rows, columns, tileCount: count,
-                instruction: text(instructionEl).slice(0, 600),
-                sources,
-                submitText: text(submitEl).slice(0, 120),
-                override: group.override,
+                kind:'image-grid', scope, score, rows, columns, tileCount:count,
+                instruction:text(instructionEl).slice(0,600), sources,
+                submitText:text(submitEl).slice(0,120), override:group.override,
               }});
             }}
           }}
           candidates.sort((a,b) => b.score-a.score);
-          return candidates[0] || {{kind:'none', scope:'document', score:0, rows:0, columns:0, tileCount:0, instruction:'', sources:[], submitText:'', override:false}};
+          return candidates[0] || {{kind:'none',scope:'document',score:0,rows:0,columns:0,tileCount:0,instruction:'',sources:[],submitText:'',override:false}};
         }})()
         """
         try:
@@ -172,15 +184,13 @@ class GridSiteAdapter:
         return best
 
     def _with_generation(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
-        signature_input = "|".join(
-            [
-                str(snapshot.get("kind") or "none"),
-                str(snapshot.get("scope") or ""),
-                str(snapshot.get("tileCount") or 0),
-                str(snapshot.get("instruction") or ""),
-                *(str(value) for value in snapshot.get("sources") or []),
-            ]
-        )
+        signature_input = "|".join([
+            str(snapshot.get("kind") or "none"),
+            str(snapshot.get("scope") or ""),
+            str(snapshot.get("tileCount") or 0),
+            str(snapshot.get("instruction") or ""),
+            *(str(value) for value in snapshot.get("sources") or []),
+        ])
         signature = hashlib.sha256(signature_input.encode("utf-8", errors="ignore")).hexdigest()
         if signature != self._last_signature:
             self._generation += 1
@@ -205,7 +215,6 @@ class GridSiteAdapter:
     def _normalize(value: Any, *, default_scope: str) -> Dict[str, Any]:
         if not isinstance(value, dict):
             return GridSiteAdapter._empty(default_scope)
-        sources = [str(item) for item in value.get("sources") or []]
         return {
             "kind": str(value.get("kind") or "none"),
             "scope": str(value.get("scope") or default_scope),
@@ -214,14 +223,14 @@ class GridSiteAdapter:
             "columns": int(value.get("columns") or 0),
             "tileCount": int(value.get("tileCount") or 0),
             "instruction": str(value.get("instruction") or ""),
-            "sources": sources,
+            "sources": [str(item) for item in value.get("sources") or []],
             "submitText": str(value.get("submitText") or ""),
             "override": bool(value.get("override")),
         }
 
     @staticmethod
     def _empty(scope: str) -> Dict[str, Any]:
-        return {"kind": "none", "scope": scope, "score": 0, "rows": 0, "columns": 0, "tileCount": 0, "instruction": "", "sources": [], "submitText": "", "override": False}
+        return {"kind":"none","scope":scope,"score":0,"rows":0,"columns":0,"tileCount":0,"instruction":"","sources":[],"submitText":"","override":False}
 
     @staticmethod
     def _element_visible(element: Any) -> bool:
