@@ -37,6 +37,9 @@ jobs:
           python/seleniumbase_cdp/interaction_trace.py
           python/seleniumbase_cdp/interaction_outcome.py
           python/seleniumbase_cdp/interaction_orchestrator.py
+          python/seleniumbase_cdp/interaction_policy.py
+          python/seleniumbase_cdp/page_observation_watchdog.py
+          python/seleniumbase_cdp/observation_capture.py
           python/seleniumbase_cdp/visual_event_trigger.py
           python/seleniumbase_cdp/extended_grid_site_adapter.py
           python/seleniumbase_cdp/proximity_grid_action_executor.py
@@ -47,6 +50,7 @@ jobs:
           python/seleniumbase_cdp/site_grid_adapter.py
           python/seleniumbase_cdp/site_slider_adapter.py
           python/seleniumbase_cdp/slider_action_executor.py
+          python/seleniumbase_cdp/seleniumbase_adapter.py
 
       - name: Verify stable visual marks contract
         run: python python/seleniumbase_cdp/stable_marks_probe.py
@@ -65,6 +69,9 @@ jobs:
 
       - name: Verify structural visual event trigger policy
         run: python python/seleniumbase_cdp/visual_event_trigger_probe.py
+
+      - name: Verify event-driven observation policy
+        run: python python/seleniumbase_cdp/observation_policy_probe.py
 
       - name: Verify larger visual grid readiness
         run: python python/seleniumbase_cdp/test_readiness_grid_probe.py
