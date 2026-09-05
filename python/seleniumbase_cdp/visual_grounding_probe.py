@@ -4,6 +4,7 @@ import math
 
 from cursor_path_provider import CursorPathProvider
 from slider_target_grounder import SliderTargetGrounder
+from stable_marks import build_stable_marks
 
 
 class FakeImage:
@@ -37,6 +38,40 @@ class NoScreenshotSb:
 
 
 def main() -> int:
+    first_mark = build_stable_marks([
+        {
+            "role": "slider-target",
+            "structuralKey": "#target-zone",
+            "semanticSignature": "target|grey|goal",
+            "visualBounds": {"x": 200, "y": 40, "width": 24, "height": 18},
+            "confidence": 0.91,
+        }
+    ], scope="document", viewport={"width": 1280, "height": 720}, observed_at=100.0)[0]
+    shifted_mark = build_stable_marks([
+        {
+            "role": "slider-target",
+            "structuralKey": "#target-zone",
+            "semanticSignature": "target|grey|goal",
+            "visualBounds": {"x": 228, "y": 52, "width": 24, "height": 18},
+            "confidence": 0.91,
+        }
+    ], scope="document", viewport={"width": 1365, "height": 768}, observed_at=101.0)[0]
+    changed_visual = build_stable_marks([
+        {
+            "role": "slider-target",
+            "structuralKey": "#target-zone",
+            "semanticSignature": "target|blue|goal",
+            "visualBounds": {"x": 228, "y": 52, "width": 24, "height": 18},
+            "confidence": 0.91,
+        }
+    ], scope="document", viewport={"width": 1365, "height": 768}, observed_at=102.0)[0]
+    assert first_mark["markId"] == shifted_mark["markId"] == changed_visual["markId"]
+    assert first_mark["semanticVisualSignature"] == shifted_mark["semanticVisualSignature"]
+    assert changed_visual["semanticVisualSignature"] != shifted_mark["semanticVisualSignature"]
+    assert first_mark["visualBounds"] != shifted_mark["visualBounds"]
+    assert shifted_mark["frameViewport"]["viewport"]["width"] == 1365.0
+    assert shifted_mark["observedAt"] == 101.0
+
     grounder = SliderTargetGrounder(NoScreenshotSb())
 
     percent = grounder.ground({
@@ -56,12 +91,12 @@ def main() -> int:
         "min": 0,
         "max": 100,
         "targetCandidates": [
-            {"markId": "S3", "fraction": 0.71, "score": 82, "label": "Ziel", "rect": {"x": 210, "y": 40, "width": 12, "height": 20}}
+            {"markId": first_mark["markId"], "fraction": 0.71, "score": 82, "label": "Ziel", "rect": first_mark["visualBounds"]}
         ],
     })
     assert dom["grounded"] is True
     assert abs(dom["targetFraction"] - 0.71) < 0.001
-    assert dom["source"] == "dom-target" and dom["markId"] == "S3"
+    assert dom["source"] == "dom-target" and dom["markId"] == first_mark["markId"]
 
     image = FakeImage(240, 28)
     image.fill_rect(150, 8, 174, 20, (166, 166, 166))
