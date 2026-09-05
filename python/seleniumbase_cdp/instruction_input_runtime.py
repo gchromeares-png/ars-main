@@ -54,8 +54,9 @@ return {
 
         page_text = str(observation.get("pageText") or "")
         patterns = [
-            r"(?:enter|type|input|write|gib|tippe|trage)\s+(?:in\s+)?(?:the\s+)?(?:text|value|number|zahl|wert)?\s*[:\-]?\s*[\"'„“]?([A-Za-z0-9][A-Za-z0-9 _.,:+\-/]{0,80})[\"'„“]?",
-            r"(?:value|wert|number|zahl)\s*[:=]\s*[\"'„“]?([A-Za-z0-9][A-Za-z0-9 _.,:+\-/]{0,80})[\"'„“]?",
+            r"\b(?:gib|trage)\s+[\"'„“]?([A-Za-z0-9][A-Za-z0-9 _.,:+\-/]{0,80}?)[\"'„“]?\s+ein\b",
+            r"\b(?:enter|type|input|write|tippe)\s+(?:in\s+)?(?:the\s+)?(?:text|value|number|zahl|wert)?\s*[:\-]?\s*[\"'„“]?([A-Za-z0-9][A-Za-z0-9 _.,:+\-/]{0,80}?)[\"'„“]?(?=\s*(?:[.!?]|$))",
+            r"\b(?:value|wert|number|zahl)\s*[:=]\s*[\"'„“]?([A-Za-z0-9][A-Za-z0-9 _.,:+\-/]{0,80}?)[\"'„“]?(?=\s*(?:[.!?]|$))",
         ]
         value = ""
         for pattern in patterns:
