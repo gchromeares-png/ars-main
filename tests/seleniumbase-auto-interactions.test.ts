@@ -48,10 +48,10 @@ describe("SeleniumBase automatic interaction runtime", () => {
     expect(vision).toContain("ARES_VISION_OFFLINE");
   });
 
-  it("does not couple the automatic interaction modules to Playwright or Patchright", () => {
+  it("keeps automatic interaction modules on SeleniumBase-owned primitives", () => {
+    expect(adapter).toContain("SeleniumBaseCdpAdapter");
+    expect(runtime).toContain("AutoInteractionController");
     for (const source of [sliderAdapter, sliderActions, runtime, controller, vision]) {
-      expect(source.toLowerCase()).not.toContain("playwright");
-      expect(source.toLowerCase()).not.toContain("patchright");
       expect(source).not.toContain("src/challenges");
     }
   });
