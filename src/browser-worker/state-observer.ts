@@ -1,4 +1,4 @@
-import type { Locator } from "patchright";
+import type { Locator } from "./types";
 import type { InteractionBox, InteractionTargetState } from "./interaction-models";
 
 function sameBox(a: InteractionBox | undefined, b: InteractionBox | undefined, tolerance = 1): boolean {
