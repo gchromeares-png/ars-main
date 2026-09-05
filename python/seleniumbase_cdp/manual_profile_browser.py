@@ -197,6 +197,10 @@ def _start(command: Dict[str, Any]) -> int:
             adapter.goto(start_url)
             last_url = _remember_last_url(profile_dir, adapter, last_url)
 
+        auto_state = adapter.auto_interaction_state()
+        capture_state = auto_state.get("capture") if isinstance(auto_state, dict) else {}
+        debug_root = str((capture_state or {}).get("root") or (profile_dir / ".ares-observations"))
+
         _emit({
             "type": "ready",
             "requestId": request_id,
@@ -210,6 +214,7 @@ def _start(command: Dict[str, Any]) -> int:
             "autoInteractionsEnabled": True,
             "semanticInteractionsEnabled": True,
             "outcomeVerificationEnabled": True,
+            "debugCaptureRoot": debug_root,
         })
 
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
@@ -220,6 +225,21 @@ def _start(command: Dict[str, Any]) -> int:
             if not adapter.is_running():
                 _emit({"type": "browser-closed", "profileId": profile_id})
                 break
+
+            # Keep the existing observation/visual-interaction pipeline alive
+            # while the user is browsing manually. Without this, a challenge
+            # that appears after SeleniumBase clicks the initial checkbox is
+            # never re-observed, so no grid capture or grid action can run.
+            try:
+                adapter._poll_observation_watchdog()
+            except Exception as exc:
+                _emit({
+                    "type": "debug",
+                    "profileId": profile_id,
+                    "event": "observation-poll-error",
+                    "error": str(exc),
+                    "debugCaptureRoot": debug_root,
+                })
 
             now = time.monotonic()
             if now >= next_url_capture:
@@ -284,7 +304,7 @@ def _start(command: Dict[str, Any]) -> int:
                     result = adapter.apply_slider(target)
                     _emit({"type": "slider-applied", "requestId": next_request_id, "profileId": profile_id, **result}); continue
                 if command_type == "status":
-                    _emit({"type": "status", "requestId": next_request_id, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True, "gridActionsEnabled": True, "sliderActionsEnabled": True, "autoInteractionsEnabled": True, "semanticInteractionsEnabled": True, "outcomeVerificationEnabled": True}); continue
+                    _emit({"type": "status", "requestId": next_request_id, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True, "gridActionsEnabled": True, "sliderActionsEnabled": True, "autoInteractionsEnabled": True, "semanticInteractionsEnabled": True, "outcomeVerificationEnabled": True, "debugCaptureRoot": debug_root}); continue
                 raise ValueError(f"Unsupported SeleniumBase command: {command_type!r}")
             except Exception as exc:
                 _emit({"type": "error", "requestId": next_request_id, "profileId": profile_id, "errorType": type(exc).__name__, "error": str(exc)})
