@@ -181,9 +181,9 @@ export class LiveChallengeDetector {
 
     // 2. Fallback über HTML Content
     let html = "";
-    if (typeof page.content === "function") {
+    if (typeof page["content"] === "function") {
       try {
-        const contentVal = await page.content();
+        const contentVal = await page["content"]();
         if (typeof contentVal === "string") {
           html = contentVal;
         }
