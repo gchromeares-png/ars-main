@@ -40,6 +40,8 @@ export interface BrowserFrameLocator {
 
 export interface BrowserPage extends BrowserFrame {
   [key: string]: any;
+  $(selector: string): Promise<BrowserLocator | null>;
+  content(): Promise<string>;
   goto(url: string, options?: Record<string, unknown>): Promise<any>;
   url(): string;
   title(): Promise<string>;

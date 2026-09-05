@@ -30,7 +30,10 @@ describe("SeleniumBase interaction hardening", () => {
 
   it("keeps grid and slider execution on SeleniumBase-owned action paths", () => {
     expect(sliderActions).toContain('mode = "seleniumbase-native"');
-    expect(gridActions).toContain("selected_indexes");
-    expect(gridActions).toContain("self.adapter");
+    expect(gridActions).toContain("class AuthorizedGridActionExecutor");
+    expect(gridActions).toContain("selected = self._indexes(");
+    expect(gridActions).toContain("return self._apply_state(state, selected, submit=submit)");
+    expect(gridActions).toContain('getattr(images[index], "mouse_click"');
+    expect(gridActions).not.toContain("pyautogui");
   });
 });

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -97,6 +98,33 @@ class SeleniumBaseCdpAdapter:
             driver = driver.cdp_base
         pid = getattr(driver, "_process_pid", None)
         return int(pid) if isinstance(pid, int) and pid > 0 else None
+
+    def _profile_browser_pids(self) -> List[int]:
+        """Find browser owners for this exact user-data-dir without trusting wrapper PIDs."""
+        target = os.path.normcase(str(self.profile_dir))
+        matches: List[int] = []
+        for process in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                command_line = [str(value) for value in (process.info.get("cmdline") or [])]
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                continue
+            for index, argument in enumerate(command_line):
+                profile_value = ""
+                if argument.startswith("--user-data-dir="):
+                    profile_value = argument.split("=", 1)[1]
+                elif argument == "--user-data-dir" and index + 1 < len(command_line):
+                    profile_value = command_line[index + 1]
+                if not profile_value:
+                    continue
+                clean = profile_value.strip().strip('"')
+                try:
+                    candidate = os.path.normcase(str(Path(clean).expanduser().resolve()))
+                except (OSError, RuntimeError):
+                    candidate = os.path.normcase(os.path.abspath(os.path.expanduser(clean)))
+                if candidate == target:
+                    matches.append(int(process.pid))
+                    break
+        return matches
 
     def goto(self, url: str) -> None:
         self._sb.goto(url)
@@ -297,18 +325,40 @@ class SeleniumBaseCdpAdapter:
         if self._closed:
             return
         self._closed = True
+        browser_pids = self._profile_browser_pids()
         chrome_pid = self.chrome_pid
+        if chrome_pid and chrome_pid not in browser_pids:
+            browser_pids.insert(0, chrome_pid)
+        # Force a final cookie-store round trip before asking Chromium to shut down.
+        # This does not persist cookie payloads outside the browser profile.
+        try:
+            self._sb.get_all_cookies()
+        except Exception:
+            pass
         self._sb.quit()
-        self._wait_for_profile_flush(chrome_pid)
+        self._wait_for_profile_flush(browser_pids)
 
     @staticmethod
-    def _wait_for_profile_flush(chrome_pid: int | None) -> None:
-        if chrome_pid:
+    def _wait_for_profile_flush(browser_pids: Iterable[int]) -> None:
+        pids = list(dict.fromkeys(int(pid) for pid in browser_pids if isinstance(pid, int) and pid > 0))
+        if not pids:
+            # Pure-CDP can omit a wrapper PID. In that case prefer a conservative
+            # profile settle window over releasing the lease immediately.
+            time.sleep(1.0)
+            return
+
+        deadline = time.monotonic() + 5.0
+        for pid in pids:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                psutil.Process(chrome_pid).wait(timeout=5.0)
-            except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                psutil.Process(pid).wait(timeout=remaining)
+            except psutil.NoSuchProcess:
                 pass
-        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
+            except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.Error):
+                continue
+        time.sleep(0.25)
 
     @staticmethod
     def _cookie_param(cookie: Dict[str, Any]) -> mycdp.network.CookieParam:

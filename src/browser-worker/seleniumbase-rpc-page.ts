@@ -134,6 +134,8 @@ export class SeleniumBaseRpcPage implements Page {
   };
   constructor(private readonly transport: SeleniumBaseRpcTransport) { if (!transport.isReady) throw new Error("Cannot create SeleniumBase page before worker READY."); }
   locator(selector: string): Locator { return new SeleniumBaseRpcLocator(this, { selector }); }
+  async $(selector: string): Promise<Locator | null> { const locator=this.locator(selector).first(); return (await locator.count()) > 0 ? locator : null; }
+  async content(): Promise<string> { return String(await this.evaluate(() => document.documentElement ? document.documentElement.outerHTML : "")); }
   getByRole(role: string, options: { name?: string | RegExp } = {}): Locator { return new SeleniumBaseRpcLocator(this, { selector:roleSelector(role), hasText:serializePattern(options.name) }); }
   frameLocator(selector: string): FrameLocator { return new SeleniumBaseRpcFrame(this, [selector]); }
   mainFrame(): Frame { return new SeleniumBaseRpcFrame(this, []); }

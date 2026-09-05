@@ -12,12 +12,21 @@ describe("SeleniumBase automatic interaction runtime", () => {
   const vision = read("python/seleniumbase_cdp/vision_grid_classifier.py");
   const worker = read("python/seleniumbase_cdp/manual_profile_browser.py");
 
-  it("keeps grid and slider auto interactions enabled by default", () => {
+  it("keeps grid and slider auto interactions enabled without blocking task RPC liveness", () => {
     expect(adapter).toContain("self._visual_interactions = VisualInteractionRuntime(");
     expect(adapter).toContain("self._poll_observation_watchdog(force=True)");
-    expect(adapter).toContain("self._poll_observation_watchdog()");
+    expect(adapter).toContain("def _poll_observation_watchdog(");
     expect(adapter).toContain("self._visual_interactions.poll_and_act()");
     expect(adapter).not.toContain("self._poll_auto_interactions(");
+
+    const livenessStart = adapter.indexOf("def is_running(self) -> bool:");
+    const watchdogStart = adapter.indexOf("def _poll_observation_watchdog", livenessStart);
+    expect(livenessStart).toBeGreaterThanOrEqual(0);
+    expect(watchdogStart).toBeGreaterThan(livenessStart);
+    const liveness = adapter.slice(livenessStart, watchdogStart);
+    expect(liveness).not.toContain("_poll_observation_watchdog");
+    expect(liveness).not.toContain("_challenge_tracker.poll");
+
     expect(runtime).toContain("AutoInteractionController(");
     expect(worker).toContain('\"autoInteractionsEnabled\": True');
     expect(worker).toContain('\"sliderActionsEnabled\": True');
