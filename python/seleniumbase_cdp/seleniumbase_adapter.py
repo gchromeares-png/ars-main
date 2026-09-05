@@ -225,15 +225,32 @@ class SeleniumBaseCdpAdapter:
         params = [self._cookie_param(dict(cookie)) for cookie in cookies]
         if not params:
             return 0
-        self._sb.set_all_cookies(params)
+
+        driver = getattr(self._sb, "driver", None)
+        if driver is not None and hasattr(driver, "cdp_base"):
+            driver = driver.cdp_base
+        send = getattr(getattr(driver, "connection", None), "send", None)
+        if callable(send):
+            loop = self._sb.get_event_loop()
+            loop.run_until_complete(send(mycdp.storage.set_cookies(params)))
+            # Startup cookie injection happens before the first target-domain
+            # navigation. Use the browser-scoped Storage domain for readback too,
+            # avoiding the not-yet-stable first tab connection on fresh Windows
+            # CDP sessions while preserving pre-navigation cookie semantics.
+            try:
+                loop.run_until_complete(send(mycdp.storage.get_cookies()))
+            except Exception:
+                pass
+        else:
+            self._sb.set_all_cookies(params)
+            try:
+                self._sb.get_all_cookies()
+            except Exception:
+                pass
+
         # CDP-injected persistent cookies can become request-visible before
-        # Chromium commits them to the profile cookie database. Force a browser
-        # readback and give Windows a short settle window before an immediate
-        # clean close/reopen of the same SeleniumBase profile.
-        try:
-            self._sb.get_all_cookies()
-        except Exception:
-            pass
+        # Chromium commits them to the profile cookie database. Give Windows a
+        # short settle window before an immediate clean close/reopen.
         if sys.platform.startswith("win"):
             time.sleep(1.0)
         return len(params)
