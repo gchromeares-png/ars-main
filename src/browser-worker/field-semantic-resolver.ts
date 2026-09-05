@@ -230,6 +230,8 @@ export class FieldSemanticResolver {
   private readonly provider?: SemanticEmbeddingProvider;
 
   constructor(provider?: SemanticEmbeddingProvider) {
+    // The production checkout path used to inject Ollama explicitly. Keep that
+    // legacy construction source-compatible while disabling it at runtime.
     this.provider = provider instanceof OllamaEmbeddingProvider ? undefined : provider;
   }
 
@@ -254,6 +256,9 @@ export class FieldSemanticResolver {
       const intent = lexicalIntent ?? { value: "unknown" as FieldIntent, confidence: 0, source: "unknown" as const };
       const context = lexicalContext ?? { value: "unknown" as AddressContext, confidence: 0, source: "unknown" as const };
 
+      // Intent is the required dimension for checkout value mapping. An unknown
+      // shipping/billing context is valid and maps to the profile's default
+      // address, so it must never trigger an embedding/LLM call by itself.
       if (intent.value !== "unknown") {
         const resolution = this.toResolution(intent, context);
         this.cache.set(key, resolution);
@@ -341,11 +346,17 @@ export class FieldSemanticResolver {
       ?? match(/\b(stadt|wohnort|lieferort|gemeinde|city|town|locality)\b/i, "city")
       ?? match(/\b(land|l[aä]ndercode|country(?:[ _-]?code|[ _-]?name)?)\b/i, "countryCode", 0.94)
       ?? match(/\b(telefon(?:nummer)?|mobil(?:nummer)?|rufnummer|phone|mobile|tel)\b/i, "phone")
-      ?? undefined;
+      ?? match(/\b(stra(?:ß|ss)e|street|road|avenue)\b/i, "street", 0.92);
   }
 
   private hasStrongBareNumberContext(field: FieldDescriptor): boolean {
-    const metadata = normalizeLower([field.label, field.ariaLabel, field.placeholder, field.name, field.id].filter(Boolean).join(" "));
+    const metadata = normalizeLower([
+      field.name,
+      field.id,
+      field.autocomplete,
+      field.placeholder,
+      field.ariaLabel
+    ].filter(Boolean).join(" ")).replace(/[^a-z0-9äöüß]+/gi, " ");
     if (/\b(?:house|street)\s*(?:number|no|nr)\b|\bhaus\s*(?:nummer|nr)\b/i.test(metadata)) return true;
 
     const nearby = normalizeLower(field.nearbyText).replace(/[^a-z0-9äöüß]+/gi, " ");
@@ -479,7 +490,7 @@ export class FieldSemanticResolver {
       field.name,
       field.id,
       field.autocomplete
-    ].filter(Boolean).join(" | ")).replace(/_/g, " ");
+    ].filter(Boolean).join(" | "));
   }
 
   private toSemanticText(field: FieldDescriptor): string {
@@ -507,24 +518,20 @@ export async function collectFieldDescriptors(page: Page): Promise<FieldDescript
       ? Array.from(element.labels).map(label => label.textContent || "").join(" ")
       : "";
     const labelledBy = element.getAttribute("aria-labelledby") || "";
-    const ariaLabelledText = labelledBy
-      ? labelledBy.split(/\s+/).map(id => document.getElementById(id)?.textContent || "").join(" ")
-      : "";
-    const parentText = element.parentElement?.textContent || "";
-    const grandParentText = element.parentElement?.parentElement?.textContent || "";
-    const nearbyText = [parentText, grandParentText].join(" ").replace(/\s+/g, " ").trim().slice(0, 500);
-
+    const ariaText = labelledBy.split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.textContent || "").join(" ");
+    const closestLabel = element.closest("label")?.textContent || "";
+    const parentText = element.parentElement?.innerText || "";
     return {
       index,
       tagName: element.tagName.toLowerCase(),
-      inputType: element instanceof HTMLInputElement ? (element.type || "text").toLowerCase() : "",
+      inputType: element instanceof HTMLInputElement ? (element.type || "text") : element.tagName.toLowerCase(),
       name: element.getAttribute("name") || "",
       id: element.id || "",
       autocomplete: element.getAttribute("autocomplete") || "",
       placeholder: element.getAttribute("placeholder") || "",
-      ariaLabel: element.getAttribute("aria-label") || ariaLabelledText,
-      label: labels,
-      nearbyText
+      ariaLabel: [element.getAttribute("aria-label") || "", ariaText].join(" ").trim(),
+      label: [labels, closestLabel].join(" ").trim(),
+      nearbyText: parentText.replace(/\s+/g, " ").trim().slice(0, 240)
     };
   }));
 }
