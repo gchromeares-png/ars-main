@@ -125,7 +125,20 @@ if (action === 'inner-text') return String(el.innerText ?? el.textContent ?? '')
 if (action === 'bounding-box') { const r = el.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}; }
 if (action === 'scroll-into-view') { el.scrollIntoView({block:'center',inline:'nearest'}); return true; }
 if (action === 'focus') { el.focus({preventScroll:true}); return document.activeElement === el; }
-if (action === 'click') { el.scrollIntoView({block:'center',inline:'nearest'}); el.click(); return true; }
+if (action === 'click') {
+  el.scrollIntoView({block:'center',inline:'nearest'});
+  const r = el.getBoundingClientRect();
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  const hit = document.elementFromPoint(x, y);
+  return {
+    nativeClick: true,
+    visible: visible(el),
+    enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
+    hit: !!hit && (hit === el || el.contains(hit)),
+    x, y, width: r.width, height: r.height,
+  };
+}
 if (action === 'fill') {
   const value = String(payload.value ?? '');
   el.scrollIntoView({block:'center',inline:'nearest'}); el.focus({preventScroll:true});
@@ -387,6 +400,131 @@ class TaskRpcRuntime:
             raise last
         return None
 
+    def _frame_viewport_offset(self, frame_path: Iterable[str]) -> tuple[float, float]:
+        offset_x = 0.0
+        offset_y = 0.0
+        try:
+            self.sb.switch_to_default_content()
+        except Exception:
+            pass
+        for selector in frame_path:
+            geometry = self._execute_script_retry(
+                """
+const frame = document.querySelector(String(arguments[0] || ''));
+if (!frame) return null;
+frame.scrollIntoView({block:'nearest', inline:'nearest'});
+const r = frame.getBoundingClientRect();
+return {x:r.left + Number(frame.clientLeft || 0), y:r.top + Number(frame.clientTop || 0), width:r.width, height:r.height};
+""",
+                selector,
+            )
+            if not isinstance(geometry, dict) or float(geometry.get("width") or 0.0) <= 0 or float(geometry.get("height") or 0.0) <= 0:
+                raise LookupError(f"Frame is not visible for native click: {selector}")
+            offset_x += float(geometry.get("x") or 0.0)
+            offset_y += float(geometry.get("y") or 0.0)
+            self.sb.switch_to_frame(selector)
+        return offset_x, offset_y
+
+    @staticmethod
+    def _assert_native_click_probe(probe: Any, selector: str) -> Dict[str, Any]:
+        if isinstance(probe, dict) and probe.get("__aresMissing"):
+            raise LookupError(f"No element matched locator: {selector}")
+        if not isinstance(probe, dict) or not bool(probe.get("nativeClick")):
+            raise RuntimeError(f"Native click geometry could not be resolved for {selector}")
+        if not bool(probe.get("visible")):
+            raise RuntimeError(f"Native click target is not visible: {selector}")
+        if not bool(probe.get("enabled")):
+            raise RuntimeError(f"Native click target is disabled: {selector}")
+        if not bool(probe.get("hit")):
+            raise RuntimeError(f"Native click hit-test failed: {selector}")
+        if float(probe.get("width") or 0.0) <= 0 or float(probe.get("height") or 0.0) <= 0:
+            raise RuntimeError(f"Native click target has no stable box: {selector}")
+        return probe
+
+    @staticmethod
+    def _native_probe_stable(previous: Dict[str, Any], current: Dict[str, Any], tolerance: float = 1.5) -> bool:
+        return all(
+            abs(float(previous.get(key) or 0.0) - float(current.get(key) or 0.0)) <= tolerance
+            for key in ("x", "y", "width", "height")
+        )
+
+    def _dispatch_mouse_event(
+        self,
+        event_type: str,
+        x: float,
+        y: float,
+        *,
+        button: Any = None,
+        buttons: int | None = None,
+        click_count: int | None = None,
+    ) -> None:
+        input_domain = getattr(mycdp, "input_", None)
+        dispatch = getattr(input_domain, "dispatch_mouse_event", None)
+        if not callable(dispatch):
+            raise RuntimeError("CDP Input.dispatchMouseEvent is unavailable")
+        kwargs: Dict[str, Any] = {
+            "type_": event_type,
+            "x": float(x),
+            "y": float(y),
+            "pointer_type": "mouse",
+        }
+        if button is not None:
+            kwargs["button"] = button
+        if buttons is not None:
+            kwargs["buttons"] = int(buttons)
+        if click_count is not None:
+            kwargs["click_count"] = int(click_count)
+        tab = self.sb.get_active_tab()
+        loop = self.sb.get_event_loop()
+        loop.run_until_complete(tab.send(dispatch(**kwargs)))
+
+    def _dispatch_native_click(self, x: float, y: float) -> None:
+        input_domain = getattr(mycdp, "input_", None)
+        mouse_button = getattr(input_domain, "MouseButton", None)
+        left = getattr(mouse_button, "LEFT", None)
+        if left is None:
+            raise RuntimeError("CDP left mouse button enum is unavailable")
+        self._dispatch_mouse_event("mouseMoved", x, y, buttons=0)
+        self._dispatch_mouse_event("mousePressed", x, y, button=left, buttons=1, click_count=1)
+        self._dispatch_mouse_event("mouseReleased", x, y, button=left, buttons=0, click_count=1)
+
+    def _native_locator_click(
+        self,
+        locator: Dict[str, Any],
+        selector: str,
+        nth: int,
+        text_spec: Dict[str, str] | None,
+    ) -> Dict[str, Any]:
+        frame_path = [str(value) for value in locator.get("framePath") or [] if str(value)]
+        offset_x, offset_y = self._frame_viewport_offset(frame_path)
+        previous: Dict[str, Any] | None = None
+        stable: Dict[str, Any] | None = None
+        deadline = time.monotonic() + 0.45
+        while time.monotonic() < deadline:
+            probe = self._assert_native_click_probe(
+                self._execute_script_retry(locator_script(), selector, nth, text_spec, "click", {}),
+                selector,
+            )
+            if previous is not None and self._native_probe_stable(previous, probe):
+                stable = probe
+                break
+            previous = probe
+            time.sleep(0.05)
+        if stable is None:
+            raise RuntimeError(f"Native click target position did not stabilize: {selector}")
+
+        x = offset_x + float(stable.get("x") or 0.0)
+        y = offset_y + float(stable.get("y") or 0.0)
+        self._dispatch_native_click(x, y)
+        self._sync_newest_target()
+        return {
+            "clicked": True,
+            "native": True,
+            "inputMethod": "Input.dispatchMouseEvent",
+            "x": x,
+            "y": y,
+        }
+
     def _locator_op(self, action: str, locator: Dict[str, Any], command: Dict[str, Any]) -> Any:
         selector = str(locator.get("selector") or "")
         if not selector:
@@ -412,6 +550,8 @@ class TaskRpcRuntime:
                 command.get("args") if isinstance(command.get("args"), list) else [],
                 all_items=action == "evaluate-all",
             )
+        if action == "click":
+            return self._native_locator_click(locator, selector, nth, text_spec)
         result = self._execute_script_retry(
             locator_script(),
             selector,
@@ -432,8 +572,6 @@ class TaskRpcRuntime:
             raise LookupError(f"No element matched locator: {selector}")
         if action == "fill" and isinstance(result, dict) and not bool(result.get("verified")):
             raise RuntimeError(f"fill readback verification failed for {selector}")
-        if action == "click":
-            self._sync_newest_target()
         return result
 
     def _locator_evaluate(
@@ -502,37 +640,19 @@ const fn=(0,eval)(`(${fnSource})`); if(arguments[5]) return fn(items,...extra); 
 
     def _mouse(self, action: str, command: Dict[str, Any]) -> bool:
         x, y = float(command.get("x") or 0), float(command.get("y") or 0)
-        marker = f"ares-pointer-{time.monotonic_ns()}"
-        selector = f'[data-ares-pointer-target="{marker}"]'
-        try:
-            found = self._execute_script_retry(
-                "const e=document.elementFromPoint(Number(arguments[0]),Number(arguments[1])); if(!e)return false; e.setAttribute('data-ares-pointer-target',String(arguments[2])); return true;",
-                x,
-                y,
-                marker,
-            )
-            if not found:
-                return False
-            element = self.sb.find_element(selector)
-            if action == "mouse-move":
-                move = getattr(element, "mouse_move", None)
-                if callable(move):
-                    move()
-                    return True
-            else:
-                click = getattr(element, "mouse_click", None) or getattr(element, "click", None)
-                if callable(click):
-                    click()
-                    self._sync_newest_target()
-                    return True
+        hit = self._execute_script_retry(
+            "return !!document.elementFromPoint(Number(arguments[0]), Number(arguments[1]));",
+            x,
+            y,
+        )
+        if not hit:
             return False
-        finally:
-            try:
-                self._execute_script_retry(
-                    "document.querySelectorAll('[data-ares-pointer-target]').forEach(e=>e.removeAttribute('data-ares-pointer-target'));"
-                )
-            except Exception:
-                pass
+        if action == "mouse-move":
+            self._dispatch_mouse_event("mouseMoved", x, y, buttons=0)
+            return True
+        self._dispatch_native_click(x, y)
+        self._sync_newest_target()
+        return True
 
 
 def run(start: Dict[str, Any]) -> int:

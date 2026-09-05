@@ -35,6 +35,7 @@ def main() -> int:
         result = provider.ground({"kind": "slider", "orientation": "horizontal"})
         assert result is not None
         assert result["found"] is True
+        assert result["grounded"] is True
         assert result["provider"] == "ddddocr"
         assert result["source"] == "ddddocr-slide-match"
         assert abs(float(result["targetFraction"]) - (60.0 / 180.0)) < 1e-9
