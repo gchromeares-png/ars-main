@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import type { ChildProcessWithoutNullStreams } from "child_process";
-import type { Frame, FrameLocator, Locator, Page, Response } from "patchright";
+import type { Frame, FrameLocator, Locator, Page, Response } from "./types";
 
 type NetworkEvent = { url?: string; headers?: Record<string, string>; body?: string };
 type RpcReply = { type?: string; requestId?: string; ok?: boolean; result?: unknown; error?: string; url?: string; title?: string; events?: NetworkEvent[]; };
@@ -100,7 +100,7 @@ class SeleniumBaseRpcLocator implements Locator {
   async isEnabled(options: { timeout?: number } = {}): Promise<boolean> { return Boolean(await this.op("is-enabled", {}, options.timeout ?? 2_000).catch(() => false)); }
   async click(options: Record<string, unknown> = {}): Promise<void> { await this.op("click", { options }, Number(options["timeout"] ?? 15_000)); }
   async fill(value: string, options: Record<string, unknown> = {}): Promise<void> { await this.op("fill", { value, options }, Number(options["timeout"] ?? 15_000)); }
-  async inputValue(): Promise<string> { return String(await this.op("input-value") ?? ""); }
+  async inputValue(options: { timeout?: number } = {}): Promise<string> { return String(await this.op("input-value", {}, options.timeout ?? 5_000) ?? ""); }
   async innerText(options: { timeout?: number } = {}): Promise<string> { return String(await this.op("inner-text", {}, options.timeout ?? 5_000) ?? ""); }
   async allTextContents(): Promise<string[]> { const value = await this.op("all-text-contents"); return Array.isArray(value) ? value.map(item => String(item ?? "")) : []; }
   async selectOption(value: string): Promise<unknown> { return this.op("select-option", { value }); }
