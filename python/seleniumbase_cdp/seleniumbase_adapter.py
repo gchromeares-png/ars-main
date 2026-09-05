@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -182,7 +183,19 @@ class SeleniumBaseCdpAdapter:
         }
 
     def execute_script(self, script: str, *args: Any) -> Any:
-        return self._sb.execute_script(script, *args)
+        if not args:
+            return self._sb.execute_script(script)
+
+        encoded_args = json.dumps(list(args), ensure_ascii=False, separators=(",", ":"))
+        wrapped = (
+            "(() => {"
+            f"const __aresArgs={encoded_args};"
+            "return (function(){"
+            f"{script}"
+            "}).apply(null,__aresArgs);"
+            "})()"
+        )
+        return self._sb.execute_script(wrapped)
 
     def sleep(self, seconds: float) -> None:
         self._sb.sleep(seconds)
