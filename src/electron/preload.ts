@@ -14,6 +14,8 @@ const api = {
   openProfileBrowser: (profileId: string, startUrl?: string) => ipcRenderer.invoke("open-profile-browser", profileId, startUrl),
   closeProfileBrowser: (profileId: string) => ipcRenderer.invoke("close-profile-browser", profileId),
   getSeleniumBaseProfileBrowserStatus: (profileId: string) => ipcRenderer.invoke("get-seleniumbase-profile-browser-status", profileId),
+  getSeleniumBaseVisionStatus: () => ipcRenderer.invoke("get-seleniumbase-vision-status"),
+  prepareSeleniumBaseVision: () => ipcRenderer.invoke("prepare-seleniumbase-vision"),
   openSeleniumBaseProfileBrowser: (profileId: string, startUrl?: string, cookieSnapshotId?: string) => ipcRenderer.invoke(
     "open-profile-browser",
     profileId,
