@@ -43,6 +43,7 @@ declare module "patchright" {
   export interface Page extends Frame {
     [key: string]: any;
     goto(url: string, options?: Record<string, unknown>): Promise<any>;
+    setContent(html: string, options?: { waitUntil?: string; timeout?: number }): Promise<void>;
     url(): string;
     title(): Promise<string>;
     isClosed(): boolean;
@@ -62,6 +63,7 @@ declare module "patchright" {
 
   export interface BrowserContext {
     [key: string]: any;
+    newPage(): Promise<Page>;
     addCookies(cookies: unknown[]): Promise<void>;
     close(): Promise<void>;
   }
