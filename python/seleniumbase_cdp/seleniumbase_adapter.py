@@ -83,12 +83,13 @@ class SeleniumBaseCdpAdapter:
 
     def goto(self, url: str) -> None:
         self._sb.goto(url)
+        self._challenge_tracker.wait_for_stable_challenge()
+        self._sb.solve_captcha()
+
         self._watchdog.reset()
         initial = self._watchdog.poll()
         self._last_watchdog_state = initial
         self._capture.capture("page-load", generation=int(initial.get("generation") or 0))
-        self._challenge_tracker.wait_for_stable_challenge()
-        self._sb.solve_captcha()
         self._poll_observation_watchdog(force=True)
 
     def challenge_state(self) -> Dict[str, Any]:

@@ -14,9 +14,10 @@ describe("SeleniumBase automatic interaction runtime", () => {
 
   it("keeps grid and slider auto interactions enabled by default", () => {
     expect(adapter).toContain("self._visual_interactions = VisualInteractionRuntime(");
-    expect(adapter).toContain("self._poll_auto_interactions(force=True)");
-    expect(adapter).toContain("self._poll_auto_interactions()");
+    expect(adapter).toContain("self._poll_observation_watchdog(force=True)");
+    expect(adapter).toContain("self._poll_observation_watchdog()");
     expect(adapter).toContain("self._visual_interactions.poll_and_act()");
+    expect(adapter).not.toContain("self._poll_auto_interactions(");
     expect(runtime).toContain("AutoInteractionController(");
     expect(worker).toContain('\"autoInteractionsEnabled\": True');
     expect(worker).toContain('\"sliderActionsEnabled\": True');
