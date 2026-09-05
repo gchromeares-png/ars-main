@@ -10,6 +10,7 @@ import psutil
 from seleniumbase import sb_cdp
 
 from challenge_state_tracker import ChallengeStateTracker
+from interaction_outcome import from_semantic_result, from_visual_result
 from semantic_interaction_runtime import SemanticInteractionRuntime
 from visual_interaction_runtime import VisualInteractionRuntime
 
@@ -47,7 +48,12 @@ class SeleniumBaseCdpAdapter:
         )
         self._semantic_interactions = SemanticInteractionRuntime(self._sb)
         self._next_auto_poll = 0.0
-        self._last_auto_result: Dict[str, Any] = {"acted": False, "kind": "none"}
+        self._last_auto_result: Dict[str, Any] = {
+            "acted": False,
+            "kind": "none",
+            "outcome": from_visual_result({"acted": False, "kind": "none"}),
+        }
+        self._last_semantic_outcome: Dict[str, Any] = from_semantic_result({"results": []})
         self._closed = False
 
     @property
@@ -79,23 +85,37 @@ class SeleniumBaseCdpAdapter:
     def auto_interaction_state(self) -> Dict[str, Any]:
         return {**self._visual_interactions.status(), "lastResult": self._last_auto_result}
 
+    def interaction_outcome_state(self) -> Dict[str, Any]:
+        return {
+            "enabled": True,
+            "mode": "default",
+            "semantic": self._last_semantic_outcome,
+            "visual": self._last_auto_result.get("outcome", from_visual_result(self._last_auto_result)),
+        }
+
     def observe_semantic_fields(self) -> List[Dict[str, Any]]:
         return self._semantic_interactions.observe_fields()
 
     def execute_semantic_plan(self, plan: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
-        return self._semantic_interactions.execute_plan(plan)
+        result = self._semantic_interactions.execute_plan(plan)
+        outcome = from_semantic_result(result)
+        self._last_semantic_outcome = outcome
+        return {**result, "outcome": outcome}
 
     def apply_grid_selection(self, indexes: Iterable[int], *, submit: bool = True) -> Dict[str, Any]:
-        return self._visual_interactions.apply_grid_selection(indexes, submit=submit)
+        result = self._visual_interactions.apply_grid_selection(indexes, submit=submit)
+        return {**result, "outcome": from_visual_result(result)}
 
     def apply_slider(self, target_fraction: float = 0.96) -> Dict[str, Any]:
-        return self._visual_interactions.apply_slider(target_fraction)
+        result = self._visual_interactions.apply_slider(target_fraction)
+        return {**result, "outcome": from_visual_result(result)}
 
     def inspect_session(self) -> Dict[str, Any]:
         return {
             "url": str(self._sb.get_current_url() or ""),
             "title": str(self._sb.get_title() or ""),
             "cookies": self.get_snapshot_cookies(),
+            "interactionOutcome": self.interaction_outcome_state(),
         }
 
     def execute_script(self, script: str) -> Any:
@@ -145,9 +165,11 @@ class SeleniumBaseCdpAdapter:
             return
         self._next_auto_poll = now + 0.8
         try:
-            self._last_auto_result = self._visual_interactions.poll_and_act()
+            result = self._visual_interactions.poll_and_act()
+            self._last_auto_result = {**result, "outcome": from_visual_result(result)}
         except Exception as exc:
-            self._last_auto_result = {"acted": False, "kind": "error", "error": str(exc)}
+            result = {"acted": False, "kind": "error", "error": str(exc)}
+            self._last_auto_result = {**result, "outcome": from_visual_result(result)}
 
     def quit(self) -> None:
         if self._closed:
