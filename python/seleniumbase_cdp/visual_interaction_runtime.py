@@ -52,45 +52,61 @@ class VisualInteractionRuntime:
         self._last_grid_debug_signature = ""
 
     def poll_and_act(self) -> Dict[str, Any]:
+        # Image grids need pixels before vision can make a meaningful decision.
+        # Capture first, then crop/classify/click. Structural sources remain a
+        # fallback only when screenshot capture/cropping is unavailable.
+        grid_state = self._grid.poll()
+        if grid_state.get("kind") == "image-grid":
+            signature = str(grid_state.get("signature") or "")
+            if signature and signature != self._last_grid_debug_signature:
+                self._last_grid_debug_signature = signature
+                captured = self._capture_grid_debug_screenshot(signature)
+                self._trace.append(
+                    "grid-screenshot-captured",
+                    {
+                        "kind": "image-grid",
+                        "state": grid_state,
+                        "capture": captured,
+                    },
+                )
+                if bool(captured.get("captured")):
+                    screenshot_result = self.poll_and_act_from_screenshot(str(captured.get("path") or ""))
+                    self._trace.append(
+                        "grid-screenshot-result",
+                        {
+                            "kind": "image-grid",
+                            "capture": captured,
+                            "result": screenshot_result,
+                        },
+                    )
+                    return {
+                        **screenshot_result,
+                        "debugScreenshot": captured,
+                        "screenshotFirst": True,
+                    }
+
+                self._trace.append(
+                    "grid-screenshot-unavailable",
+                    {
+                        "kind": "image-grid",
+                        "state": grid_state,
+                        "capture": captured,
+                    },
+                )
+
         primary = self._controller.poll_and_act()
         if primary.get("kind") != "image-grid" or bool(primary.get("acted")):
             return primary
 
-        state = primary.get("state") if isinstance(primary.get("state"), dict) else self._grid.poll()
+        state = primary.get("state") if isinstance(primary.get("state"), dict) else grid_state
         signature = str(state.get("signature") or "")
-        if not signature:
-            return {**primary, "screenshotFallback": {"attempted": False, "reason": "missing-grid-signature"}}
-        if signature == self._last_grid_debug_signature:
-            return {**primary, "screenshotFallback": {"attempted": False, "reason": "already-attempted-for-signature"}}
-
-        self._last_grid_debug_signature = signature
-        captured = self._capture_grid_debug_screenshot(signature)
-        self._trace.append(
-            "screenshot-fallback",
-            {
-                "kind": "image-grid",
-                "state": state,
-                "capture": captured,
-                "structuralResult": primary,
-            },
-        )
-        if not bool(captured.get("captured")):
-            return {**primary, "screenshotFallback": {"attempted": True, **captured}}
-
-        fallback = self.poll_and_act_from_screenshot(str(captured.get("path") or ""))
-        self._trace.append(
-            "screenshot-fallback-result",
-            {
-                "kind": "image-grid",
-                "capture": captured,
-                "result": fallback,
-            },
-        )
         return {
-            **fallback,
-            "structuralResult": primary,
-            "debugScreenshot": captured,
-            "screenshotFallback": {"attempted": True, "used": True},
+            **primary,
+            "screenshotFirst": bool(signature and signature == self._last_grid_debug_signature),
+            "screenshotFallback": {
+                "attempted": bool(signature),
+                "reason": "capture-or-crop-unavailable" if signature else "missing-grid-signature",
+            },
         }
 
     def poll_and_act_from_screenshot(self, screenshot_path: str | Path) -> Dict[str, Any]:
@@ -124,6 +140,7 @@ class VisualInteractionRuntime:
                 "submitDelaySeconds": self._policy.grid_submit_delay_seconds,
             },
             "screenshotGridFallback": True,
+            "screenshotFirstForGrid": True,
             "debugScreenshotRoot": str(self._debug_root),
             "sliderProviders": self._slider_grounder.status(),
         }
