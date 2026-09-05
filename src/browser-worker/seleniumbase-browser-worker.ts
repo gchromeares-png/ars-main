@@ -141,7 +141,11 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
         {
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
-          env: { ...process.env, PYTHONUNBUFFERED: "1" }
+          env: {
+            ...process.env,
+            PYTHONUNBUFFERED: "1",
+            ARES_SB_MONITOR_MODE: config.monitorMode === true ? "1" : "0"
+          }
         }
       );
       const runningChild = child;
