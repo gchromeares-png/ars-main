@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import sys
 import threading
@@ -47,6 +48,17 @@ def _command_reader(target: queue.Queue[Dict[str, Any]]) -> None:
 def _proxy_value(command: Dict[str, Any]) -> str | None:
     value = str(command.get("proxy") or "").strip()
     return value or None
+
+
+def _manual_browser_headless(command: Dict[str, Any]) -> bool:
+    if "headless" in command:
+        return bool(command.get("headless"))
+    if not sys.platform.startswith("win"):
+        return False
+    session_name = str(os.environ.get("SESSIONNAME") or "").strip().lower()
+    non_interactive_service = session_name in {"service", "services"}
+    github_actions = str(os.environ.get("GITHUB_ACTIONS") or "").strip().lower() == "true"
+    return non_interactive_service or github_actions
 
 
 def _site_adapter_overrides(command: Dict[str, Any], profile_dir: Path) -> Dict[str, str]:
@@ -169,7 +181,7 @@ def _start(command: Dict[str, Any]) -> int:
     request_id = str(command.get("requestId") or "")
     adapter = SeleniumBaseCdpAdapter(
         profile_dir=profile_dir,
-        headless=False,
+        headless=_manual_browser_headless(command),
         proxy=_proxy_value(command),
         user_agent=str(command.get("userAgent") or "").strip() or None,
         site_adapter_overrides=_site_adapter_overrides(command, profile_dir),
