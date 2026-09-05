@@ -318,6 +318,22 @@ class SeleniumBaseCdpAdapter:
             }
         return self._last_instruction_result
 
+    def _request_graceful_browser_close(self) -> bool:
+        driver = getattr(self._sb, "driver", None)
+        if driver is None:
+            return False
+        if hasattr(driver, "cdp_base"):
+            driver = driver.cdp_base
+        loop = getattr(self._sb, "loop", None)
+        send = getattr(driver, "send", None)
+        if loop is None or not callable(send):
+            return False
+        try:
+            loop.run_until_complete(send(mycdp.browser.close()))
+            return True
+        except Exception:
+            return False
+
     def quit(self) -> None:
         if self._closed:
             return
@@ -330,9 +346,14 @@ class SeleniumBaseCdpAdapter:
             self._sb.get_all_cookies()
         except Exception:
             pass
-        # SeleniumBase/Chromium on Windows needs a short pre-close settle so
-        # persistent cookies and session state reach the user-data-dir on disk.
-        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
+        # SeleniumBase's underlying Pure-CDP stop path can terminate Chromium
+        # directly. Ask Chromium itself to close first so Windows can commit the
+        # profile cookie database and local storage before any hard fallback.
+        time.sleep(0.2)
+        graceful_close = self._request_graceful_browser_close()
+        if graceful_close:
+            self._wait_for_profile_flush(browser_pids)
+            return
         self._sb.quit()
         self._wait_for_profile_flush(browser_pids)
 
