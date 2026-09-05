@@ -1,4 +1,4 @@
-import type { Page } from "patchright";
+import type { Page } from "../browser-worker/types";
 import type { LiveChallengeDetection, LiveChallengeType } from "./types";
 
 export class LiveChallengeDetector {
@@ -110,7 +110,7 @@ export class LiveChallengeDetector {
   }
 
   /**
-   * Prüft eine aktive Patchright-Page im Browser oder den Mock im Test.
+   * Prüft eine aktive ARES-Page im Browser oder den Mock im Test.
    */
   async detect(page: Page): Promise<LiveChallengeDetection> {
     if (!page || (typeof page.isClosed === "function" && page.isClosed())) {
