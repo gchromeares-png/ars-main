@@ -7,7 +7,7 @@ import type { Page } from "../browser-worker/types";
 import { ITaskExecutor } from "../interfaces";
 import { Task } from "../models";
 import { AresProfile } from "../profiles/models";
-import { FieldSemanticResolver, OllamaEmbeddingProvider } from "../browser-worker/field-semantic-resolver";
+import { FieldSemanticResolver } from "../browser-worker/field-semantic-resolver";
 import { SemanticFieldAutofill } from "../browser-worker/semantic-field-autofill";
 import { evaluateSemanticCheckoutCompletion } from "../browser-worker/semantic-checkout-completion";
 import { SemanticCheckoutProfilePlanner } from "../browser-worker/semantic-checkout-profile-planner";
@@ -63,7 +63,7 @@ export class ShopifyTaskExecutor implements ITaskExecutor {
   private readonly requestDelayMs = 500;
   private readonly cacheTtlMs = 45_000;
   private readonly maxFallbackPages = 2;
-  private readonly fieldResolver = new FieldSemanticResolver(new OllamaEmbeddingProvider());
+  private readonly fieldResolver = new FieldSemanticResolver();
 
   constructor(
     private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
