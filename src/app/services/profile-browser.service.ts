@@ -1,4 +1,5 @@
 import { Injectable } from "@angular/core";
+import { setSelectedCookieSnapshot } from "./profile-cookie-snapshot-selection";
 
 export interface ProfileBrowserStatusView {
   profileId: string;
@@ -46,6 +47,21 @@ export class ProfileBrowserService {
       success: true,
       status: { profileId, open: false }
     });
+  }
+
+  async resetSession(profileId: string): Promise<any> {
+    const id = String(profileId ?? "").trim();
+    if (!id) return { success: false, error: "Profil-ID fehlt." };
+    let result: any;
+    if (this.api?.resetProfileBrowserSession) {
+      result = await this.api.resetProfileBrowserSession(id);
+    } else {
+      this.previewOpen.delete(id);
+      this.seleniumBasePreviewOpen.delete(id);
+      result = { success: true, status: { engine: "seleniumbase-cdp", profileId: id, open: false } };
+    }
+    if (result?.success) setSelectedCookieSnapshot(id, "");
+    return result;
   }
 
   getSeleniumBaseStatus(profileId: string): Promise<any> {
