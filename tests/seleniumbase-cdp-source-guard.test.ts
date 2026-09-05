@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 
-describe("SeleniumBase CDP PoC architecture guard", () => {
+describe("SeleniumBase CDP architecture guard", () => {
   const read = (relative: string) => fs.readFileSync(path.resolve(__dirname, "..", relative), "utf8");
   const requirements = read("requirements-seleniumbase-cdp.txt");
   const adapter = read("python/seleniumbase_cdp/seleniumbase_adapter.py");
@@ -16,8 +16,10 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
   const manualProbe = read("python/seleniumbase_cdp/manual_profile_probe.py");
   const reopenProbe = read("python/seleniumbase_cdp/reopen_profile_probe.py");
 
-  it("pins official SeleniumBase with its Playwright integration extra", () => {
-    expect(requirements).toContain("seleniumbase[playwright]==4.53.7");
+  it("pins plain official SeleniumBase without a Playwright extra", () => {
+    expect(requirements).toContain("seleniumbase==4.53.7");
+    expect(requirements).not.toContain("seleniumbase[playwright]");
+    expect(requirements.toLowerCase()).not.toContain("playwright");
     expect(adapter).toContain("from seleniumbase import sb_cdp");
     expect(adapter).toContain("sb_cdp.Chrome(");
     expect(adapter).toContain("user_data_dir");
@@ -25,17 +27,19 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     expect(adapter).not.toContain("selenium.webdriver");
   });
 
-  it("keeps SeleniumBase, MyCDP, and Playwright behind one Python adapter boundary", () => {
+  it("keeps SeleniumBase and MyCDP behind one Python adapter boundary", () => {
     expect(adapter).toContain("import mycdp");
-    expect(adapter).toContain("from playwright.sync_api import sync_playwright");
     expect(adapter).toContain("self._sb.set_all_cookies(params)");
     expect(adapter).toContain("self._sb.get_all_cookies()");
     expect(adapter).toContain("mycdp.network.CookieParam.from_json(payload)");
+    for (const source of [adapter, worker, manualWorker]) {
+      expect(source.toLowerCase()).not.toContain("playwright");
+      expect(source).not.toContain("connect_over_cdp");
+    }
     for (const source of [worker, manualWorker]) {
       expect(source).toContain("from seleniumbase_adapter import SeleniumBaseCdpAdapter");
       expect(source).not.toContain("from seleniumbase import");
       expect(source).not.toContain("import mycdp");
-      expect(source).not.toContain("playwright.sync_api");
       expect(source).not.toContain("selenium.webdriver");
       expect(source).not.toContain("document.cookie");
     }
@@ -84,18 +88,18 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     expect(manualWorker).toContain('start_url = str(command.get("startUrl") or "").strip() or last_url');
     expect(reopenProbe).toContain('RESTORE_PATH = "/restore-target"');
     expect(reopenProbe).toContain('WorkerClient(profile_dir, "")');
-    expect(reopenProbe).toContain('active.wait("playwright-attached", request_id, 25)');
+    expect(reopenProbe).toContain('active.wait("session-inspection", request_id, 15)');
     expect(reopenProbe).toContain("for index in range(2)");
   });
 
-  it("implements SeleniumBase Stealthy Playwright Mode on the existing context/page only", () => {
-    expect(adapter).toContain("self._sb.get_endpoint_url()");
-    expect(adapter).toContain("playwright.chromium.connect_over_cdp(endpoint_url)");
-    expect(adapter).toContain("context = browser.contexts[0]");
-    expect(adapter).toContain("page = context.pages[0]");
-    expect(adapter).not.toContain("new_context(");
-    expect(manualWorker).toContain('command_type == "attach-playwright"');
-    expect(manualWorker).toContain('command_type == "inspect-playwright"');
+  it("inspects the existing SeleniumBase session without a second browser layer", () => {
+    expect(adapter).toContain("def inspect_session(self)");
+    expect(adapter).toContain("self._sb.get_current_url()");
+    expect(adapter).toContain("self._sb.get_title()");
+    expect(manualWorker).toContain('command_type == "inspect-session"');
+    expect(manualWorker).toContain('"type": "session-inspection"');
+    expect(manualWorker).not.toContain("attach-playwright");
+    expect(manualWorker).not.toContain("inspect-playwright");
   });
 
   it("keeps the SeleniumBase worker isolated from Patchright and ARES protected cores", () => {
@@ -125,14 +129,15 @@ describe("SeleniumBase CDP PoC architecture guard", () => {
     expect(probe).toContain("second Python process");
   });
 
-  it("verifies cookies, same-session assignment, Stealthy Playwright attach, and restart persistence", () => {
+  it("verifies cookies, native session inspection, and restart persistence", () => {
     expect(manualProbe).toContain('"/initial"');
     expect(manualProbe).toContain('"apply-cookies"');
     expect(manualProbe).toContain('"/same-session"');
     expect(manualProbe).toContain('"export-cookies"');
-    expect(manualProbe).toContain('"attach-playwright"');
-    expect(manualProbe).toContain('"playwright-attached"');
+    expect(manualProbe).toContain('"inspect-session"');
+    expect(manualProbe).toContain('"session-inspection"');
     expect(manualProbe).toContain('cookie.get("httpOnly") is not True');
     expect(manualProbe).toContain('"/restart"');
+    expect(manualProbe.toLowerCase()).not.toContain("playwright");
   });
 });

@@ -1,4 +1,3 @@
-# ARES SeleniumBase CDP / Stealthy Playwright Mode dependency.
-# SeleniumBase itself stays unmodified and is consumed as an external package.
-# The official SeleniumBase `playwright` extra provides its compatible Playwright floor.
-seleniumbase[playwright]==4.53.7
+# ARES SeleniumBase Pure CDP dependency.
+# SeleniumBase itself stays unmodified and owns browser/profile/session lifecycle.
+seleniumbase==4.53.7

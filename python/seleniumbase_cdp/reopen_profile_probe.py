@@ -37,12 +37,12 @@ def _run(profile_dir: Path) -> None:
             restored = _next_request(recorder, RESTORE_PATH, timeout=25)
             _assert_cookie(restored["cookie"], COOKIE_A, token)
 
-            request_id = f"attach-{index}"
-            active.send({"type": "attach-playwright", "requestId": request_id})
-            attached = active.wait("playwright-attached", request_id, 25)
-            if attached.get("url") != target_url:
+            request_id = f"inspect-{index}"
+            active.send({"type": "inspect-session", "requestId": request_id})
+            inspected = active.wait("session-inspection", request_id, 15)
+            if inspected.get("url") != target_url:
                 raise AssertionError(
-                    f"Reopened SeleniumBase profile did not restore the active page: {attached}"
+                    f"Reopened SeleniumBase profile did not restore the active page: {inspected}"
                 )
 
             active.close()

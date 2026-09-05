@@ -189,25 +189,24 @@ def _start(command: Dict[str, Any]) -> int:
                     last_url = _remember_last_url(profile_dir, adapter, last_url)
                     _emit({"type": "navigated", "requestId": next_request_id, "profileId": profile_id})
                     continue
-                if command_type == "attach-playwright":
-                    details = adapter.attach_stealthy_playwright()
+                if command_type == "inspect-session":
+                    details = adapter.inspect_session()
                     _emit(
                         {
-                            "type": "playwright-attached",
+                            "type": "session-inspection",
                             "requestId": next_request_id,
                             "profileId": profile_id,
                             **details,
                         }
                     )
                     continue
-                if command_type == "inspect-playwright":
-                    details = adapter.inspect_stealthy_playwright()
+                if command_type == "challenge-state":
                     _emit(
                         {
-                            "type": "playwright-inspection",
+                            "type": "challenge-state",
                             "requestId": next_request_id,
                             "profileId": profile_id,
-                            **details,
+                            "state": adapter.challenge_state(),
                         }
                     )
                     continue
@@ -218,7 +217,6 @@ def _start(command: Dict[str, Any]) -> int:
                             "requestId": next_request_id,
                             "profileId": profile_id,
                             "open": adapter.is_running(),
-                            "playwrightAttached": adapter.playwright_attached,
                         }
                     )
                     continue

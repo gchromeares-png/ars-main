@@ -172,12 +172,12 @@ def _assert_cookie(header: str, name: str, value: str) -> None:
         raise AssertionError(f"Missing {expected!r} in request Cookie header: {header!r}")
 
 
-def _assert_playwright_cookie(cookies: List[Dict[str, Any]], name: str, value: str) -> None:
+def _assert_session_cookie(cookies: List[Dict[str, Any]], name: str, value: str) -> None:
     cookie = next((item for item in cookies if item.get("name") == name), None)
     if not cookie or cookie.get("value") != value:
-        raise AssertionError(f"Stealthy Playwright did not see {name}: {cookies}")
+        raise AssertionError(f"SeleniumBase session inspection did not see {name}: {cookies}")
     if cookie.get("httpOnly") is not True:
-        raise AssertionError(f"Stealthy Playwright lost HttpOnly for {name}: {cookie}")
+        raise AssertionError(f"SeleniumBase session inspection lost HttpOnly for {name}: {cookie}")
 
 
 def _run(profile_dir: Path) -> None:
@@ -212,20 +212,15 @@ def _run(profile_dir: Path) -> None:
         if cookie_a.get("httpOnly") is not True or cookie_b.get("httpOnly") is not True:
             raise AssertionError(f"HttpOnly attribute was not preserved: {cookies}")
 
-        first.send({"type": "attach-playwright", "requestId": "attach"})
-        attached = first.wait("playwright-attached", "attach", 25)
-        if attached.get("url") != f"{base_url}/same-session":
-            raise AssertionError(f"Playwright attached to wrong page: {attached}")
-        if attached.get("title") != "ARES SeleniumBase Manual Probe":
-            raise AssertionError(f"Playwright title mismatch: {attached}")
-        pw_cookies = attached.get("cookies") or []
-        _assert_playwright_cookie(pw_cookies, COOKIE_A, token_a)
-        _assert_playwright_cookie(pw_cookies, COOKIE_B, token_b)
-
-        first.send({"type": "inspect-playwright", "requestId": "inspect"})
-        inspected = first.wait("playwright-inspection", "inspect")
+        first.send({"type": "inspect-session", "requestId": "inspect"})
+        inspected = first.wait("session-inspection", "inspect", 15)
         if inspected.get("url") != f"{base_url}/same-session":
-            raise AssertionError(f"Playwright session changed unexpectedly: {inspected}")
+            raise AssertionError(f"SeleniumBase inspected wrong page: {inspected}")
+        if inspected.get("title") != "ARES SeleniumBase Manual Probe":
+            raise AssertionError(f"SeleniumBase title mismatch: {inspected}")
+        inspected_cookies = inspected.get("cookies") or []
+        _assert_session_cookie(inspected_cookies, COOKIE_A, token_a)
+        _assert_session_cookie(inspected_cookies, COOKIE_B, token_b)
 
         first.close()
         first = None
@@ -256,7 +251,7 @@ def main() -> int:
     profile_dir = Path(temporary) / "profile" / ".ares-seleniumbase-cdp"
     try:
         _run(profile_dir)
-        print("SeleniumBase Pure CDP + Stealthy Playwright process/session/cookie probe passed.")
+        print("SeleniumBase Pure CDP process/session/cookie probe passed natively.")
         return 0
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
