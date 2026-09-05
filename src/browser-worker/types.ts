@@ -14,7 +14,7 @@ export interface BrowserLocator {
   isEnabled(options?: { timeout?: number }): Promise<boolean>;
   click(options?: Record<string, unknown>): Promise<void>;
   fill(value: string, options?: Record<string, unknown>): Promise<void>;
-  inputValue(): Promise<string>;
+  inputValue(options?: { timeout?: number }): Promise<string>;
   innerText(options?: { timeout?: number }): Promise<string>;
   allTextContents(): Promise<string[]>;
   selectOption(value: string): Promise<unknown>;
@@ -41,7 +41,6 @@ export interface BrowserFrameLocator {
 export interface BrowserPage extends BrowserFrame {
   [key: string]: any;
   goto(url: string, options?: Record<string, unknown>): Promise<any>;
-  setContent(html: string, options?: { waitUntil?: string; timeout?: number }): Promise<void>;
   url(): string;
   title(): Promise<string>;
   isClosed(): boolean;
@@ -63,6 +62,14 @@ export interface BrowserContext {
   addCookies(cookies: unknown[]): Promise<void>;
   close(): Promise<void>;
 }
+
+// Short aliases keep the call sites readable while making the browser contract
+// explicitly owned by ARES rather than any third-party automation library.
+export type Response = BrowserResponse;
+export type Locator = BrowserLocator;
+export type Frame = BrowserFrame;
+export type FrameLocator = BrowserFrameLocator;
+export type Page = BrowserPage;
 
 export type ProxyProtocol = "http" | "https" | "socks5";
 
