@@ -32,10 +32,12 @@ describe("SeleniumBase task-runtime source guard", () => {
     expect(rpc).toContain('this.op("count"');
   });
 
-  it("restores root document after every frame-scoped action", () => {
-    expect(py).toContain("self.sb.switch_to_frame(selector)");
-    expect(py).toContain("finally:");
-    expect(py).toContain("self.sb.switch_to_default_content()");
+  it("scopes frame actions without WebDriver frame switching", () => {
+    expect(py).toContain("self._active_frame_path");
+    expect(py).toContain("targetWindow.document.querySelector(selector)");
+    expect(py).toContain("targetWindow.Function(source)");
+    expect(py).not.toContain("self.sb.switch_to_frame(");
+    expect(py).not.toContain("self.sb.switch_to_default_content()");
   });
 
   it("keeps fill atomic instead of mapping browser fill to slow typing", () => {
@@ -75,9 +77,14 @@ describe("SeleniumBase task-runtime source guard", () => {
     expect(py).toContain("accept=True");
   });
 
-  it("uses browser-internal pointer methods and never a global OS cursor", () => {
-    expect(py).toContain('getattr(element, "mouse_move"');
-    expect(py).toContain('getattr(element, "mouse_click"');
+  it("uses top-level CDP pointer input and never a global OS cursor", () => {
+    expect(py).toContain('getattr(mycdp, "input_", None)');
+    expect(py).toContain('getattr(input_domain, "dispatch_mouse_event", None)');
+    expect(py).toContain("self.sb.get_active_tab()");
+    expect(py).toContain('self._dispatch_mouse_event("mousePressed"');
+    expect(py).toContain('self._dispatch_mouse_event("mouseReleased"');
+    expect(py).not.toContain('getattr(element, "mouse_move"');
+    expect(py).not.toContain('getattr(element, "mouse_click"');
     expect(py).not.toContain("pyautogui");
   });
 

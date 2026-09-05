@@ -61,6 +61,7 @@ class DdddOcrSliderProvider:
             fraction = max(0.0, min(1.0, x1 / travel))
             return {
                 "found": True,
+                "grounded": True,
                 "targetFraction": fraction,
                 "confidence": 0.76,
                 "source": "ddddocr-slide-match",
