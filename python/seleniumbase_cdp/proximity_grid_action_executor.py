@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import random
 import time
 from typing import Any, Dict, Iterable, List, Tuple
 
@@ -30,13 +29,11 @@ class ProximityGridActionExecutor(AuthorizedGridActionExecutor):
         state = self._site_adapter.poll()
         requested = {str(value) for value in mark_ids if str(value)}
         marks = [
-            mark
-            for mark in state.get("marks") or []
+            mark for mark in state.get("marks") or []
             if isinstance(mark, dict) and mark.get("role") == "grid-tile"
         ]
         selected = [
-            index
-            for index, mark in enumerate(marks)
+            index for index, mark in enumerate(marks)
             if str(mark.get("markId") or "") in requested
         ]
         selected = self._ordered_indexes(state, selected)
@@ -198,14 +195,12 @@ class ProximityGridActionExecutor(AuthorizedGridActionExecutor):
         """
 
     def _sleep_between_clicks(self) -> None:
-        low, high = self._policy.grid_click_delay_range_seconds
-        if high > 0:
-            time.sleep(random.uniform(low, high))
+        delay = self._policy.grid_click_delay_seconds
+        if delay > 0:
+            time.sleep(delay)
 
     @staticmethod
     def _indexes(values: Iterable[int], count: int) -> List[int]:
-        # Parent _apply_state calls this again. Preserve the proximity order
-        # already computed by this subclass instead of sorting it away.
         result: List[int] = []
         seen = set()
         for value in values:
@@ -236,8 +231,7 @@ class ProximityGridActionExecutor(AuthorizedGridActionExecutor):
             return list(selected)
 
         marks = [
-            mark
-            for mark in state.get("marks") or []
+            mark for mark in state.get("marks") or []
             if isinstance(mark, dict) and mark.get("role") == "grid-tile"
         ]
         centers: Dict[int, Tuple[float, float]] = {}
@@ -262,10 +256,7 @@ class ProximityGridActionExecutor(AuthorizedGridActionExecutor):
             return list(selected)
 
         remaining = set(selected)
-        current = min(
-            remaining,
-            key=lambda index: (centers[index][1], centers[index][0], index),
-        )
+        current = min(remaining, key=lambda index: (centers[index][1], centers[index][0], index))
         order = [current]
         remaining.remove(current)
 
