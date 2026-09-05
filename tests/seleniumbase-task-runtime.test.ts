@@ -11,11 +11,11 @@ describe("SeleniumBase task-runtime source guard", () => {
   const adapter = read("python/seleniumbase_cdp/seleniumbase_adapter.py");
   const profileController = read("src/electron/profile-browser-controller.ts");
 
-  it("removes Patchright as an installed runtime dependency", () => {
-    expect(pkg.dependencies.patchright).toBeUndefined();
+  it("keeps SeleniumBase CDP as the configured runtime boundary", () => {
+    expect(pkg.scripts["browser:install"]).toContain("requirements-seleniumbase-cdp.txt");
     expect(runtime).toContain('engine = "seleniumbase-cdp"');
-    expect(owner).not.toContain('from "patchright-launcher"');
-    expect(owner).not.toContain('require("patchright")');
+    expect(owner).toContain("class SeleniumBaseBrowserWorker");
+    expect(owner).toContain("new SeleniumBaseRpcPage(transport)");
   });
 
   it("blocks every task RPC until Python reports explicit READY", () => {
@@ -38,7 +38,7 @@ describe("SeleniumBase task-runtime source guard", () => {
     expect(py).toContain("self.sb.switch_to_default_content()");
   });
 
-  it("keeps fill atomic instead of mapping Playwright fill to slow typing", () => {
+  it("keeps fill atomic instead of mapping browser fill to slow typing", () => {
     expect(py).toContain("Object.getOwnPropertyDescriptor(proto, 'value')");
     expect(py).toContain("new Event('input'");
     expect(py).toContain("new Event('change'");
@@ -90,6 +90,13 @@ describe("SeleniumBase task-runtime source guard", () => {
     expect(goto).toBeGreaterThanOrEqual(0);
     expect(stable).toBeGreaterThan(goto);
     expect(solve).toBeGreaterThan(stable);
+  });
+
+  it("registers proxied-session init scripts before navigation", () => {
+    expect(owner).toContain("installWebRtcProxyPolicy(context)");
+    expect(owner).toContain('transport.request("add-init-script"');
+    expect(py).toContain("add_script_to_evaluate_on_new_document");
+    expect(py).toContain('command_type == "add-init-script"');
   });
 
   it("does not block manual browser startup on optional vision readiness", () => {
