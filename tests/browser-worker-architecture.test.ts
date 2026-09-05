@@ -55,24 +55,22 @@ describe("external Node browser worker architecture", () => {
     const interfaces = fs.readFileSync(path.resolve(__dirname, "../src/interfaces/index.ts"), "utf8");
     const orchestrator = fs.readFileSync(path.resolve(__dirname, "../src/orchestrator/index.ts"), "utf8");
     const electronMain = fs.readFileSync(path.resolve(__dirname, "../src/electron/main.ts"), "utf8");
-
     expect(interfaces).toContain("cancelTask?(taskId: string): Promise<void>");
     expect(orchestrator).toContain("this.executor.cancelTask?.(taskId)");
     expect(electronMain).not.toContain("await browserWorker.cancelTask(taskId)");
   });
 
-  it("keeps concrete browser runtime imports outside Electron main", () => {
+  it("keeps task browser runtime ownership outside Electron main", () => {
     const electronMain = fs.readFileSync(path.resolve(__dirname, "../src/electron/main.ts"), "utf8");
-    expect(electronMain).not.toContain('from "patchright"');
-    expect(electronMain).not.toContain('require("patchright")');
     expect(electronMain).toContain('from "../browser-worker/client"');
+    expect(electronMain).not.toContain('from "../browser-worker/seleniumbase-browser-worker"');
+    expect(electronMain).not.toContain("new SeleniumBaseBrowserWorker(");
   });
 
   it("performs graceful async executor shutdown before Electron exits", () => {
     const clientSource = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/client.ts"), "utf8");
     const routerSource = fs.readFileSync(path.resolve(__dirname, "../src/commerce/task-executor-router.ts"), "utf8");
     const electronMain = fs.readFileSync(path.resolve(__dirname, "../src/electron/main.ts"), "utf8");
-
     expect(clientSource).toContain("async close(): Promise<void>");
     expect(clientSource).toContain('type: "shutdown"');
     expect(routerSource).toContain("async close(): Promise<void>");
