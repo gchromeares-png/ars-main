@@ -48,14 +48,12 @@ class VisionGridClassifier:
 
     def target_from_instruction(self, instruction: str, aliases: Dict[str, str] | None = None) -> str:
         text = self._normalize(instruction)
-        aliases = aliases or {}
-        for phrase, label in sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True):
+        for phrase, label in sorted((aliases or {}).items(), key=lambda item: len(item[0]), reverse=True):
             if self._normalize(phrase) in text:
                 return self._normalize(label)
         for label in sorted(self.classes, key=len, reverse=True):
             normalized = self._normalize(label)
-            variants = {normalized, normalized.rstrip("s"), normalized + "s"}
-            if any(value and value in text for value in variants):
+            if normalized and normalized in text:
                 return normalized
         return ""
 
