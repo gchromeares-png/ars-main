@@ -135,7 +135,7 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
 
       child = spawn(
         process.env["ARES_PYTHON_EXECUTABLE"]?.trim() || "python",
-        [this.resolveWorkerScript()],
+        ["-u", this.resolveWorkerScript()],
         {
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
