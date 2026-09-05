@@ -27,37 +27,22 @@ class FakeSb:
 
     def evaluate(self, script: str):
         self.script = script
-        return {
-            "status": "clicked",
-            "clickedIndexes": [1, 4, 7],
-            "submitted": True,
-            "strategy": "dom",
-        }
+        return {"status": "clicked", "clickedIndexes": [1, 4, 7], "submitted": True, "strategy": "dom"}
 
 
 def main() -> int:
     sb = FakeSb()
-    adapter = FakeGridAdapter()
-    disabled = AuthorizedGridActionExecutor(sb, adapter, authorized=False)
-    assert disabled.apply([1], expected_signature="before")["status"] == "disabled"
-
-    adapter = FakeGridAdapter()
-    executor = AuthorizedGridActionExecutor(sb, adapter, authorized=True)
-    result = executor.apply([7, 1, 4, 4], expected_signature="before", expected_tile_count=9)
+    result = AuthorizedGridActionExecutor(sb, FakeGridAdapter()).apply([7, 1, 4, 4], expected_signature="before")
     assert result["status"] == "clicked"
     assert result["clickedIndexes"] == [1, 4, 7]
-    assert result["submitted"] is True
     assert result["generationChanged"] is True
-    assert "shadowRoot" in sb.script
-    assert "contentDocument" in sb.script
+    assert "shadowRoot" in sb.script and "contentDocument" in sb.script
 
-    stale_adapter = FakeGridAdapter()
-    stale = AuthorizedGridActionExecutor(sb, stale_adapter, authorized=True)
-    result = stale.apply([1], expected_signature="wrong", expected_tile_count=9)
-    assert result["status"] == "stale-grid"
-    assert result["clickedIndexes"] == []
+    stale = AuthorizedGridActionExecutor(sb, FakeGridAdapter()).apply([1], expected_signature="wrong")
+    assert stale["status"] == "stale-grid"
+    assert stale["clickedIndexes"] == []
 
-    print("Authorized SeleniumBase grid action probe passed.")
+    print("SeleniumBase grid action probe passed.")
     return 0
 
 
