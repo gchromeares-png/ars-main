@@ -36,22 +36,23 @@ class FakeAdapter:
     def apply_grid_selection(self, indexes, expected_signature="", submit=True):
         assert expected_signature == self.signature
         self.actions.append(list(indexes))
+        changed = self.signature == "grid-a"
         self.signature = "grid-b"
-        return {"status": "clicked", "generationChanged": True}
+        return {"status": "clicked", "generationChanged": changed}
 
 
 def main() -> int:
     adapter = FakeAdapter()
     runner = VisionGridRunner(adapter, FakeClassifier(), threshold=0.72)
+
     first = runner.tick()
     assert first["status"] == "clicked" and first["indexes"] == [1, 4]
-    assert adapter.actions == [[1, 4]]
-
     second = runner.tick()
-    assert second["status"] == "clicked" and adapter.actions == [[1, 4], [1, 4]]
-
+    assert second["status"] == "clicked"
     third = runner.tick()
-    assert third["status"] == "clicked"
+    assert third["status"] == "idle"
+    assert adapter.actions == [[1, 4], [1, 4]]
+
     print("Vision grid runner probe passed.")
     return 0
 
