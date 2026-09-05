@@ -166,6 +166,7 @@ class TaskRpcRuntime:
         self._network_lock = threading.Lock()
         self._network_events: Deque[Dict[str, Any]] = deque(maxlen=MAX_NETWORK_EVENTS)
         self._last_tab_count = 1
+        self._active_frame_path: List[str] = []
         self._install_network_handler()
         self._install_dialog_handler()
         self._apply_user_agent_override(user_agent, language)
@@ -289,10 +290,6 @@ class TaskRpcRuntime:
 
     def page_state(self) -> Dict[str, Any]:
         try:
-            self.sb.switch_to_default_content()
-        except Exception:
-            pass
-        try:
             url = str(self.sb.get_current_url() or "")
         except Exception:
             url = ""
@@ -318,9 +315,13 @@ class TaskRpcRuntime:
                 continue
             visited.add(key)
             try:
-                self._switch_to_frame_path(path)
-                current_url = str(self.adapter.execute_script("return window.location.href;") or "")
-                raw_descriptors = self.adapter.execute_script(_FRAME_DESCRIPTORS_SCRIPT)
+                current_url, raw_descriptors = self._in_frames(
+                    path,
+                    lambda: (
+                        str(self._execute_script_retry("return window.location.href;") or ""),
+                        self._execute_script_retry(_FRAME_DESCRIPTORS_SCRIPT),
+                    ),
+                )
                 descriptors = raw_descriptors if isinstance(raw_descriptors, list) else []
                 if path and key in entries and current_url:
                     entries[key]["url"] = current_url
@@ -344,11 +345,6 @@ class TaskRpcRuntime:
                         queue_paths.append(child_path)
             except Exception:
                 continue
-            finally:
-                try:
-                    self.sb.switch_to_default_content()
-                except Exception:
-                    pass
 
         return list(entries.values())
 
@@ -383,11 +379,49 @@ class TaskRpcRuntime:
             "url": str(self.sb.get_current_url() or ""),
         }
 
-    def _execute_script_retry(self, script: str, *args: Any) -> Any:
+    def _execute_script_in_frame_path(self, frame_path: Iterable[str], script: str, args: Iterable[Any]) -> Any:
+        path = [str(value) for value in frame_path if str(value)]
+        if not path:
+            return self.adapter.execute_script(script, *list(args))
+        wrapper = r"""
+const framePath = Array.isArray(arguments[0]) ? arguments[0] : [];
+const source = String(arguments[1] || '');
+const callArgs = Array.isArray(arguments[2]) ? arguments[2] : [];
+let targetWindow = window;
+for (const rawSelector of framePath) {
+  const selector = String(rawSelector || '');
+  let frame;
+  try {
+    frame = targetWindow.document.querySelector(selector);
+  } catch (error) {
+    return {__aresFrameExecutionError:true, selector, message:String(error?.message || error)};
+  }
+  if (!frame || !frame.contentWindow) return {__aresFrameMissing:true, selector};
+  targetWindow = frame.contentWindow;
+}
+try {
+  const fn = targetWindow.Function(source);
+  return fn.apply(targetWindow, callArgs);
+} catch (error) {
+  return {__aresFrameExecutionError:true, message:String(error?.message || error)};
+}
+"""
+        value = self.adapter.execute_script(wrapper, path, script, list(args))
+        if isinstance(value, dict) and value.get("__aresFrameMissing"):
+            raise LookupError(f"Frame path no longer resolves at {value.get('selector')}")
+        if isinstance(value, dict) and value.get("__aresFrameExecutionError"):
+            raise RuntimeError(
+                "Frame execution is not script-accessible; an attached OOPIF CDP session is required: "
+                f"{value.get('message') or 'unknown frame execution error'}"
+            )
+        return value
+
+    def _execute_script_retry_for_path(self, frame_path: Iterable[str], script: str, *args: Any) -> Any:
         last: Exception | None = None
+        path = [str(value) for value in frame_path if str(value)]
         for attempt in range(3):
             try:
-                return self.adapter.execute_script(script, *args)
+                return self._execute_script_in_frame_path(path, script, args)
             except Exception as exc:
                 last = exc
                 message = str(exc).lower()
@@ -400,30 +434,52 @@ class TaskRpcRuntime:
             raise last
         return None
 
+    def _execute_script_retry(self, script: str, *args: Any) -> Any:
+        return self._execute_script_retry_for_path(self._active_frame_path, script, *args)
+
     def _frame_viewport_offset(self, frame_path: Iterable[str]) -> tuple[float, float]:
-        offset_x = 0.0
-        offset_y = 0.0
-        try:
-            self.sb.switch_to_default_content()
-        except Exception:
-            pass
-        for selector in frame_path:
-            geometry = self._execute_script_retry(
-                """
-const frame = document.querySelector(String(arguments[0] || ''));
-if (!frame) return null;
-frame.scrollIntoView({block:'nearest', inline:'nearest'});
-const r = frame.getBoundingClientRect();
-return {x:r.left + Number(frame.clientLeft || 0), y:r.top + Number(frame.clientTop || 0), width:r.width, height:r.height};
+        path = [str(value) for value in frame_path if str(value)]
+        if not path:
+            return 0.0, 0.0
+        geometry = self._execute_script_retry_for_path(
+            [],
+            r"""
+const framePath = Array.isArray(arguments[0]) ? arguments[0] : [];
+let targetWindow = window;
+let x = 0;
+let y = 0;
+for (const rawSelector of framePath) {
+  const selector = String(rawSelector || '');
+  let frame;
+  try {
+    frame = targetWindow.document.querySelector(selector);
+  } catch (error) {
+    return {__aresFrameExecutionError:true, selector, message:String(error?.message || error)};
+  }
+  if (!frame || !frame.contentWindow) return {__aresFrameMissing:true, selector};
+  frame.scrollIntoView({block:'nearest', inline:'nearest'});
+  const r = frame.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return {__aresFrameInvisible:true, selector};
+  x += r.left + Number(frame.clientLeft || 0);
+  y += r.top + Number(frame.clientTop || 0);
+  targetWindow = frame.contentWindow;
+}
+return {x, y};
 """,
-                selector,
+            path,
+        )
+        if isinstance(geometry, dict) and geometry.get("__aresFrameMissing"):
+            raise LookupError(f"Frame path no longer resolves at {geometry.get('selector')}")
+        if isinstance(geometry, dict) and geometry.get("__aresFrameInvisible"):
+            raise LookupError(f"Frame is not visible for native click: {geometry.get('selector')}")
+        if isinstance(geometry, dict) and geometry.get("__aresFrameExecutionError"):
+            raise RuntimeError(
+                "Nested frame geometry is not script-accessible; an attached OOPIF CDP session is required: "
+                f"{geometry.get('message') or 'unknown frame geometry error'}"
             )
-            if not isinstance(geometry, dict) or float(geometry.get("width") or 0.0) <= 0 or float(geometry.get("height") or 0.0) <= 0:
-                raise LookupError(f"Frame is not visible for native click: {selector}")
-            offset_x += float(geometry.get("x") or 0.0)
-            offset_y += float(geometry.get("y") or 0.0)
-            self.sb.switch_to_frame(selector)
-        return offset_x, offset_y
+        if not isinstance(geometry, dict):
+            raise RuntimeError("Frame viewport offset could not be resolved")
+        return float(geometry.get("x") or 0.0), float(geometry.get("y") or 0.0)
 
     @staticmethod
     def _assert_native_click_probe(probe: Any, selector: str) -> Dict[str, Any]:
@@ -606,26 +662,13 @@ const fn=(0,eval)(`(${fnSource})`); if(arguments[5]) return fn(items,...extra); 
             args,
         )
 
-    def _switch_to_frame_path(self, frame_path: Iterable[str]) -> None:
-        try:
-            self.sb.switch_to_default_content()
-        except Exception:
-            pass
-        for selector in frame_path:
-            self.sb.switch_to_frame(selector)
-
     def _in_frames(self, frame_path: Iterable[str], action: Any) -> Any:
-        path = list(frame_path)
-        if not path:
-            return action()
+        previous_path = self._active_frame_path
+        self._active_frame_path = [str(value) for value in frame_path if str(value)]
         try:
-            self._switch_to_frame_path(path)
             return action()
         finally:
-            try:
-                self.sb.switch_to_default_content()
-            except Exception:
-                pass
+            self._active_frame_path = previous_path
 
     def _wait_ready(self, timeout_ms: int) -> None:
         deadline = time.monotonic() + max(0.25, timeout_ms / 1000.0)
@@ -640,7 +683,8 @@ const fn=(0,eval)(`(${fnSource})`); if(arguments[5]) return fn(items,...extra); 
 
     def _mouse(self, action: str, command: Dict[str, Any]) -> bool:
         x, y = float(command.get("x") or 0), float(command.get("y") or 0)
-        hit = self._execute_script_retry(
+        hit = self._execute_script_retry_for_path(
+            [],
             "return !!document.elementFromPoint(Number(arguments[0]), Number(arguments[1]));",
             x,
             y,
