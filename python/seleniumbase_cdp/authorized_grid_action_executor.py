@@ -4,8 +4,11 @@ import json
 from typing import Any, Dict, Iterable, List
 
 
+_SUPPORTED_COUNTS = [4, 6, 8, 9, 12, 16, 20, 25]
+
+
 class AuthorizedGridActionExecutor:
-    """Apply classifier-selected tile indexes to the current authorized test grid."""
+    """Apply classifier-selected tile indexes to the current structural test grid."""
 
     def __init__(self, seleniumbase_cdp: Any, site_adapter: Any) -> None:
         self._sb = seleniumbase_cdp
@@ -33,11 +36,25 @@ class AuthorizedGridActionExecutor:
         (() => {{
           const selected = {json.dumps(selected)};
           const overrides = {json.dumps(overrides)};
+          const supported = new Set({json.dumps(_SUPPORTED_COUNTS)});
           const roots = [], seen = new Set();
           const visible = el => {{
             if (!el?.getBoundingClientRect) return false;
             const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-            return r.width >= 24 && r.height >= 24 && s.display !== 'none' && s.visibility !== 'hidden';
+            return r.width >= 24 && r.height >= 24 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
+          }};
+          const bgUrl = el => {{
+            if (!el || !visible(el)) return '';
+            const bg = getComputedStyle(el).backgroundImage || '';
+            const match = bg.match(/url\\(["']?(.*?)["']?\\)/i);
+            return match?.[1] || '';
+          }};
+          const tileFor = visual => visual.closest?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i]') || visual;
+          const visualsIn = root => {{
+            const items = [...(root.querySelectorAll?.('img,canvas') || [])].filter(visible);
+            const bgCandidates = [...(root.querySelectorAll?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i],[class*="image" i]') || [])]
+              .filter(el => visible(el) && bgUrl(el));
+            return [...new Set([...items, ...bgCandidates])];
           }};
           const walk = root => {{
             if (!root || seen.has(root)) return;
@@ -53,12 +70,19 @@ class AuthorizedGridActionExecutor:
           for (const root of roots) {{
             if (overrides.tiles) {{
               const tiles = [...root.querySelectorAll(overrides.tiles)].filter(visible);
-              if ([9,16].includes(tiles.length)) groups.push({{root, tiles, preferred:true}});
+              if (supported.has(tiles.length)) groups.push({{root:overrides.root ? root.querySelector(overrides.root) || root : root, tiles, preferred:true}});
             }}
-            for (const parent of root.querySelectorAll?.('*') || []) {{
-              const imgs = [...parent.querySelectorAll('img')].filter(visible);
-              if (![9,16].includes(imgs.length)) continue;
-              groups.push({{root:parent, tiles:imgs.map(img => img.closest('button,[role="button"],[tabindex],label,li,div') || img), preferred:false}});
+            if (!overrides.tiles) {{
+              const parents = new Set();
+              for (const visual of visualsIn(root)) {{
+                let node = tileFor(visual);
+                for (let depth=0; node && depth<5; depth++, node=node.parentElement) if (node.parentElement) parents.add(node.parentElement);
+              }}
+              for (const parent of parents) {{
+                const tiles = [...new Set(visualsIn(parent).map(tileFor))].filter(visible);
+                if (!supported.has(tiles.length)) continue;
+                groups.push({{root:parent, tiles, preferred:false}});
+              }}
             }}
           }}
           groups.sort((a,b) => Number(b.preferred)-Number(a.preferred));
@@ -70,13 +94,15 @@ class AuthorizedGridActionExecutor:
             const tile = group.tiles[index];
             if (!tile) continue;
             tile.scrollIntoView({{block:'center', inline:'center'}});
-            tile.click(); clicked.push(index);
+            tile.click();
+            clicked.push(index);
           }}
 
           let submitted = false;
           if ({str(submit).lower()}) {{
             const selector = overrides.submit || 'button[type="submit"],input[type="submit"],button,[role="button"]';
-            const button = [...(group.root.parentElement?.querySelectorAll(selector) || [])].filter(visible).find(el => !group.tiles.includes(el));
+            const button = [...(group.root.parentElement?.querySelectorAll(selector) || [])]
+              .filter(el => visible(el) && !group.tiles.includes(el))[0];
             if (button) {{ button.click(); submitted = true; }}
           }}
           return {{clicked, submitted}};
@@ -99,7 +125,8 @@ class AuthorizedGridActionExecutor:
                 continue
             click = getattr(images[index], "mouse_click", None) or getattr(images[index], "click", None)
             if callable(click):
-                click(); clicked.append(index)
+                click()
+                clicked.append(index)
 
         submitted = False
         if submit:
@@ -113,7 +140,9 @@ class AuthorizedGridActionExecutor:
                     button = None
                 click = (getattr(button, "mouse_click", None) or getattr(button, "click", None)) if button else None
                 if callable(click):
-                    click(); submitted = True; break
+                    click()
+                    submitted = True
+                    break
         return {"clicked": clicked, "submitted": submitted}
 
     def _evaluate(self, script: str) -> Any:
