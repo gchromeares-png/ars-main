@@ -1,13 +1,13 @@
 import * as readline from "readline";
 import type { BrowserWorkerRequest, BrowserWorkerResponse } from "./protocol";
 import type { AresProfile } from "../profiles/models";
-import type { CheckoutPaymentSession, PaymentPreparationResult } from "../payments/models";
+import type { CheckoutPaymentSession } from "../payments/models";
 import type { RuntimeShop } from "./runtime-types";
 import type { ShopifyTaskExecutor as ShopifyExecutorType } from "../shopify/shopify-task-executor";
+import type { ShopifyPurchaseReadyExecutor as ShopifyPurchaseReadyExecutorType } from "../shopify/shopify-purchase-ready-executor";
 import type { EarlyGateBrowserTaskExecutor as EarlyGateExecutorType } from "./early-gate-task-executor";
 import type { AresBrowserRuntime as BrowserCoreType } from "./ares-browser-runtime";
 import type { PokemonCenterReleaseJourney as PokemonCenterJourneyType } from "../commerce/pokemon-center/release-journey";
-import { ShopifyPaymentPreparer } from "../shopify/payment-preparer";
 import { isEarlyGateChildTask } from "../monitor/early-gate";
 import { isShopifyRuntimeShop } from "./runtime-types";
 
@@ -19,6 +19,7 @@ if (nodeMajor < 20) {
 
 const { AresBrowserRuntime } = require("./ares-browser-runtime") as { AresBrowserRuntime: typeof BrowserCoreType; };
 const { ShopifyTaskExecutor } = require("../shopify/shopify-task-executor") as { ShopifyTaskExecutor: typeof ShopifyExecutorType; };
+const { ShopifyPurchaseReadyExecutor } = require("../shopify/shopify-purchase-ready-executor") as { ShopifyPurchaseReadyExecutor: typeof ShopifyPurchaseReadyExecutorType; };
 const { EarlyGateBrowserTaskExecutor } = require("./early-gate-task-executor") as { EarlyGateBrowserTaskExecutor: typeof EarlyGateExecutorType; };
 const { PokemonCenterReleaseJourney } = require("../commerce/pokemon-center/release-journey") as { PokemonCenterReleaseJourney: typeof PokemonCenterJourneyType; };
 
@@ -27,7 +28,6 @@ function send(message: BrowserWorkerResponse): void { process.stdout.write(`${JS
 const shops = new Map<string, RuntimeShop>();
 const profiles = new Map<string, AresProfile>();
 const browserCore = new AresBrowserRuntime();
-const paymentPreparer = new ShopifyPaymentPreparer();
 const pokemonCenterJourney = new PokemonCenterReleaseJourney();
 
 function stampProfileOwnedBrowserSession(task: any): void {
@@ -58,6 +58,11 @@ const shopifyExecutor = new ShopifyTaskExecutor(
   shopId => { const shop = shops.get(shopId); return shop && isShopifyRuntimeShop(shop) ? shop : undefined; },
   profileId => profiles.get(profileId), browserCore, undefined, emitTaskUpdate
 );
+const shopifyPurchaseReadyExecutor = new ShopifyPurchaseReadyExecutor(
+  shopifyExecutor,
+  browserCore,
+  emitTaskUpdate
+);
 const earlyGateExecutor = new EarlyGateBrowserTaskExecutor(
   shopId => shops.get(shopId), profileId => profiles.get(profileId),
   shop => pokemonCenterJourney.supports(shop) ? pokemonCenterJourney : undefined,
@@ -72,21 +77,6 @@ function takePaymentSession(request: Extract<BrowserWorkerRequest, { type: "exec
   return session;
 }
 
-async function preparePayment(request: Extract<BrowserWorkerRequest, { type: "execute" }>, session: CheckoutPaymentSession | undefined): Promise<void> {
-  const page = browserCore.getContext(request.task.id)?.page;
-  if (!page) return;
-  let paymentPreparation: PaymentPreparationResult;
-  try { paymentPreparation = await paymentPreparer.prepare(page, session); }
-  catch (error) {
-    paymentPreparation = {
-      detectedMethods: [], selectedMethod: session?.method, filledFields: [], missingFields: [], requiresUserAction: true,
-      note: `Zahlungsprüfung fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`
-    };
-  }
-  request.task.config.data = { ...(request.task.config.data ?? {}), paymentPreparation };
-  emitTaskUpdate(request.task);
-}
-
 async function handle(request: BrowserWorkerRequest): Promise<void> {
   try {
     if (request.type === "execute") {
@@ -99,8 +89,9 @@ async function handle(request: BrowserWorkerRequest): Promise<void> {
       try {
         const earlyGate = isEarlyGateChildTask(request.task);
         if (!earlyGate && !isShopifyRuntimeShop(request.shop)) throw new Error(`Für ${request.shop.platform} ist kein regulärer Browser-Executor registriert.`);
-        const success = earlyGate ? await earlyGateExecutor.execute(request.task, paymentSession) : await shopifyExecutor.execute(request.task);
-        if (success && !earlyGate) await preparePayment(request, paymentSession);
+        const success = earlyGate
+          ? await earlyGateExecutor.execute(request.task, paymentSession)
+          : await shopifyPurchaseReadyExecutor.execute(request.task, request.profile, paymentSession);
         stampProfileOwnedBrowserSession(request.task);
         request.task.config.data = {
           ...(request.task.config.data ?? {}),
@@ -128,11 +119,17 @@ async function handle(request: BrowserWorkerRequest): Promise<void> {
       send({ type: "ack", requestId: request.requestId, keywords }); return;
     }
     if (request.type === "set-final-purchase-permission") {
-      await earlyGateExecutor.setFinalPurchaseAllowed(request.allowed === true);
+      await Promise.all([
+        earlyGateExecutor.setFinalPurchaseAllowed(request.allowed === true),
+        shopifyPurchaseReadyExecutor.setFinalPurchaseAllowed(request.allowed === true)
+      ]);
       send({ type: "ack", requestId: request.requestId, allowFinalPurchase: request.allowed === true }); return;
     }
     if (request.type === "cancel") {
-      await Promise.allSettled([earlyGateExecutor.cancelTask(request.taskId), shopifyExecutor.closeTask(request.taskId)]);
+      await Promise.allSettled([
+        earlyGateExecutor.cancelTask(request.taskId),
+        shopifyPurchaseReadyExecutor.cancelTask(request.taskId)
+      ]);
       browserCore.unbindTaskProfile(request.taskId);
       send({ type: "ack", requestId: request.requestId }); return;
     }
@@ -147,9 +144,12 @@ async function handle(request: BrowserWorkerRequest): Promise<void> {
       }); return;
     }
     if (request.type === "shutdown") {
-      await earlyGateExecutor.setFinalPurchaseAllowed(false);
+      await Promise.all([
+        earlyGateExecutor.setFinalPurchaseAllowed(false),
+        shopifyPurchaseReadyExecutor.setFinalPurchaseAllowed(false)
+      ]);
       await earlyGateExecutor.closeAll();
-      await shopifyExecutor.closeAll();
+      await shopifyPurchaseReadyExecutor.closeAll();
       send({ type: "ack", requestId: request.requestId });
       setImmediate(() => process.exit(0)); return;
     }
@@ -170,9 +170,12 @@ let shuttingDown = false;
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  await earlyGateExecutor.setFinalPurchaseAllowed(false).catch(() => undefined);
+  await Promise.all([
+    earlyGateExecutor.setFinalPurchaseAllowed(false).catch(() => undefined),
+    shopifyPurchaseReadyExecutor.setFinalPurchaseAllowed(false).catch(() => undefined)
+  ]);
   await earlyGateExecutor.closeAll().catch(() => undefined);
-  await shopifyExecutor.closeAll().catch(() => undefined);
+  await shopifyPurchaseReadyExecutor.closeAll().catch(() => undefined);
   process.exit(0);
 }
 process.on("SIGTERM", () => void shutdown());
