@@ -1,0 +1,86 @@
+from __future__ import annotations
+
+import math
+
+from cursor_path_provider import CursorPathProvider
+from slider_target_grounder import SliderTargetGrounder
+
+
+class FakeImage:
+    def __init__(self, width: int, height: int, base=(120, 120, 120)) -> None:
+        self.width = width
+        self.height = height
+        self._pixels = [[tuple(base) for _ in range(width)] for _ in range(height)]
+
+    def fill_rect(self, x1: int, y1: int, x2: int, y2: int, color) -> None:
+        for y in range(max(0, y1), min(self.height, y2)):
+            for x in range(max(0, x1), min(self.width, x2)):
+                self._pixels[y][x] = tuple(color)
+
+    def convert(self, _mode: str):
+        return self
+
+    def load(self):
+        image = self
+
+        class Pixels:
+            def __getitem__(self, key):
+                x, y = key
+                return image._pixels[y][x]
+
+        return Pixels()
+
+
+class NoScreenshotSb:
+    def evaluate(self, _script: str):
+        return {}
+
+
+def main() -> int:
+    grounder = SliderTargetGrounder(NoScreenshotSb())
+
+    percent = grounder.ground({
+        "kind": "slider",
+        "instruction": "Bewege den Regler auf 63 %",
+        "min": 0,
+        "max": 100,
+        "targetCandidates": [],
+    })
+    assert percent["grounded"] is True
+    assert abs(percent["targetFraction"] - 0.63) < 0.001
+    assert percent["source"] == "instruction-percent"
+
+    dom = grounder.ground({
+        "kind": "slider",
+        "instruction": "Bewege den Regler zur Zielmarkierung",
+        "min": 0,
+        "max": 100,
+        "targetCandidates": [
+            {"markId": "S3", "fraction": 0.71, "score": 82, "label": "Ziel", "rect": {"x": 210, "y": 40, "width": 12, "height": 20}}
+        ],
+    })
+    assert dom["grounded"] is True
+    assert abs(dom["targetFraction"] - 0.71) < 0.001
+    assert dom["source"] == "dom-target" and dom["markId"] == "S3"
+
+    image = FakeImage(240, 28)
+    image.fill_rect(150, 8, 174, 20, (166, 166, 166))
+    visual = SliderTargetGrounder.analyze_track_image(image, orientation="horizontal", current_fraction=0.18)
+    assert visual is not None
+    assert 0.62 <= visual["targetFraction"] <= 0.72, visual
+    assert visual["confidence"] >= 0.45
+
+    provider = CursorPathProvider()
+    plan = provider.plan((30.0, 40.0), (360.0, 180.0))
+    points = plan["points"]
+    assert len(points) >= 2
+    assert math.hypot(points[0][0] - 30.0, points[0][1] - 40.0) <= 1.0
+    assert math.hypot(points[-1][0] - 360.0, points[-1][1] - 180.0) <= 1.0
+    assert plan["provider"] in {"ghost-cursor", "bezier-mouse-js", "internal-bezier", "python-bezier"}
+
+    print(f"Visual grounding probe passed. cursorProvider={plan['provider']} target={visual['targetFraction']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
