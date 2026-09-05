@@ -1,4 +1,4 @@
-import type { Locator, Page } from "patchright";
+import type { Locator, Page } from "../src/browser-worker/types";
 import { InteractionEngine } from "../src/browser-worker/interaction-engine";
 import type { InteractionTargetState } from "../src/browser-worker/interaction-models";
 import type { InteractionStateObserver } from "../src/browser-worker/state-observer";
