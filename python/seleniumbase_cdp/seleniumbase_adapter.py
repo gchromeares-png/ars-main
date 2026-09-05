@@ -25,6 +25,7 @@ class SeleniumBaseCdpAdapter:
         proxy: str | None = None,
         user_agent: str | None = None,
         site_adapter_overrides: Dict[str, str] | None = None,
+        vision_config: Dict[str, Any] | None = None,
     ) -> None:
         self.profile_dir = Path(profile_dir).expanduser().resolve()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -38,7 +39,20 @@ class SeleniumBaseCdpAdapter:
         self._challenge_tracker = ChallengeStateTracker(self._sb)
         self._site_adapter = GridSiteAdapter(self._sb, overrides=site_adapter_overrides)
         self._grid_actions = AuthorizedGridActionExecutor(self._sb, self._site_adapter)
+        self._vision_runner = self._build_vision_runner(vision_config or {})
+        self._last_vision_result: Dict[str, Any] = {"status": "inactive"}
         self._closed = False
+
+    def _build_vision_runner(self, config: Dict[str, Any]) -> Any:
+        model_path = str(config.get("modelPath") or "").strip()
+        if not model_path:
+            return None
+        from vision_grid_classifier import VisionGridClassifier
+        from vision_grid_runner import VisionGridRunner
+
+        aliases = VisionGridClassifier.load_aliases(str(config.get("aliasesPath") or "").strip() or None)
+        threshold = float(config.get("threshold", 0.72))
+        return VisionGridRunner(self, VisionGridClassifier(model_path), aliases=aliases, threshold=threshold)
 
     @property
     def chrome_pid(self) -> int | None:
@@ -59,20 +73,20 @@ class SeleniumBaseCdpAdapter:
     def site_grid_state(self) -> Dict[str, Any]:
         return self._site_adapter.poll()
 
-    def apply_grid_selection(
-        self,
-        indexes: Iterable[int],
-        *,
-        expected_signature: str = "",
-        submit: bool = True,
-    ) -> Dict[str, Any]:
+    def apply_grid_selection(self, indexes: Iterable[int], *, expected_signature: str = "", submit: bool = True) -> Dict[str, Any]:
         return self._grid_actions.apply(indexes, expected_signature=expected_signature, submit=submit)
+
+    def vision_tick(self) -> Dict[str, Any]:
+        if self._vision_runner is not None:
+            self._last_vision_result = self._vision_runner.tick()
+        return self._last_vision_result
 
     def inspect_session(self) -> Dict[str, Any]:
         return {
             "url": str(self._sb.get_current_url() or ""),
             "title": str(self._sb.get_title() or ""),
             "cookies": self.get_snapshot_cookies(),
+            "vision": self._last_vision_result,
         }
 
     def execute_script(self, script: str) -> Any:
@@ -110,6 +124,10 @@ class SeleniumBaseCdpAdapter:
                     observer.poll()
                 except Exception:
                     pass
+            try:
+                self.vision_tick()
+            except Exception as exc:
+                self._last_vision_result = {"status": "error", "error": str(exc)}
         return running
 
     def quit(self) -> None:
