@@ -53,6 +53,16 @@ class SliderSiteAdapter:
             }}
             return '';
           }};
+          const scopeToken = (el, fallbackIndex=0) => {{
+            if (!el) return `slot:${{fallbackIndex}}`;
+            const id = el.getAttribute?.('id') || '';
+            const testId = el.getAttribute?.('data-testid') || '';
+            const name = el.getAttribute?.('name') || '';
+            const aria = el.getAttribute?.('aria-label') || '';
+            const cls = typeof el.className === 'string' ? el.className.trim().split(/\\s+/).slice(0,3).join('.') : '';
+            const tag = (el.tagName || 'node').toLowerCase();
+            return [tag,id,testId,name,aria,cls,`slot:${{fallbackIndex}}`].join('|');
+          }};
           const structuralKey = (el, role, fallbackIndex=0) => {{
             if (!el) return `${{role}}:slot:${{fallbackIndex}}`;
             const selector = selectorFor(el);
@@ -79,13 +89,27 @@ class SliderSiteAdapter:
               style.borderColor || '',
             ].join('|');
           }};
+          const numberValue = (...values) => {{
+            for (const raw of values) {{
+              if (raw === null || raw === undefined || String(raw).trim() === '') continue;
+              const parsed = Number(raw);
+              if (Number.isFinite(parsed)) return parsed;
+            }}
+            return null;
+          }};
           const roots = [], seen = new Set();
           const walk = (root, scope) => {{
             if (!root || seen.has(root)) return;
             seen.add(root); roots.push([root, scope]);
-            for (const el of root.querySelectorAll?.('*') || []) if (el.shadowRoot) walk(el.shadowRoot, scope + '/shadow');
-            for (const frame of root.querySelectorAll?.('iframe') || []) {{
-              try {{ if (frame.contentDocument) walk(frame.contentDocument, scope + '/iframe'); }} catch (_) {{}}
+            const all = [...(root.querySelectorAll?.('*') || [])];
+            for (const [index,el] of all.entries()) {{
+              if (el.shadowRoot) walk(el.shadowRoot, scope + '/shadow:' + scopeToken(el,index));
+            }}
+            const frames = [...(root.querySelectorAll?.('iframe') || [])];
+            for (const [index,frame] of frames.entries()) {{
+              try {{
+                if (frame.contentDocument) walk(frame.contentDocument, scope + '/iframe:' + scopeToken(frame,index));
+              }} catch (_) {{}}
             }}
           }};
           const center = r => [r.x + r.width/2, r.y + r.height/2];
@@ -113,9 +137,15 @@ class SliderSiteAdapter:
 
               const h = handle.getBoundingClientRect(), t = track.getBoundingClientRect();
               const horizontal = t.width >= t.height;
-              const min = Number(handle.min ?? handle.getAttribute('aria-valuemin') ?? 0);
-              const max = Number(handle.max ?? handle.getAttribute('aria-valuemax') ?? 100);
-              const value = Number(handle.value ?? handle.getAttribute('aria-valuenow') ?? min);
+              const min = nativeRange
+                ? (numberValue(handle.min, handle.getAttribute('min'), 0) ?? 0)
+                : (numberValue(handle.getAttribute('aria-valuemin'), handle.min, 0) ?? 0);
+              const max = nativeRange
+                ? (numberValue(handle.max, handle.getAttribute('max'), 100) ?? 100)
+                : (numberValue(handle.getAttribute('aria-valuemax'), handle.max, 100) ?? 100);
+              const value = nativeRange
+                ? (numberValue(handle.value, handle.getAttribute('value'), min) ?? min)
+                : (numberValue(handle.getAttribute('aria-valuenow'), handle.value, min) ?? min);
               const span = Math.max(1, max - min);
               const fraction = Math.max(0, Math.min(1, (value - min) / span));
               const instruction = overrides.sliderInstruction
@@ -210,6 +240,15 @@ class SliderSiteAdapter:
         return self._normalize(value)
 
     def _with_generation(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        target_state = [
+            [
+                str(item.get("markId") or ""),
+                round(float(item.get("fraction") or 0.0), 4),
+                str(item.get("semanticVisualSignature") or ""),
+            ]
+            for item in snapshot.get("targetCandidates") or []
+            if isinstance(item, dict)
+        ]
         signature_input = "|".join([
             str(snapshot.get("kind") or "none"),
             str(snapshot.get("scope") or ""),
@@ -217,6 +256,7 @@ class SliderSiteAdapter:
             str(round(float(snapshot.get("fraction") or 0), 4)),
             str(snapshot.get("instruction") or ""),
             stable_mark_digest(snapshot.get("marks") or []),
+            json.dumps(target_state, sort_keys=True),
             str(bool(snapshot.get("complete"))),
             str(bool(snapshot.get("failed"))),
         ])
