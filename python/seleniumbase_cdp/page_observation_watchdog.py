@@ -8,7 +8,7 @@ from interaction_policy import InteractionPolicy
 
 
 class PageObservationWatchdog:
-    """Cheap DOM/URL watchdog. It never captures screenshots or runs vision."""
+    """Cheap DOM/URL heartbeat. It never captures screenshots or runs vision."""
 
     def __init__(self, seleniumbase_cdp: Any, policy: InteractionPolicy) -> None:
         self._sb = seleniumbase_cdp
@@ -42,7 +42,7 @@ class PageObservationWatchdog:
             if current.get("fingerprint") != previous.get("fingerprint"):
                 events.append("layout-generation-changed")
 
-        changed = previous is None or current.get("fingerprint") != previous.get("fingerprint")
+        changed = previous is None or current.get("actionFingerprint") != previous.get("actionFingerprint")
         if changed:
             self._generation += 1
         self._last = current
@@ -73,6 +73,9 @@ class PageObservationWatchdog:
           const safeCount = selector => {{
             try {{ return document.querySelectorAll(selector).length; }} catch (_) {{ return 0; }}
           }};
+          const safeElements = selector => {{
+            try {{ return [...document.querySelectorAll(selector)]; }} catch (_) {{ return []; }}
+          }};
           const body = document.body;
           const text = (body?.innerText || '').toLowerCase().slice(0, 12000);
           const matches = hints.filter(hint => hint && text.includes(String(hint).toLowerCase())).slice(0, 16);
@@ -86,6 +89,31 @@ class PageObservationWatchdog:
           const sliders = safeCount('input[type=range],[role=slider],[aria-valuenow],[class*=slider i]');
           const grids = safeCount('[class*=grid i],[class*=tile i],[class*=cell i]');
           const canvas = safeCount('canvas');
+
+          const watched = [];
+          const seen = new Set();
+          const watchedSelectors = [...selectors, ...priorities, 'img', 'canvas', 'input[type=range]', '[role=slider]'];
+          for (const selector of watchedSelectors) {{
+            for (const el of safeElements(selector)) {{
+              if (seen.has(el)) continue;
+              seen.add(el);
+              watched.push([
+                el.tagName || '',
+                el.id || '',
+                typeof el.className === 'string' ? el.className.slice(0, 160) : '',
+                el.getAttribute?.('role') || '',
+                el.getAttribute?.('aria-label') || '',
+                el.getAttribute?.('aria-valuenow') || '',
+                el.getAttribute?.('data-state') || '',
+                el.getAttribute?.('value') || '',
+                el.currentSrc || el.getAttribute?.('src') || '',
+                el.getAttribute?.('alt') || '',
+              ]);
+              if (watched.length >= 96) break;
+            }}
+            if (watched.length >= 96) break;
+          }}
+
           return {{
             url: location.href,
             title: document.title || '',
@@ -94,7 +122,7 @@ class PageObservationWatchdog:
             nodeCount: safeCount('body *'),
             scrollHeight: Math.round(document.documentElement?.scrollHeight || 0),
             interactive, inputs, buttons, iframes, modals, sliders, grids, canvas,
-            selectorCounts, priorityCounts, textHints: matches,
+            selectorCounts, priorityCounts, textHints: matches, watched,
           }};
         }})()
         """
@@ -110,11 +138,21 @@ class PageObservationWatchdog:
             for key in (
                 "url", "title", "readyState", "childCount", "nodeCount", "scrollHeight",
                 "interactive", "inputs", "buttons", "iframes", "modals", "sliders", "grids", "canvas",
-                "selectorCounts", "priorityCounts", "textHints",
+                "selectorCounts", "priorityCounts", "textHints", "watched",
             )
         }
         raw = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         stable["fingerprint"] = hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()
+
+        action_stable = {
+            key: stable.get(key)
+            for key in (
+                "url", "readyState", "interactive", "inputs", "buttons", "iframes", "modals", "sliders",
+                "grids", "canvas", "selectorCounts", "priorityCounts", "textHints", "watched",
+            )
+        }
+        action_raw = json.dumps(action_stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        stable["actionFingerprint"] = hashlib.sha256(action_raw.encode("utf-8", errors="ignore")).hexdigest()
         return stable
 
     def _evaluate(self, script: str) -> Any:
