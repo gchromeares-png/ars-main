@@ -325,7 +325,7 @@ class SeleniumBaseCdpAdapter:
         if hasattr(driver, "cdp_base"):
             driver = driver.cdp_base
         loop = getattr(self._sb, "loop", None)
-        send = getattr(driver, "send", None)
+        send = getattr(getattr(driver, "connection", None), "send", None)
         if loop is None or not callable(send):
             return False
         try:
