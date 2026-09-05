@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import * as path from "path";
-import initSqlJs from "sql.js";
+import Database from "better-sqlite3";
 import { SqliteTaskStore } from "../src/persistence/sqlite-task-store";
 import { TaskState } from "../src/models";
 
@@ -20,7 +20,7 @@ describe("payment persistence safety", () => {
 
   it("never persists runtime payment session secrets on normal task writes", async () => {
     const pan = Array.from({ length: 16 }, () => "4").join("");
-    const cvc = ["1", "2", "3"].join("");
+    const securityCode = ["1", "2", "3"].join("");
     const now = new Date("2026-09-04T08:00:00.000Z");
     const store = await SqliteTaskStore.open(filePath);
 
@@ -35,10 +35,10 @@ describe("payment persistence safety", () => {
           __paymentSession: {
             method: "card",
             card: {
-              cardholderName: "Should Never Persist",
+              holderName: "Should Never Persist",
               cardNumber: pan,
               expiry: "12/30",
-              cvc
+              securityCode
             }
           }
         }
@@ -56,28 +56,25 @@ describe("payment persistence safety", () => {
     expect(restored?.config.data).not.toHaveProperty("__paymentSession");
     await reopened.close();
 
-    const bytes = await readFile(filePath);
-    const SQL = await initSqlJs({ locateFile: () => require.resolve("sql.js/dist/sql-wasm.wasm") });
-    const db = new SQL.Database(bytes);
-    const statement = db.prepare("SELECT config_json FROM tasks WHERE id = ?", ["payment-safe-write"]);
-    expect(statement.step()).toBe(true);
-    const raw = String(statement.getAsObject()["config_json"] ?? "");
-    statement.free();
+    const db = new Database(filePath, { readonly: true, fileMustExist: true });
+    const row = db.prepare("SELECT config_json FROM tasks WHERE id = ?")
+      .get("payment-safe-write") as Record<string, unknown> | undefined;
+    expect(row).toBeDefined();
+    const raw = String(row?.["config_json"] ?? "");
     db.close();
 
     expect(raw).not.toContain("__paymentSession");
     expect(raw).not.toContain(pan);
-    expect(raw).not.toContain(cvc);
+    expect(raw).not.toContain(securityCode);
     expect(raw).not.toMatch(/cardNumber|\"pan\"|\"cvc\"|cvv|securityCode/i);
   });
 
   it("scrubs legacy plaintext payment values when an existing database is reopened", async () => {
     const pan = Array.from({ length: 16 }, () => "5").join("");
     const cvc = ["9", "8", "7"].join("");
-    const SQL = await initSqlJs({ locateFile: () => require.resolve("sql.js/dist/sql-wasm.wasm") });
-    const legacyDb = new SQL.Database();
+    const legacyDb = new Database(filePath);
 
-    legacyDb.run(`
+    legacyDb.exec(`
       CREATE TABLE tasks (
         id TEXT PRIMARY KEY,
         config_json TEXT NOT NULL,
@@ -131,20 +128,15 @@ describe("payment persistence safety", () => {
       }
     });
     const now = "2026-09-04T08:00:00.000Z";
-    legacyDb.run(
-      "INSERT INTO tasks (id, config_json, state, created_at, updated_at, last_error, retries, max_retries) VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
-      ["legacy-payment", legacyConfig, TaskState.RUNNING, now, now, `processor rejected ${pan} cvc=${cvc}`]
-    );
-    legacyDb.run(
-      "INSERT INTO task_logs (task_id, event, state, level, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ["legacy-payment", "legacy", TaskState.RUNNING, "error", `legacy value ${pan} securityCode=${cvc}`, now]
-    );
-    legacyDb.run(
-      "INSERT INTO product_monitor_events (task_id, product_key, change_type, event_json, observed_at) VALUES (?, ?, ?, ?, ?)",
-      ["legacy-payment", "product", "update", JSON.stringify({ product: "x", pan, cvc, cardNumber: pan }), now]
-    );
-
-    await writeFile(filePath, Buffer.from(legacyDb.export()));
+    legacyDb.prepare(
+      "INSERT INTO tasks (id, config_json, state, created_at, updated_at, last_error, retries, max_retries) VALUES (?, ?, ?, ?, ?, ?, 0, 0)"
+    ).run("legacy-payment", legacyConfig, TaskState.RUNNING, now, now, `processor rejected ${pan} cvc=${cvc}`);
+    legacyDb.prepare(
+      "INSERT INTO task_logs (task_id, event, state, level, message, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run("legacy-payment", "legacy", TaskState.RUNNING, "error", `legacy value ${pan} securityCode=${cvc}`, now);
+    legacyDb.prepare(
+      "INSERT INTO product_monitor_events (task_id, product_key, change_type, event_json, observed_at) VALUES (?, ?, ?, ?, ?)"
+    ).run("legacy-payment", "product", "update", JSON.stringify({ product: "x", pan, cvc, cardNumber: pan }), now);
     legacyDb.close();
 
     const store = await SqliteTaskStore.open(filePath);
@@ -160,7 +152,7 @@ describe("payment persistence safety", () => {
     expect(logs[0]?.message).not.toContain(cvc);
     await store.close();
 
-    const reopenedDb = new SQL.Database(await readFile(filePath));
+    const reopenedDb = new Database(filePath, { readonly: true, fileMustExist: true });
     const tables = [
       ["tasks", "config_json"],
       ["tasks", "last_error"],
@@ -169,9 +161,8 @@ describe("payment persistence safety", () => {
     ] as const;
     const rawParts: string[] = [];
     for (const [table, column] of tables) {
-      const statement = reopenedDb.prepare(`SELECT ${column} FROM ${table}`);
-      while (statement.step()) rawParts.push(String(statement.getAsObject()[column] ?? ""));
-      statement.free();
+      const rows = reopenedDb.prepare(`SELECT ${column} FROM ${table}`).all() as Array<Record<string, unknown>>;
+      for (const row of rows) rawParts.push(String(row[column] ?? ""));
     }
     reopenedDb.close();
     const raw = rawParts.join("\n");

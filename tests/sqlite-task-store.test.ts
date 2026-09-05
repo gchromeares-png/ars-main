@@ -1,6 +1,7 @@
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import * as path from "path";
+import Database from "better-sqlite3";
 import { SqliteTaskStore } from "../src/persistence/sqlite-task-store";
 import { Task, TaskState } from "../src/models";
 
@@ -87,5 +88,81 @@ describe("SqliteTaskStore", () => {
     expect(logs.map(log => log.event)).toEqual(["event-3", "event-4", "event-5"]);
 
     await store.close();
+  });
+
+  it("serializes concurrent callers through the single native connection without losing writes", async () => {
+    const task = makeTask();
+    const store = await SqliteTaskStore.open(filePath);
+    await store.save(task);
+
+    await Promise.all(Array.from({ length: 20 }, (_value, index) => store.appendLog({
+      taskId: task.id,
+      event: `parallel-${index}`,
+      state: task.state,
+      level: "info",
+      message: `parallel-message-${index}`,
+      createdAt: new Date(1_800_000_000_000 + index)
+    })));
+
+    const logs = await store.findLogsByTaskId(task.id, 100);
+    expect(logs).toHaveLength(20);
+    expect(new Set(logs.map(log => log.event)).size).toBe(20);
+    await store.close();
+  });
+
+  it("upgrades an existing pre-migration SQLite file in place and keeps its data", async () => {
+    const task = makeTask();
+    const legacy = new Database(filePath);
+    legacy.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        config_json TEXT NOT NULL,
+        state TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_error TEXT,
+        retries INTEGER NOT NULL DEFAULT 0,
+        max_retries INTEGER NOT NULL DEFAULT 3
+      );
+    `);
+    legacy.prepare(`
+      INSERT INTO tasks (id, config_json, state, created_at, updated_at, last_error, retries, max_retries)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      task.id,
+      JSON.stringify(task.config),
+      task.state,
+      task.createdAt.toISOString(),
+      task.updatedAt.toISOString(),
+      null,
+      task.retries,
+      task.maxRetries
+    );
+    legacy.close();
+
+    const store = await SqliteTaskStore.open(filePath);
+    const restored = await store.findById(task.id);
+    expect(restored?.id).toBe(task.id);
+    expect(restored?.state).toBe(task.state);
+    await store.close();
+
+    const inspector = new Database(filePath, { readonly: true, fileMustExist: true });
+    const migration = inspector.prepare(
+      "SELECT MAX(version) AS version FROM schema_migrations"
+    ).get() as Record<string, unknown>;
+    expect(Number(migration["version"])).toBe(1);
+    expect(String(inspector.pragma("journal_mode", { simple: true })).toLowerCase()).toBe("wal");
+    expect(String(inspector.pragma("quick_check", { simple: true })).toLowerCase()).toBe("ok");
+    inspector.close();
+  });
+
+  it("fails loudly on an existing corrupt database and never replaces its bytes", async () => {
+    await writeFile(filePath, Buffer.from("ARES-corrupt-database-do-not-replace", "utf8"));
+    const before = await readFile(filePath);
+
+    await expect(SqliteTaskStore.open(filePath)).rejects.toThrow("ARES SQLite konnte nicht sicher geöffnet werden");
+
+    const after = await readFile(filePath);
+    expect(after.equals(before)).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from "fs/promises";
+import { mkdir } from "fs/promises";
+import * as fs from "fs";
 import * as path from "path";
-import initSqlJs, { Database } from "sql.js";
+import Database from "better-sqlite3";
 import { ITaskPersistenceRepository, StoredProductMonitorEvent } from "../interfaces";
 import { Task, TaskConfig, TaskLogEntry, TaskLogLevel, TaskState } from "../models";
 import type { ProductMonitorEvent, ProductObservation } from "../monitor/models";
@@ -9,6 +10,9 @@ import {
   sanitizePersistedValue,
   scrubLegacySensitiveData
 } from "./sensitive-data-scrubber";
+
+const CURRENT_SCHEMA_VERSION = 1;
+const BUSY_TIMEOUT_MS = 5000;
 
 function serializeConfig(config: TaskConfig): string {
   return JSON.stringify(sanitizePersistedValue(config));
@@ -85,9 +89,11 @@ function rowToMonitorEvent(row: Record<string, unknown>): StoredProductMonitorEv
   } as StoredProductMonitorEvent;
 }
 
-export class SqliteTaskStore implements ITaskPersistenceRepository {
-  private writeQueue: Promise<void> = Promise.resolve();
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
+export class SqliteTaskStore implements ITaskPersistenceRepository {
   private constructor(
     public readonly filePath: string,
     private readonly db: Database
@@ -96,202 +102,198 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
   static async open(filePath: string): Promise<SqliteTaskStore> {
     await mkdir(path.dirname(filePath), { recursive: true });
 
-    const wasmPath = require.resolve("sql.js/dist/sql-wasm.wasm");
-    const SQL = await initSqlJs({ locateFile: () => wasmPath });
-
-    let database: Database;
+    const existed = fs.existsSync(filePath);
+    let database: Database | undefined;
     try {
-      const existing = await readFile(filePath);
-      database = new SQL.Database(existing);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException)?.code;
-      if (code && code !== "ENOENT") throw error;
-      database = new SQL.Database();
-    }
+      database = new Database(filePath, existed ? { fileMustExist: true } : undefined);
 
-    const store = new SqliteTaskStore(filePath, database);
-    store.migrate();
-    await store.persist();
-    return store;
+      // Existing data is checked before any PRAGMA that can mutate the database header.
+      if (existed) SqliteTaskStore.assertIntegrity(database);
+      SqliteTaskStore.configureConnection(database);
+
+      const store = new SqliteTaskStore(filePath, database);
+      store.migrate();
+      SqliteTaskStore.assertIntegrity(database);
+      return store;
+    } catch (error) {
+      try {
+        database?.close();
+      } catch {
+        // Preserve the original startup error.
+      }
+      throw new Error(`ARES SQLite konnte nicht sicher geöffnet werden: ${errorMessage(error)}`);
+    }
   }
 
   async save(task: Task): Promise<void> {
-    await this.mutate(() => this.upsertTask(task));
+    this.upsertTask(task);
   }
 
   async update(task: Task): Promise<void> {
-    await this.save(task);
+    this.upsertTask(task);
   }
 
   async findById(id: string): Promise<Task | null> {
-    await this.writeQueue;
-    const statement = this.db.prepare(`
+    const row = this.db.prepare(`
       SELECT id, config_json, state, created_at, updated_at, last_error, retries, max_retries
       FROM tasks WHERE id = ? LIMIT 1
-    `, [id]);
-
-    try {
-      return statement.step() ? rowToTask(statement.getAsObject()) : null;
-    } finally {
-      statement.free();
-    }
+    `).get(id) as Record<string, unknown> | undefined;
+    return row ? rowToTask(row) : null;
   }
 
   async findAll(): Promise<Task[]> {
-    await this.writeQueue;
-    const statement = this.db.prepare(`
+    const rows = this.db.prepare(`
       SELECT id, config_json, state, created_at, updated_at, last_error, retries, max_retries
       FROM tasks ORDER BY updated_at DESC
-    `);
-
-    const tasks: Task[] = [];
-    try {
-      while (statement.step()) tasks.push(rowToTask(statement.getAsObject()));
-    } finally {
-      statement.free();
-    }
-    return tasks;
+    `).all() as Record<string, unknown>[];
+    return rows.map(rowToTask);
   }
 
   async delete(id: string): Promise<void> {
-    await this.mutate(() => {
-      this.db.run("BEGIN TRANSACTION");
-      try {
-        this.db.run("DELETE FROM task_logs WHERE task_id = ?", [id]);
-        this.db.run("DELETE FROM product_monitor_events WHERE task_id = ?", [id]);
-        this.db.run("DELETE FROM tasks WHERE id = ?", [id]);
-        this.db.run("COMMIT");
-      } catch (error) {
-        this.db.run("ROLLBACK");
-        throw error;
-      }
+    const remove = this.db.transaction((taskId: string) => {
+      this.db.prepare("DELETE FROM task_logs WHERE task_id = ?").run(taskId);
+      this.db.prepare("DELETE FROM product_monitor_events WHERE task_id = ?").run(taskId);
+      this.db.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
     });
+    remove(id);
   }
 
   async appendLog(entry: TaskLogEntry): Promise<void> {
-    await this.mutate(() => this.insertLog(entry));
+    this.insertLog(entry);
   }
 
   async findLogsByTaskId(taskId: string, limit = 100): Promise<TaskLogEntry[]> {
-    await this.writeQueue;
     const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)));
-    const statement = this.db.prepare(`
+    const rows = this.db.prepare(`
       SELECT id, task_id, event, state, level, message, created_at
       FROM task_logs WHERE task_id = ? ORDER BY id DESC LIMIT ?
-    `, [taskId, safeLimit]);
-
-    const logs: TaskLogEntry[] = [];
-    try {
-      while (statement.step()) logs.push(rowToLog(statement.getAsObject()));
-    } finally {
-      statement.free();
-    }
-    return logs.reverse();
+    `).all(taskId, safeLimit) as Record<string, unknown>[];
+    return rows.map(rowToLog).reverse();
   }
 
   async deleteLogsByTaskId(taskId: string): Promise<void> {
-    await this.mutate(() => this.db.run("DELETE FROM task_logs WHERE task_id = ?", [taskId]));
+    this.db.prepare("DELETE FROM task_logs WHERE task_id = ?").run(taskId);
   }
 
   async recordProductMonitorEvent(taskId: string, event: ProductMonitorEvent): Promise<void> {
-    await this.mutate(() => {
-      this.db.run(`
-        INSERT INTO product_monitor_events (task_id, product_key, change_type, event_json, observed_at)
-        VALUES (?, ?, ?, ?, ?)
-      `, [taskId, event.key, event.type, serializeMonitorEvent(event), event.observedAt.toISOString()]);
-    });
+    this.db.prepare(`
+      INSERT INTO product_monitor_events (task_id, product_key, change_type, event_json, observed_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(taskId, event.key, event.type, serializeMonitorEvent(event), event.observedAt.toISOString());
   }
 
   async findProductMonitorEventsByTaskId(taskId: string, limit = 100): Promise<StoredProductMonitorEvent[]> {
-    await this.writeQueue;
     const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)));
-    const statement = this.db.prepare(`
+    const rows = this.db.prepare(`
       SELECT id, task_id, event_json
       FROM product_monitor_events
       WHERE task_id = ?
       ORDER BY id DESC
       LIMIT ?
-    `, [taskId, safeLimit]);
-
-    const events: StoredProductMonitorEvent[] = [];
-    try {
-      while (statement.step()) events.push(rowToMonitorEvent(statement.getAsObject()));
-    } finally {
-      statement.free();
-    }
-    return events.reverse();
+    `).all(taskId, safeLimit) as Record<string, unknown>[];
+    return rows.map(rowToMonitorEvent).reverse();
   }
 
   async deleteProductMonitorEventsByTaskId(taskId: string): Promise<void> {
-    await this.mutate(() => this.db.run("DELETE FROM product_monitor_events WHERE task_id = ?", [taskId]));
+    this.db.prepare("DELETE FROM product_monitor_events WHERE task_id = ?").run(taskId);
   }
 
   async recordTaskEvent(task: Task, entry: TaskLogEntry): Promise<void> {
-    await this.mutate(() => {
-      this.db.run("BEGIN TRANSACTION");
-      try {
-        this.upsertTask(task);
-        this.insertLog(entry);
-        this.db.run("COMMIT");
-      } catch (error) {
-        this.db.run("ROLLBACK");
-        throw error;
-      }
+    const record = this.db.transaction(() => {
+      this.upsertTask(task);
+      this.insertLog(entry);
     });
+    record();
   }
 
   async close(): Promise<void> {
-    await this.writeQueue;
-    await this.persist();
-    this.db.close();
+    if (this.db.open) this.db.close();
   }
 
   private migrate(): void {
-    this.db.run(`
-      PRAGMA foreign_keys = ON;
-
-      CREATE TABLE IF NOT EXISTS tasks (
-        id TEXT PRIMARY KEY,
-        config_json TEXT NOT NULL,
-        state TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        last_error TEXT,
-        retries INTEGER NOT NULL DEFAULT 0,
-        max_retries INTEGER NOT NULL DEFAULT 3
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
       );
-
-      CREATE TABLE IF NOT EXISTS task_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        event TEXT NOT NULL,
-        state TEXT,
-        level TEXT NOT NULL,
-        message TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS product_monitor_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        product_key TEXT NOT NULL,
-        change_type TEXT NOT NULL,
-        event_json TEXT NOT NULL,
-        observed_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_task_logs_task_id_id
-        ON task_logs(task_id, id);
-
-      CREATE INDEX IF NOT EXISTS idx_product_monitor_events_task_id_id
-        ON product_monitor_events(task_id, id);
     `);
 
+    const row = this.db.prepare(
+      "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
+    ).get() as Record<string, unknown> | undefined;
+    const version = asNumber(row?.["version"] ?? 0);
+
+    if (version > CURRENT_SCHEMA_VERSION) {
+      throw new Error(
+        `SQLite-Schema ${version} ist neuer als die von ARES unterstützte Version ${CURRENT_SCHEMA_VERSION}.`
+      );
+    }
+
+    if (version < 1) {
+      const migration = this.db.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            config_json TEXT NOT NULL,
+            state TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_error TEXT,
+            retries INTEGER NOT NULL DEFAULT 0,
+            max_retries INTEGER NOT NULL DEFAULT 3
+          );
+
+          CREATE TABLE IF NOT EXISTS task_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            event TEXT NOT NULL,
+            state TEXT,
+            level TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS product_monitor_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            product_key TEXT NOT NULL,
+            change_type TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            observed_at TEXT NOT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_task_logs_task_id_id
+            ON task_logs(task_id, id);
+
+          CREATE INDEX IF NOT EXISTS idx_product_monitor_events_task_id_id
+            ON product_monitor_events(task_id, id);
+        `);
+        this.db.prepare(
+          "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)"
+        ).run(1, new Date().toISOString());
+      });
+      migration();
+    }
+
+    this.assertSchema();
     scrubLegacySensitiveData(this.db);
   }
 
+  private assertSchema(): void {
+    const requiredTables = ["schema_migrations", "tasks", "task_logs", "product_monitor_events"];
+    const rows = this.db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN (?, ?, ?, ?)
+    `).all(...requiredTables) as Array<Record<string, unknown>>;
+    const present = new Set(rows.map(row => asString(row["name"])));
+    const missing = requiredTables.filter(name => !present.has(name));
+    if (missing.length > 0) {
+      throw new Error(`SQLite-Schema ist unvollständig: ${missing.join(", ")}`);
+    }
+  }
+
   private upsertTask(task: Task): void {
-    this.db.run(`
+    this.db.prepare(`
       INSERT INTO tasks (
         id, config_json, state, created_at, updated_at, last_error, retries, max_retries
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -302,7 +304,7 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
         last_error = excluded.last_error,
         retries = excluded.retries,
         max_retries = excluded.max_retries
-    `, [
+    `).run(
       task.id,
       serializeConfig(task.config),
       task.state,
@@ -311,36 +313,37 @@ export class SqliteTaskStore implements ITaskPersistenceRepository {
       task.lastError ? sanitizePersistedMessage(task.lastError) : null,
       task.retries,
       task.maxRetries
-    ]);
+    );
   }
 
   private insertLog(entry: TaskLogEntry): void {
-    this.db.run(`
+    this.db.prepare(`
       INSERT INTO task_logs (task_id, event, state, level, message, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `, [
+    `).run(
       entry.taskId,
       entry.event,
       entry.state ?? null,
       entry.level,
       sanitizePersistedMessage(entry.message),
       entry.createdAt.toISOString()
-    ]);
+    );
   }
 
-  private async mutate(operation: () => void): Promise<void> {
-    const run = this.writeQueue.then(async () => {
-      operation();
-      await this.persist();
-    });
-
-    this.writeQueue = run.catch(() => undefined);
-    await run;
+  private static configureConnection(db: Database): void {
+    db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    db.pragma("foreign_keys = ON");
+    const journalMode = String(db.pragma("journal_mode = WAL", { simple: true }) ?? "").toLowerCase();
+    if (journalMode !== "wal") {
+      throw new Error(`SQLite WAL konnte nicht aktiviert werden (journal_mode=${journalMode || "unknown"}).`);
+    }
+    db.pragma("synchronous = FULL");
   }
 
-  private async persist(): Promise<void> {
-    const tempPath = `${this.filePath}.tmp`;
-    await writeFile(tempPath, Buffer.from(this.db.export()));
-    await rename(tempPath, this.filePath);
+  private static assertIntegrity(db: Database): void {
+    const result = String(db.pragma("quick_check", { simple: true }) ?? "");
+    if (result.toLowerCase() !== "ok") {
+      throw new Error(`SQLite quick_check fehlgeschlagen: ${result || "unknown"}`);
+    }
   }
 }
