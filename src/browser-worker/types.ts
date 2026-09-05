@@ -100,6 +100,7 @@ export interface BrowserContextConfig {
   args?: readonly string[];
   navigationTimeoutMs?: number;
   actionTimeoutMs?: number;
+  monitorMode?: boolean;
 }
 
 export type BrowserOsFamily = "windows" | "macos" | "linux" | "android" | "ios" | "unknown";
