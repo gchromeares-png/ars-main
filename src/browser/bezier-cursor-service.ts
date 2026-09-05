@@ -1,4 +1,4 @@
-import type { Locator, Page } from "patchright";
+import type { Locator, Page } from "../browser-worker/types";
 import {
   GhostCursorUiInteractionHelper,
   UiPoint,
