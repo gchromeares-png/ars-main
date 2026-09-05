@@ -14,6 +14,8 @@
     "electron": "electron .",
     "start": "ng serve",
     "browser:install": "patchright install chrome",
+    "vision:status": "python python/seleniumbase_cdp/vision_runtime_bootstrap.py --status",
+    "vision:prepare": "python python/seleniumbase_cdp/vision_runtime_bootstrap.py --prepare",
     "worker:run": "node dist/backend/browser-worker/worker.js",
     "doctor:node": "node -e \"const m=+process.versions.node.split('.')[0]; console.log('System Node:', process.versions.node); if(m<20) process.exit(20)\""
   },
