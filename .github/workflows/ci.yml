@@ -26,6 +26,9 @@ jobs:
       - name: Compile-check ARES vision runtime
         run: python -m py_compile python/seleniumbase_cdp/vision_grid_classifier.py python/seleniumbase_cdp/vision_runtime_bootstrap.py
 
+      - name: Verify stable visual marks contract
+        run: python python/seleniumbase_cdp/stable_marks_probe.py
+
       - name: Verify SeleniumBase challenge state tracker
         run: python python/seleniumbase_cdp/challenge_state_tracker_probe.py
 
