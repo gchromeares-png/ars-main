@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Iterable, List
 
 
@@ -12,40 +13,36 @@ class AuthorizedGridActionExecutor:
 
     def apply(self, indexes: Iterable[int], *, submit: bool = True) -> Dict[str, Any]:
         state = self._site_adapter.poll()
-        count = int(state.get("tileCount") or 0)
-        selected = self._indexes(indexes, count)
+        selected = self._indexes(indexes, int(state.get("tileCount") or 0))
         if state.get("kind") != "image-grid" or not selected:
             return {"clickedIndexes": [], "submitted": False, "state": state}
 
-        result = self._apply_document(selected, submit=submit)
-        if not result.get("clicked") and str(state.get("scope") or "").startswith("iframe:"):
-            result = self._apply_frame(state, selected, submit=submit)
+        result = self._apply_document(selected, submit)
+        if not result["clicked"] and str(state.get("scope") or "").startswith("iframe:"):
+            result = self._apply_frame(state, selected, submit)
 
         return {
-            "clickedIndexes": result.get("clicked", []),
-            "submitted": bool(result.get("submitted")),
+            "clickedIndexes": result["clicked"],
+            "submitted": result["submitted"],
             "state": self._site_adapter.poll(),
         }
 
-    def _apply_document(self, selected: List[int], *, submit: bool) -> Dict[str, Any]:
-        overrides = self._site_adapter.overrides
+    def _apply_document(self, selected: List[int], submit: bool) -> Dict[str, Any]:
         script = f"""
         (() => {{
-          const selected = {selected};
-          const overrides = {overrides!r};
-          const roots = [];
-          const seen = new Set();
-          const visible = (el) => {{
-            if (!el || !el.getBoundingClientRect) return false;
-            const r = el.getBoundingClientRect();
-            const s = getComputedStyle(el);
+          const selected = {json.dumps(selected)};
+          const overrides = {json.dumps(self._site_adapter.overrides)};
+          const roots = [], seen = new Set();
+          const visible = el => {{
+            if (!el?.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect(), s = getComputedStyle(el);
             return r.width >= 24 && r.height >= 24 && s.display !== 'none' && s.visibility !== 'hidden';
           }};
-          const walk = (root) => {{
+          const walk = root => {{
             if (!root || seen.has(root)) return;
             seen.add(root); roots.push(root);
-            for (const el of root.querySelectorAll ? root.querySelectorAll('*') : []) if (el.shadowRoot) walk(el.shadowRoot);
-            for (const frame of root.querySelectorAll ? root.querySelectorAll('iframe') : []) {{
+            for (const el of root.querySelectorAll?.('*') || []) if (el.shadowRoot) walk(el.shadowRoot);
+            for (const frame of root.querySelectorAll?.('iframe') || []) {{
               try {{ if (frame.contentDocument) walk(frame.contentDocument); }} catch (_) {{}}
             }}
           }};
@@ -55,16 +52,16 @@ class AuthorizedGridActionExecutor:
           for (const root of roots) {{
             if (overrides.tiles) {{
               const tiles = [...root.querySelectorAll(overrides.tiles)].filter(visible);
-              if (tiles.length === 9 || tiles.length === 16) groups.push({{root, tiles}});
+              if ([9,16].includes(tiles.length)) groups.push({{root, tiles, preferred:true}});
             }}
-            for (const parent of root.querySelectorAll ? root.querySelectorAll('*') : []) {{
+            for (const parent of root.querySelectorAll?.('*') || []) {{
               const imgs = [...parent.querySelectorAll('img')].filter(visible);
-              if (imgs.length !== 9 && imgs.length !== 16) continue;
-              const tiles = imgs.map(img => img.closest('button,[role="button"],[tabindex],label,li,div') || img);
-              groups.push({{root: parent, tiles}});
+              if (![9,16].includes(imgs.length)) continue;
+              groups.push({{root:parent, tiles:imgs.map(img => img.closest('button,[role="button"],[tabindex],label,li,div') || img), preferred:false}});
             }}
           }}
-          const group = groups.sort((a,b) => b.tiles.length-a.tiles.length)[0];
+          groups.sort((a,b) => Number(b.preferred)-Number(a.preferred));
+          const group = groups[0];
           if (!group) return {{clicked:[], submitted:false}};
 
           const clicked = [];
@@ -72,15 +69,13 @@ class AuthorizedGridActionExecutor:
             const tile = group.tiles[index];
             if (!tile) continue;
             tile.scrollIntoView({{block:'center', inline:'center'}});
-            tile.click();
-            clicked.push(index);
+            tile.click(); clicked.push(index);
           }}
 
           let submitted = false;
           if ({str(submit).lower()}) {{
             const selector = overrides.submit || 'button[type="submit"],input[type="submit"],button,[role="button"]';
-            const candidates = [...(group.root.parentElement?.querySelectorAll(selector) || [])].filter(visible);
-            const button = candidates.find(el => !group.tiles.includes(el));
+            const button = [...(group.root.parentElement?.querySelectorAll(selector) || [])].filter(visible).find(el => !group.tiles.includes(el));
             if (button) {{ button.click(); submitted = true; }}
           }}
           return {{clicked, submitted}};
@@ -89,33 +84,21 @@ class AuthorizedGridActionExecutor:
         value = self._evaluate(script)
         return value if isinstance(value, dict) else {"clicked": [], "submitted": False}
 
-    def _apply_frame(self, state: Dict[str, Any], selected: List[int], *, submit: bool) -> Dict[str, Any]:
+    def _apply_frame(self, state: Dict[str, Any], selected: List[int], submit: bool) -> Dict[str, Any]:
         try:
-            frame_index = int(str(state.get("scope") or "").split(":", 1)[1])
-            frames = list(self._sb.find_elements("iframe") or [])
-            frame = frames[frame_index]
+            index = int(str(state["scope"]).split(":", 1)[1])
+            frame = list(self._sb.find_elements("iframe") or [])[index]
             images = list(frame.query_selector_all("img") or [])
         except Exception:
             return {"clicked": [], "submitted": False}
 
-        clicked: List[int] = []
+        clicked = []
         for index in selected:
             if index >= len(images):
                 continue
-            element = images[index]
-            target = element
-            for selector in ('button', '[role="button"]', '[tabindex]', 'label', 'li', 'div'):
-                try:
-                    candidate = element.closest(selector)
-                except Exception:
-                    candidate = None
-                if candidate:
-                    target = candidate
-                    break
-            click = getattr(target, "mouse_click", None) or getattr(target, "click", None)
+            click = getattr(images[index], "mouse_click", None) or getattr(images[index], "click", None)
             if callable(click):
-                click()
-                clicked.append(index)
+                click(); clicked.append(index)
 
         submitted = False
         if submit:
@@ -126,19 +109,16 @@ class AuthorizedGridActionExecutor:
                     button = frame.query_selector(selector)
                 except Exception:
                     button = None
-                click = getattr(button, "mouse_click", None) or getattr(button, "click", None) if button else None
+                click = (getattr(button, "mouse_click", None) or getattr(button, "click", None)) if button else None
                 if callable(click):
-                    click()
-                    submitted = True
-                    break
+                    click(); submitted = True; break
         return {"clicked": clicked, "submitted": submitted}
 
     def _evaluate(self, script: str) -> Any:
         evaluate = getattr(self._sb, "evaluate", None)
-        if callable(evaluate):
-            return evaluate(script)
-        return self._sb.execute_script(f"return {script};")
+        return evaluate(script) if callable(evaluate) else self._sb.execute_script(f"return {script};")
 
     @staticmethod
     def _indexes(values: Iterable[int], count: int) -> List[int]:
-        return sorted({int(value) for value in values if 0 <= int(value) < count})
+        clean = {int(value) for value in values}
+        return sorted(index for index in clean if 0 <= index < count)
