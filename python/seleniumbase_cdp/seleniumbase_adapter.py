@@ -335,6 +335,9 @@ class SeleniumBaseCdpAdapter:
             self._sb.get_all_cookies()
         except Exception:
             pass
+        # SeleniumBase/Chromium on Windows needs a short pre-close settle so
+        # persistent cookies and session state reach the user-data-dir on disk.
+        time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
         self._sb.quit()
         self._wait_for_profile_flush(browser_pids)
 
@@ -347,8 +350,18 @@ class SeleniumBaseCdpAdapter:
             time.sleep(1.0)
             return
 
+        # Wait for SeleniumBase's authoritative Chromium process first when it is
+        # available, then cover any additional browser owner found by user-data-dir.
+        chrome_pid = pids[0]
+        try:
+            psutil.Process(chrome_pid).wait(timeout=5.0)
+        except psutil.NoSuchProcess:
+            pass
+        except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.Error):
+            pass
+
         deadline = time.monotonic() + 5.0
-        for pid in pids:
+        for pid in pids[1:]:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
