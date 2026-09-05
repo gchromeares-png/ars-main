@@ -191,6 +191,7 @@ function postJson<T>(endpoint: string, payload: unknown, timeoutMs: number): Pro
   });
 }
 
+/** @deprecated Checkout runtime must not depend on Ollama. Kept temporarily for explicit test-only injection. */
 export class OllamaEmbeddingProvider implements SemanticEmbeddingProvider {
   private disabledUntil = 0;
 
@@ -226,8 +227,13 @@ export class FieldSemanticResolver {
   private intentPrototypeVectors: Array<{ intent: Exclude<FieldIntent, "unknown">; vector: number[] }> | undefined;
   private contextPrototypeVectors: Array<{ context: Exclude<AddressContext, "unknown">; vector: number[] }> | undefined;
   private readonly cache = new Map<string, Omit<ResolvedField, "descriptor">>();
+  private readonly provider?: SemanticEmbeddingProvider;
 
-  constructor(private readonly provider: SemanticEmbeddingProvider = new OllamaEmbeddingProvider()) {}
+  constructor(provider?: SemanticEmbeddingProvider) {
+    // The production checkout path used to inject Ollama explicitly. Keep that
+    // legacy construction source-compatible while disabling it at runtime.
+    this.provider = provider instanceof OllamaEmbeddingProvider ? undefined : provider;
+  }
 
   async resolve(fields: FieldDescriptor[]): Promise<ResolvedField[]> {
     const results: Array<ResolvedField | undefined> = new Array(fields.length);
@@ -250,7 +256,10 @@ export class FieldSemanticResolver {
       const intent = lexicalIntent ?? { value: "unknown" as FieldIntent, confidence: 0, source: "unknown" as const };
       const context = lexicalContext ?? { value: "unknown" as AddressContext, confidence: 0, source: "unknown" as const };
 
-      if (intent.value !== "unknown" && context.value !== "unknown") {
+      // Intent is the required dimension for checkout value mapping. An unknown
+      // shipping/billing context is valid and maps to the profile's default
+      // address, so it must never trigger an embedding/LLM call by itself.
+      if (intent.value !== "unknown") {
         const resolution = this.toResolution(intent, context);
         this.cache.set(key, resolution);
         results[position] = { descriptor: field, ...resolution };
@@ -260,16 +269,19 @@ export class FieldSemanticResolver {
       pending.push({ field, position, key, intent, context, lockIntentUnknown });
     });
 
-    if (pending.length) {
+    if (pending.length && this.provider) {
       try {
         await this.resolveByEmbedding(pending, results);
       } catch {
-        for (const item of pending) {
-          const resolution = this.toResolution(item.intent, item.context);
-          this.cache.set(item.key, resolution);
-          results[item.position] = { descriptor: item.field, ...resolution };
-        }
+        // Fall through to deterministic unknown resolution below.
       }
+    }
+
+    for (const item of pending) {
+      if (results[item.position]) continue;
+      const resolution = this.toResolution(item.intent, item.context);
+      this.cache.set(item.key, resolution);
+      results[item.position] = { descriptor: item.field, ...resolution };
     }
 
     return results.map((result, index) => result ?? {
@@ -313,9 +325,6 @@ export class FieldSemanticResolver {
     const match = (pattern: RegExp, value: Exclude<FieldIntent, "unknown">, confidence = 0.96): ResolutionPart<FieldIntent> | undefined =>
       pattern.test(text) ? { value, confidence, source: "lexical" } : undefined;
 
-    // Specific multi-word address semantics must win before generic single-token
-    // house-number semantics. A combined street + number field is address1 even
-    // though the literal word "Hausnummer" is present.
     const combinedAddress = match(
       /\b(?:stra(?:ß|ss)e|street)\s*(?:und|and|&|\/|\+)\s*(?:haus(?:\s*nummer|\s*-\s*nr\.?|\s*nr\.?)|hausnr\.?|(?:house\s*)?number|nr\.?)/i,
       "address1",
@@ -382,13 +391,16 @@ export class FieldSemanticResolver {
     pending: PendingResolution[],
     results: Array<ResolvedField | undefined>
   ): Promise<void> {
+    const provider = this.provider;
+    if (!provider) return;
+
     const fieldTexts = pending.map(item => this.toSemanticText(item.field));
     let fieldVectors: number[][];
 
     if (!this.intentPrototypeVectors || !this.contextPrototypeVectors) {
       const intentTexts = INTENT_PROTOTYPES.map(item => item.text);
       const contextTexts = CONTEXT_PROTOTYPES.map(item => item.text);
-      const allVectors = await this.provider.embed([...intentTexts, ...contextTexts, ...fieldTexts]);
+      const allVectors = await provider.embed([...intentTexts, ...contextTexts, ...fieldTexts]);
       this.intentPrototypeVectors = INTENT_PROTOTYPES.map((item, index) => ({
         intent: item.intent,
         vector: allVectors[index] ?? []
@@ -400,7 +412,7 @@ export class FieldSemanticResolver {
       }));
       fieldVectors = allVectors.slice(intentTexts.length + contextTexts.length);
     } else {
-      fieldVectors = await this.provider.embed(fieldTexts);
+      fieldVectors = await provider.embed(fieldTexts);
     }
 
     pending.forEach((item, pendingIndex) => {
