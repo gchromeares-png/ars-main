@@ -38,6 +38,7 @@ const WEBRTC_PROXY_POLICY = "--force-webrtc-ip-handling-policy=disable_non_proxi
 const WEBRTC_PERMISSION_CHECK = "--enforce-webrtc-ip-permission-check";
 const DISABLE_ASYNC_DNS = "--disable-async-dns";
 const DISABLE_FEATURES = "--disable-features=DnsOverHttps,NetworkPrediction";
+const PROFILE_PRE_CLOSE_SETTLE_MS = 800;
 
 function proxyValue(proxy?: BrowserProxyConfig): string | undefined {
   if (!proxy) return undefined;
@@ -225,6 +226,10 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
 
     this.activeProfileDirs.delete(path.resolve(session.handle.userDataDir));
     try {
+      // Browser-visible cookie state can precede Chromium's durable profile write.
+      // Keep the owner alive briefly before the clean close so a same-profile
+      // handoff cannot reopen between the network-service update and disk commit.
+      await new Promise<void>(resolve => setTimeout(resolve, PROFILE_PRE_CLOSE_SETTLE_MS));
       await session.context.close();
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
