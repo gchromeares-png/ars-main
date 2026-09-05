@@ -145,6 +145,28 @@ describe("FieldSemanticResolver checkout fast-path guard", () => {
     expect(provider.calls).toHaveLength(0);
   });
 
+  it("never lets shipping or billing context create a field intent by itself", async () => {
+    const resolver = new FieldSemanticResolver();
+    const resolved = await resolver.resolve([
+      field({ index: 0, autocomplete: "shipping" }),
+      field({ index: 1, autocomplete: "billing" }),
+      field({ index: 2, name: "shipping" }),
+      field({ index: 3, id: "billing" }),
+      field({ index: 4, label: "Shipping" }),
+      field({ index: 5, nearbyText: "Rechnungsadresse" })
+    ]);
+
+    expect(resolved.map(item => item.target)).toEqual([
+      { intent: "unknown", context: "shipping" },
+      { intent: "unknown", context: "billing" },
+      { intent: "unknown", context: "shipping" },
+      { intent: "unknown", context: "billing" },
+      { intent: "unknown", context: "shipping" },
+      { intent: "unknown", context: "billing" }
+    ]);
+    expect(resolved.every(item => item.source.intent === "unknown")).toBe(true);
+  });
+
   it("prefers strong metadata over noisy or misspelled labels", async () => {
     const provider = new EmbeddingSpy();
     const resolver = new FieldSemanticResolver(provider);
