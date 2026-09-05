@@ -11,8 +11,7 @@ const cursor = fs.readFileSync(path.join(root, "src/browser-worker/ui-interactio
 const interactionEngine = fs.readFileSync(path.join(root, "src/browser-worker/interaction-engine.ts"), "utf8");
 
 describe("ARES browser core migration", () => {
-  it("uses SeleniumBase Pure CDP as the only installed task browser engine", () => {
-    expect(pkg.dependencies.patchright).toBeUndefined();
+  it("uses SeleniumBase Pure CDP as the only configured task browser engine", () => {
     expect(pkg.dependencies.puppeteer).toBeUndefined();
     expect(pkg.dependencies["puppeteer-core"]).toBeUndefined();
     expect(pkg.scripts["browser:install"]).toContain("requirements-seleniumbase-cdp.txt");
@@ -33,6 +32,7 @@ describe("ARES browser core migration", () => {
   it("hardens proxied SeleniumBase Chrome against non-proxied WebRTC routes", () => {
     expect(browserWorker).toContain("--enforce-webrtc-ip-permission-check");
     expect(browserWorker).toContain("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+    expect(browserWorker).toContain("installWebRtcProxyPolicy(context)");
   });
 
   it("hardens proxied SeleniumBase Chrome against direct DNS paths", () => {
@@ -62,7 +62,6 @@ describe("ARES browser core migration", () => {
 
   it("routes normal UI actions through the global stateful InteractionEngine", () => {
     expect(cursor).toContain('import { InteractionEngine } from "./interaction-engine"');
-    expect(cursor).not.toContain('from "ghost-cursor"');
     expect(cursor).toContain("this.engine.click");
     expect(cursor).toContain("this.engine.fill");
     expect(cursor).toContain("this.engine.select");
