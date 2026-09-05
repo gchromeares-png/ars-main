@@ -33,11 +33,12 @@ class FakeAdapter:
     def execute_async_script(self, _script):
         return self.site_grid_state()["sources"]
 
-    def apply_grid_selection(self, indexes, submit=True):
+    def apply_grid_selection(self, indexes, submit=True, expected_signature=""):
+        assert expected_signature == self.signature
         self.actions.append(list(indexes))
         before = self.signature
         self.signature = "grid-b"
-        return {"clickedIndexes": list(indexes), "submitted": submit, "state": {**self.site_grid_state(), "signature": self.signature}, "before": before}
+        return {"clickedIndexes": list(indexes), "submitted": submit, "state": self.site_grid_state(), "before": before}
 
 
 def main() -> int:
