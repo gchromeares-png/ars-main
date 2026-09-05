@@ -76,8 +76,8 @@ class SeleniumBaseCdpAdapter:
     def site_grid_state(self) -> Dict[str, Any]:
         return self._site_adapter.poll()
 
-    def apply_grid_selection(self, indexes: Iterable[int], *, submit: bool = True) -> Dict[str, Any]:
-        return self._grid_actions.apply(indexes, submit=submit)
+    def apply_grid_selection(self, indexes: Iterable[int], *, submit: bool = True, expected_signature: str = "") -> Dict[str, Any]:
+        return self._grid_actions.apply(indexes, submit=submit, expected_signature=expected_signature)
 
     def vision_tick(self) -> Dict[str, Any]:
         if self._vision_runner is not None:
