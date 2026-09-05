@@ -9,6 +9,7 @@ class FakeSb:
     def __init__(self) -> None:
         self.mode = "slider"
         self.fraction = 0.15
+        self.drags = []
 
     def evaluate(self, script: str):
         if "PointerEvent" in script:
@@ -27,9 +28,19 @@ class FakeSb:
                 "instruction": "Ziehe den Regler nach rechts zum Bestätigen",
                 "handleRect": {"x": 20, "y": 20, "width": 24, "height": 24},
                 "trackRect": {"x": 20, "y": 20, "width": 300, "height": 24},
+                "handleSelector": "input[type=\"range\"]",
+                "trackSelector": "input[type=\"range\"]",
+                "nativeRange": True,
                 "override": False,
             }
         return {"kind": "none", "scope": "document", "score": 0}
+
+    def get_gui_element_center(self, _selector: str):
+        return 170, 32
+
+    def gui_drag_drop_points(self, x1, y1, x2, y2, timeframe=0.55):
+        self.drags.append((x1, y1, x2, y2, timeframe))
+        self.fraction = 0.96
 
 
 class FakeGridAdapter:
@@ -83,7 +94,8 @@ def main() -> int:
     first = slider.poll()
     assert first["kind"] == "slider" and first["orientation"] == "horizontal"
     moved = SliderActionExecutor(sb, slider).apply(0.96)
-    assert moved["moved"] is True and moved["state"]["fraction"] == 0.96
+    assert moved["moved"] is True and moved["mode"] == "seleniumbase-native"
+    assert moved["state"]["fraction"] == 0.96 and len(sb.drags) == 1
 
     grid = FakeGridAdapter()
     grid_actions = FakeGridActions()
