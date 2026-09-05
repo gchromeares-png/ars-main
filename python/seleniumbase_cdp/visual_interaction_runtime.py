@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
@@ -47,9 +48,50 @@ class VisualInteractionRuntime:
             self._slider_grounder,
             self._trace,
         )
+        self._debug_root = self._profile_dir / ".ares-observations"
+        self._last_grid_debug_signature = ""
 
     def poll_and_act(self) -> Dict[str, Any]:
-        return self._controller.poll_and_act()
+        primary = self._controller.poll_and_act()
+        if primary.get("kind") != "image-grid" or bool(primary.get("acted")):
+            return primary
+
+        state = primary.get("state") if isinstance(primary.get("state"), dict) else self._grid.poll()
+        signature = str(state.get("signature") or "")
+        if not signature:
+            return {**primary, "screenshotFallback": {"attempted": False, "reason": "missing-grid-signature"}}
+        if signature == self._last_grid_debug_signature:
+            return {**primary, "screenshotFallback": {"attempted": False, "reason": "already-attempted-for-signature"}}
+
+        self._last_grid_debug_signature = signature
+        captured = self._capture_grid_debug_screenshot(signature)
+        self._trace.append(
+            "screenshot-fallback",
+            {
+                "kind": "image-grid",
+                "state": state,
+                "capture": captured,
+                "structuralResult": primary,
+            },
+        )
+        if not bool(captured.get("captured")):
+            return {**primary, "screenshotFallback": {"attempted": True, **captured}}
+
+        fallback = self.poll_and_act_from_screenshot(str(captured.get("path") or ""))
+        self._trace.append(
+            "screenshot-fallback-result",
+            {
+                "kind": "image-grid",
+                "capture": captured,
+                "result": fallback,
+            },
+        )
+        return {
+            **fallback,
+            "structuralResult": primary,
+            "debugScreenshot": captured,
+            "screenshotFallback": {"attempted": True, "used": True},
+        }
 
     def poll_and_act_from_screenshot(self, screenshot_path: str | Path) -> Dict[str, Any]:
         state = self._grid.poll()
@@ -82,6 +124,7 @@ class VisualInteractionRuntime:
                 "submitDelaySeconds": self._policy.grid_submit_delay_seconds,
             },
             "screenshotGridFallback": True,
+            "debugScreenshotRoot": str(self._debug_root),
             "sliderProviders": self._slider_grounder.status(),
         }
 
@@ -99,3 +142,44 @@ class VisualInteractionRuntime:
 
     def apply_slider(self, target_fraction: float) -> Dict[str, Any]:
         return self._slider_actions.apply(target_fraction)
+
+    def _capture_grid_debug_screenshot(self, signature: str) -> Dict[str, Any]:
+        self._debug_root.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+        unique = time.time_ns() % 1_000_000_000
+        short_signature = signature[:12] if signature else "unknown"
+        filename = f"{stamp}-{unique:09d}-grid-{short_signature}.png"
+        path = self._debug_root / filename
+        try:
+            self._sb.save_screenshot(filename, folder=str(self._debug_root))
+            captured = path.exists() and path.stat().st_size > 0
+        except Exception as exc:
+            return {
+                "captured": False,
+                "reason": "capture-error",
+                "error": str(exc),
+                "path": str(path),
+            }
+
+        if captured:
+            self._rotate_debug_screenshots()
+        return {
+            "captured": captured,
+            "reason": "captured" if captured else "missing-output",
+            "path": str(path),
+        }
+
+    def _rotate_debug_screenshots(self) -> None:
+        try:
+            files = sorted(
+                (path for path in self._debug_root.glob("*.png") if path.is_file()),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            return
+        for path in files[self._policy.max_saved_captures :]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
