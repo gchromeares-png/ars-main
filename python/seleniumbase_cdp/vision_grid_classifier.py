@@ -6,7 +6,7 @@ import os
 import re
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Tuple
 
 
 class VisionGridClassifier:
@@ -20,6 +20,7 @@ class VisionGridClassifier:
         self._model: Any = None
         self._torch: Any = None
         self._image: Any = None
+        self._device = "cpu"
         self._error = ""
 
     @property
@@ -32,42 +33,77 @@ class VisionGridClassifier:
 
     def status(self) -> Dict[str, Any]:
         ready = self._load()
-        return {"ready": ready, "model": self.model_name, "threshold": self.threshold, "offline": self.offline, "error": self._error}
+        return {
+            "ready": ready,
+            "model": self.model_name,
+            "threshold": self.threshold,
+            "offline": self.offline,
+            "device": self._device,
+            "error": self._error,
+        }
 
     def classify(self, instruction: str, sources: Iterable[str]) -> Dict[str, Any]:
         if not self._load():
             return {"selectedIndexes": [], "scores": [], "model": self.model_name, "error": self._error}
 
+        source_list = [str(source or "") for source in sources]
         target = self._target_text(instruction)
         positives = [f"an image matching this request: {target}", f"a photo of {target}"]
         negatives = ["an image that does not match the requested object", "an unrelated image"]
-        selected: List[int] = []
-        scores: List[float | None] = []
+        labels = positives + negatives
 
-        for index, source in enumerate(sources):
-            image = self._read_image(str(source or ""))
-            if image is None:
-                scores.append(None)
-                continue
-            try:
-                inputs = self._processor(
-                    text=positives + negatives,
-                    images=image,
-                    padding="max_length",
-                    return_tensors="pt",
-                )
-                with self._torch.no_grad():
-                    outputs = self._model(**inputs)
-                logits = outputs.logits_per_image[0].float()
-                positive = self._torch.logsumexp(logits[: len(positives)], dim=0)
-                negative = self._torch.logsumexp(logits[len(positives) :], dim=0)
-                score = float(self._torch.sigmoid(positive - negative).item())
-            except Exception:
-                scores.append(None)
-                continue
-            scores.append(round(score, 4))
-            if score >= self.threshold:
-                selected.append(index)
+        loaded: List[Tuple[int, Any]] = []
+        scores: List[float | None] = [None] * len(source_list)
+        for index, source in enumerate(source_list):
+            image = self._read_image(source)
+            if image is not None:
+                loaded.append((index, image))
+
+        if not loaded:
+            return {
+                "selectedIndexes": [],
+                "scores": scores,
+                "model": self.model_name,
+                "target": target,
+                "threshold": self.threshold,
+                "device": self._device,
+                "error": "No readable grid images",
+            }
+
+        selected: List[int] = []
+        try:
+            inputs = self._processor(
+                text=labels,
+                images=[image for _, image in loaded],
+                padding="max_length",
+                return_tensors="pt",
+            )
+            inputs = {
+                key: value.to(self._device) if hasattr(value, "to") else value
+                for key, value in inputs.items()
+            }
+            with self._torch.inference_mode():
+                outputs = self._model(**inputs)
+            logits = outputs.logits_per_image.float()
+            positive = self._torch.logsumexp(logits[:, : len(positives)], dim=1)
+            negative = self._torch.logsumexp(logits[:, len(positives) :], dim=1)
+            probabilities = self._torch.sigmoid(positive - negative).detach().cpu().tolist()
+
+            for (source_index, _), probability in zip(loaded, probabilities):
+                score = float(probability)
+                scores[source_index] = round(score, 4)
+                if score >= self.threshold:
+                    selected.append(source_index)
+        except Exception as exc:
+            return {
+                "selectedIndexes": [],
+                "scores": scores,
+                "model": self.model_name,
+                "target": target,
+                "threshold": self.threshold,
+                "device": self._device,
+                "error": f"Vision inference failed: {exc}",
+            }
 
         return {
             "selectedIndexes": selected,
@@ -75,6 +111,7 @@ class VisionGridClassifier:
             "model": self.model_name,
             "target": target,
             "threshold": self.threshold,
+            "device": self._device,
         }
 
     def _load(self) -> bool:
@@ -89,8 +126,10 @@ class VisionGridClassifier:
 
             self._torch = torch
             self._image = Image
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
             self._processor = AutoProcessor.from_pretrained(self.model_name, local_files_only=self.offline)
             self._model = AutoModel.from_pretrained(self.model_name, local_files_only=self.offline)
+            self._model.to(self._device)
             self._model.eval()
             return True
         except Exception as exc:
