@@ -10,6 +10,7 @@ import psutil
 from seleniumbase import sb_cdp
 
 from challenge_state_tracker import ChallengeStateTracker
+from semantic_interaction_runtime import SemanticInteractionRuntime
 from visual_interaction_runtime import VisualInteractionRuntime
 
 
@@ -44,6 +45,7 @@ class SeleniumBaseCdpAdapter:
             profile_dir=self.profile_dir,
             overrides=site_adapter_overrides or {},
         )
+        self._semantic_interactions = SemanticInteractionRuntime(self._sb)
         self._next_auto_poll = 0.0
         self._last_auto_result: Dict[str, Any] = {"acted": False, "kind": "none"}
         self._closed = False
@@ -76,6 +78,12 @@ class SeleniumBaseCdpAdapter:
 
     def auto_interaction_state(self) -> Dict[str, Any]:
         return {**self._visual_interactions.status(), "lastResult": self._last_auto_result}
+
+    def observe_semantic_fields(self) -> List[Dict[str, Any]]:
+        return self._semantic_interactions.observe_fields()
+
+    def execute_semantic_plan(self, plan: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+        return self._semantic_interactions.execute_plan(plan)
 
     def apply_grid_selection(self, indexes: Iterable[int], *, submit: bool = True) -> Dict[str, Any]:
         return self._visual_interactions.apply_grid_selection(indexes, submit=submit)
