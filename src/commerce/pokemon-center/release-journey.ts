@@ -1,4 +1,4 @@
-import type { Locator, Page } from "patchright";
+import type { Locator, Page } from "../../browser-worker/types";
 import type { CommerceShop } from "../platforms";
 import { ProductMatcher } from "../../monitor/product-matcher";
 import type { ProductObservation } from "../../monitor/models";
