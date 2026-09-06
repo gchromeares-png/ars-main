@@ -2,6 +2,9 @@ name: Grid Runtime Smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - tmp/grid-smoke-run-20260906
 
 jobs:
   delayed-grid-smoke:
