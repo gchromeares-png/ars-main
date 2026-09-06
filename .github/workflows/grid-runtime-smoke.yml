@@ -68,6 +68,7 @@ jobs:
         run: |
           $path = 'python/seleniumbase_cdp/grid_runtime_smoke_probe.py'
           $content = Get-Content $path -Raw
+          $content = $content.Replace('_diagnostic(diagnostics_root, "probe-start", root=str(temporary), keepArtifacts=keep_artifacts)', '_diagnostic(diagnostics_root, "probe-start", probeRoot=str(temporary), keepArtifacts=keep_artifacts)')
           $content = $content.Replace('}}, 2800);', '}}, 15000);')
           Set-Content -Path $path -Value $content -Encoding utf8
 
