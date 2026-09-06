@@ -35,28 +35,45 @@ class ObservationCapture:
         safe_event = re.sub(r"[^a-z0-9_-]+", "-", event).strip("-") or "event"
         filename = f"{stamp}-{self._counter:04d}-g{int(generation)}-{safe_event}.png"
         path = self._root / filename
+        errors: List[str] = []
+        provider = "seleniumbase-cdp"
+
         try:
             self._sb.save_screenshot(filename, folder=str(self._root))
-            captured = path.exists() and path.stat().st_size > 0
         except Exception as exc:
-            self._last = {
-                "captured": False,
-                "reason": "capture-error",
-                "error": str(exc),
-                "event": event,
-                "generation": generation,
-            }
-            return dict(self._last)
+            errors.append(f"seleniumbase-cdp: {exc}")
+        captured = path.exists() and path.stat().st_size > 0
+
+        # SeleniumBase's sync wrapper writes through its cached `page`. Manual
+        # browser use can make that page stale while get_active_tab() is already
+        # correct. Use SeleniumBase's documented async tab screenshot API as the
+        # exact fallback, writing to the same absolute ARES path.
+        if not captured:
+            try:
+                tab = self._sb.get_active_tab()
+                loop = self._sb.get_event_loop()
+                if tab is None or loop is None:
+                    raise RuntimeError("active CDP tab/event loop unavailable")
+                loop.run_until_complete(
+                    tab.save_screenshot(filename=str(path), format="png", full_page=False)
+                )
+                provider = "active-tab-cdp"
+            except Exception as exc:
+                errors.append(f"active-tab-cdp: {exc}")
+            captured = path.exists() and path.stat().st_size > 0
 
         if captured:
             self._rotate()
         self._last = {
             "captured": captured,
-            "reason": "captured" if captured else "missing-output",
+            "reason": "captured" if captured else ("capture-error" if errors else "missing-output"),
             "event": event,
             "generation": generation,
-            "path": str(path) if captured else "",
+            "path": str(path),
+            "provider": provider if captured else "none",
         }
+        if not captured and errors:
+            self._last["error"] = " | ".join(errors)[:2000]
         return dict(self._last)
 
     def status(self) -> Dict[str, Any]:
