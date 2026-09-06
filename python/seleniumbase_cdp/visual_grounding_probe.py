@@ -140,7 +140,15 @@ def main() -> int:
 
     cdp = FakeCdpSb()
     try:
-        assert provider._play_cdp(cdp, [(10.0, 20.0), (20.0, 30.0), (30.0, 40.0)]) is True
+        motion = provider._motion_parameters(end_hold_backtrack=False)
+        assert 0.026 <= motion["prePress"] <= 0.064
+        assert 0.038 <= motion["postPress"] <= 0.082
+        assert provider._play_cdp_drag(
+            cdp,
+            [(10.0, 20.0), (20.0, 30.0), (30.0, 40.0)],
+            motion=motion,
+            end_hold_backtrack=False,
+        ) is True
         assert len(cdp.tab.events) == 5
     finally:
         cdp.close()
