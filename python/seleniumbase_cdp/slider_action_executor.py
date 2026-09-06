@@ -35,6 +35,8 @@ class SliderActionExecutor:
                     "targetFraction": target,
                     "mode": mode,
                     "pointCount": int(planned.get("pointCount") or 0),
+                    "dragProfile": planned.get("dragProfile"),
+                    "endHoldBacktrack": bool(planned.get("endHoldBacktrack")),
                     "state": self._slider_adapter.poll(),
                 }
 
@@ -57,6 +59,7 @@ class SliderActionExecutor:
         gui = self._screen_points(state, target)
         viewport_start, viewport_end = viewport
         gui_start, gui_end = gui if gui is not None else (None, None)
+        end_slider = str(state.get("orientation") or "horizontal") != "vertical" and target >= 0.94
         try:
             return self._paths.play_drag(
                 self._sb,
@@ -65,6 +68,7 @@ class SliderActionExecutor:
                 preferred="ghost-cursor",
                 gui_start=gui_start,
                 gui_end=gui_end,
+                end_hold_backtrack=end_slider,
             )
         except Exception:
             return {"moved": False, "provider": "none", "pointCount": 0}
