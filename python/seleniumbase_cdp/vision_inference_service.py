@@ -6,7 +6,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
 
-from robust_vision_grid_classifier import RobustVisionGridClassifier
+from vision_grid_classifier import VisionGridClassifier
 
 
 MAX_BODY = 24 * 1024 * 1024
@@ -15,7 +15,7 @@ MAX_BODY = 24 * 1024 * 1024
 class VisionService:
     def __init__(self, token: str) -> None:
         self.token = token
-        self.classifier = RobustVisionGridClassifier(allow_remote=False)
+        self.classifier = VisionGridClassifier(allow_remote=False)
         self._requests = 0
         self._lock = threading.Lock()
         self._preload_started = False
@@ -125,15 +125,12 @@ def main() -> int:
     server = ThreadingHTTPServer((args.host, args.port), handler_for(service))
     host, port = server.server_address[:2]
 
-    # Publish the listener before model load. The owning Node worker can hand
-    # URL/token to session processes immediately while preload overlaps browser
-    # startup and navigation. First inference is serialized by the classifier.
     print(json.dumps({
         "ready": True,
         "url": f"http://{host}:{port}",
         "model": service.classifier.model_name,
         "preloading": bool(args.preload),
-        "selectionPolicy": "prompt-ensemble-raw-logit",
+        "selectionPolicy": "huggingface-siglip2-sigmoid",
     }), flush=True)
     if args.preload:
         service.preload_async()

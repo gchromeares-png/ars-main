@@ -12,10 +12,10 @@ from extended_grid_site_adapter import ExtendedGridSiteAdapter
 from interaction_policy import InteractionPolicy
 from interaction_trace import InteractionTrace
 from proximity_grid_action_executor import ProximityGridActionExecutor
-from robust_vision_grid_classifier import RobustVisionGridClassifier
 from screenshot_grid_tile_provider import ScreenshotGridTileProvider
 from site_slider_adapter import SliderSiteAdapter
 from slider_action_executor import SliderActionExecutor
+from vision_grid_classifier import VisionGridClassifier
 
 
 class VisualInteractionRuntime:
@@ -36,7 +36,7 @@ class VisualInteractionRuntime:
         self._paths = CursorPathProvider()
         self._grid_actions = ProximityGridActionExecutor(self._sb, self._grid, self._policy)
         self._slider_actions = SliderActionExecutor(self._sb, self._slider, self._paths)
-        self._vision = RobustVisionGridClassifier()
+        self._vision = VisionGridClassifier()
         self._screenshot_tiles = ScreenshotGridTileProvider()
         self._slider_grounder = CompositeSliderGrounder(self._sb, profile_dir=self._profile_dir)
         self._trace = InteractionTrace(self._profile_dir)
