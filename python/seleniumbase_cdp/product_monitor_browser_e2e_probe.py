@@ -91,9 +91,27 @@ def _send(process: subprocess.Popen[str], payload: Dict[str, Any]) -> None:
     process.stdin.flush()
 
 
+def _graceful_close(process: subprocess.Popen[str], messages: queue.Queue[Dict[str, Any]]) -> None:
+    if process.poll() is not None:
+        return
+    close_id = uuid.uuid4().hex
+    try:
+        _send(process, {"type": "close", "requestId": close_id})
+        _wait(messages, close_id, "closed", timeout=12.0)
+        process.wait(timeout=12.0)
+        # Windows can report the Python worker exited slightly before Chrome
+        # releases its profile database handles.
+        time.sleep(1.5 if sys.platform.startswith("win") else 0.2)
+    except Exception:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5.0)
+        time.sleep(1.5 if sys.platform.startswith("win") else 0.2)
+
+
 def _run_mode(base_url: str, *, headless: bool) -> None:
     mode = "headless" if headless else "visible"
-    with tempfile.TemporaryDirectory(prefix=f"ares-monitor-{mode}-e2e-") as profile_dir:
+    with tempfile.TemporaryDirectory(prefix=f"ares-monitor-{mode}-e2e-", ignore_cleanup_errors=True) as profile_dir:
         env = {**os.environ}
         python_path = str(WORKER.parent)
         env["PYTHONPATH"] = python_path + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
@@ -152,19 +170,13 @@ def _run_mode(base_url: str, *, headless: bool) -> None:
             assert "schema.org/InStock" in html, product
             assert "Add to cart" in html, product
             assert product.get("readyState") in {"interactive", "complete"}, product
-
-            close_id = uuid.uuid4().hex
-            _send(process, {"type": "close", "requestId": close_id})
-            _wait(messages, close_id, "closed", timeout=12.0)
-            process.wait(timeout=12.0)
-            if process.returncode not in {0, None}:
-                stderr = process.stderr.read() if process.stderr else ""
-                raise AssertionError(f"Monitor worker exited with {process.returncode}: {stderr[-3000:]}")
             print(f"MONITOR_BROWSER_MODE_PASS mode={mode} pid={ready.get('pid')}")
         finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=5.0)
+            _graceful_close(process, messages)
+
+        if process.returncode not in {0, None}:
+            stderr = process.stderr.read() if process.stderr else ""
+            raise AssertionError(f"Monitor worker exited with {process.returncode}: {stderr[-3000:]}")
 
 
 def main() -> int:
@@ -174,8 +186,6 @@ def main() -> int:
     base_url = f"http://127.0.0.1:{server.server_port}/"
 
     try:
-        # The same real JavaScript fixture must work in both task contracts:
-        # visible monitor (headless=false) and background monitor (headless=true).
         _run_mode(base_url, headless=False)
         _run_mode(base_url, headless=True)
     finally:
