@@ -33,6 +33,14 @@ def main() -> int:
     if completed.returncode != 0:
         raise AssertionError(f"SigLIP calibration probe failed with exit code {completed.returncode}")
 
+    production = _match(
+        r"baselineCurrent=(\d+)/(\d+)",
+        output,
+        "production held-out accuracy",
+    )
+    production_exact = int(production.group(1))
+    production_cases = int(production.group(2))
+
     accuracy = _match(
         r"promptEnsembleCalibrated=(\d+)/(\d+).*?ensembleF1=([0-9.]+)",
         output,
@@ -51,13 +59,19 @@ def main() -> int:
     ranking_cases = int(ranking.group(2))
     min_margin = float(ranking.group(3))
 
-    if cases <= 0 or ranking_cases <= 0:
+    if production_cases <= 0 or cases <= 0 or ranking_cases <= 0:
         raise AssertionError("SigLIP calibration gate received no held-out cases")
+    production_exact_rate = production_exact / production_cases
     exact_rate = exact / cases
     separable_rate = separable / ranking_cases
 
-    # These are quality gates, not a production threshold contract. They make
-    # diagnostics fail closed instead of reporting PASS merely because cases ran.
+    # The shipped production classifier/threshold must pass independently of
+    # whatever threshold the calibration subset happens to fit in this run.
+    if production_exact_rate < 0.90:
+        raise AssertionError(
+            f"Production held-out exact rate too low: {production_exact}/{production_cases} "
+            f"({production_exact_rate:.3f})"
+        )
     if exact_rate < 0.90:
         raise AssertionError(f"Held-out ensemble exact rate too low: {exact}/{cases} ({exact_rate:.3f})")
     if f1 < 0.95:
@@ -70,8 +84,10 @@ def main() -> int:
         raise AssertionError(f"Held-out ensemble minimum ranking margin too small: {min_margin:.6f}")
 
     print(
-        "PASS: held-out SigLIP quality gates satisfied "
-        f"exact={exact}/{cases} f1={f1:.4f} separable={separable}/{ranking_cases} minMargin={min_margin:.6f}"
+        "PASS: production and held-out SigLIP quality gates satisfied "
+        f"productionExact={production_exact}/{production_cases} "
+        f"calibratedExact={exact}/{cases} f1={f1:.4f} "
+        f"separable={separable}/{ranking_cases} minMargin={min_margin:.6f}"
     )
     return 0
 
