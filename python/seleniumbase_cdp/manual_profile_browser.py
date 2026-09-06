@@ -113,18 +113,67 @@ def _remember_last_url(profile_dir: Path, adapter: SeleniumBaseCdpAdapter, previ
     return value
 
 
+def _active_target_id(adapter: SeleniumBaseCdpAdapter) -> str:
+    tab = adapter._sb.get_active_tab()
+    target_id = getattr(tab, "target_id", None)
+    if target_id is None:
+        target = getattr(tab, "target", None)
+        target_id = getattr(target, "target_id", None)
+    value = str(target_id or "").strip()
+    if not value:
+        raise RuntimeError("Active SeleniumBase CDP target id is unavailable")
+    return value
+
+
+def _enable_oopif_runtime(adapter: SeleniumBaseCdpAdapter) -> bool:
+    from task_browser_worker_oopif_impl import FlatCdpTargetRegistry
+
+    driver = getattr(adapter._sb, "driver", None)
+    if driver is not None and hasattr(driver, "cdp_base"):
+        driver = driver.cdp_base
+    websocket_url = str(getattr(driver, "websocket_url", "") or "").strip()
+    if not websocket_url:
+        raise RuntimeError("Browser-level CDP websocket URL is unavailable for OOPIF routing")
+
+    registry = FlatCdpTargetRegistry(websocket_url)
+    setattr(adapter, "_ares_oopif_registry", registry)
+
+    def discover() -> list[Dict[str, Any]]:
+        return registry.discover(_active_target_id(adapter), limit=128)
+
+    def evaluate(frame_path: list[str], script: str, args: list[Any] | None = None) -> Dict[str, Any]:
+        frame_id, offset_x, offset_y = registry.resolve_path(
+            _active_target_id(adapter),
+            frame_path,
+            include_offsets=True,
+        )
+        value = registry.evaluate(frame_id, script, args or [])
+        return {"value": value, "offsetX": offset_x, "offsetY": offset_y}
+
+    setattr(adapter._sb, "ares_oopif_discover", discover)
+    setattr(adapter._sb, "ares_oopif_evaluate", evaluate)
+    return True
+
+
+def _close_oopif_runtime(adapter: SeleniumBaseCdpAdapter) -> None:
+    registry = getattr(adapter, "_ares_oopif_registry", None)
+    if registry is None:
+        return
+    try:
+        registry.close()
+    except Exception:
+        pass
+
+
 def _close_adapter(adapter: SeleniumBaseCdpAdapter) -> None:
     owned_pids = adapter._profile_browser_pids()
     chrome_pid = adapter.chrome_pid
     if chrome_pid and chrome_pid not in owned_pids:
         owned_pids.insert(0, chrome_pid)
 
+    _close_oopif_runtime(adapter)
     adapter.quit()
 
-    # A clean SeleniumBase quit can return on Windows while one of Chromium's
-    # profile-owning child processes is still winding down. An immediate reopen
-    # of the same user-data-dir then blocks on the stale profile lock. Only
-    # processes captured for this exact profile are considered here.
     deadline = time.monotonic() + (12.0 if sys.platform.startswith("win") else 3.0)
     remaining: list[psutil.Process] = []
     for pid in dict.fromkeys(owned_pids):
@@ -186,8 +235,10 @@ def _start(command: Dict[str, Any]) -> int:
         user_agent=str(command.get("userAgent") or "").strip() or None,
         site_adapter_overrides=_site_adapter_overrides(command, profile_dir),
     )
+    oopif_enabled = _enable_oopif_runtime(adapter)
     closed = False
     last_url = _read_last_url(profile_dir)
+
     try:
         initial_cookies = command.get("cookies")
         applied = adapter.set_snapshot_cookies(initial_cookies) if isinstance(initial_cookies, list) and initial_cookies else 0
@@ -204,6 +255,8 @@ def _start(command: Dict[str, Any]) -> int:
             "profileDir": str(profile_dir),
             "pid": adapter.chrome_pid,
             "appliedCookieCount": applied,
+            "runtimeMode": "oopif",
+            "oopifRoutingEnabled": oopif_enabled,
             "siteAdapterEnabled": True,
             "gridActionsEnabled": True,
             "sliderActionsEnabled": True,
@@ -232,10 +285,6 @@ def _start(command: Dict[str, Any]) -> int:
             except queue.Empty:
                 now = time.monotonic()
                 if now >= next_forced_visual_poll:
-                    # A visual challenge can replace content inside an already-existing
-                    # iframe without changing the top-level DOM fingerprint. Force a
-                    # throttled visual observation so nested-frame grids still get a
-                    # chance to be detected, captured, classified, and acted on.
                     adapter._poll_observation_watchdog(force=True)
                     next_forced_visual_poll = now + 1.0
                 else:
@@ -247,58 +296,92 @@ def _start(command: Dict[str, Any]) -> int:
             try:
                 if command_type == "close":
                     last_url = _remember_last_url(profile_dir, adapter, last_url)
-                    _close_adapter(adapter); closed = True
+                    _close_adapter(adapter)
+                    closed = True
                     _emit({"type": "closed", "requestId": next_request_id, "profileId": profile_id})
                     break
                 if command_type == "export-cookies":
-                    _emit({"type": "cookies", "requestId": next_request_id, "profileId": profile_id, "cookies": adapter.get_snapshot_cookies()}); continue
+                    _emit({"type": "cookies", "requestId": next_request_id, "profileId": profile_id, "cookies": adapter.get_snapshot_cookies()})
+                    continue
                 if command_type == "apply-cookies":
                     cookies = next_command.get("cookies")
                     if not isinstance(cookies, list):
                         raise ValueError("apply-cookies requires a cookies array")
-                    _emit({"type": "cookies-applied", "requestId": next_request_id, "profileId": profile_id, "count": adapter.set_snapshot_cookies(cookies)}); continue
+                    _emit({"type": "cookies-applied", "requestId": next_request_id, "profileId": profile_id, "count": adapter.set_snapshot_cookies(cookies)})
+                    continue
                 if command_type == "navigate":
                     url = str(next_command.get("url") or "").strip()
                     if not url:
                         raise ValueError("navigate requires a URL")
                     adapter.goto(url)
                     last_url = _remember_last_url(profile_dir, adapter, last_url)
-                    _emit({"type": "navigated", "requestId": next_request_id, "profileId": profile_id}); continue
+                    _emit({"type": "navigated", "requestId": next_request_id, "profileId": profile_id})
+                    continue
                 if command_type == "inspect-session":
-                    _emit({"type": "session-inspection", "requestId": next_request_id, "profileId": profile_id, **adapter.inspect_session()}); continue
+                    _emit({"type": "session-inspection", "requestId": next_request_id, "profileId": profile_id, **adapter.inspect_session()})
+                    continue
                 if command_type == "challenge-state":
-                    _emit({"type": "challenge-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.challenge_state()}); continue
+                    _emit({"type": "challenge-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.challenge_state()})
+                    continue
                 if command_type == "site-grid-state":
-                    _emit({"type": "site-grid-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.site_grid_state()}); continue
+                    _emit({"type": "site-grid-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.site_grid_state()})
+                    continue
                 if command_type == "site-slider-state":
-                    _emit({"type": "site-slider-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.site_slider_state()}); continue
+                    _emit({"type": "site-slider-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.site_slider_state()})
+                    continue
                 if command_type == "auto-interaction-state":
-                    _emit({"type": "auto-interaction-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.auto_interaction_state()}); continue
+                    _emit({"type": "auto-interaction-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.auto_interaction_state()})
+                    continue
                 if command_type == "interaction-outcome-state":
-                    _emit({"type": "interaction-outcome-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.interaction_outcome_state()}); continue
+                    _emit({"type": "interaction-outcome-state", "requestId": next_request_id, "profileId": profile_id, "state": adapter.interaction_outcome_state()})
+                    continue
                 if command_type == "observe-semantic-fields":
-                    _emit({"type": "semantic-fields", "requestId": next_request_id, "profileId": profile_id, "fields": adapter.observe_semantic_fields()}); continue
+                    _emit({"type": "semantic-fields", "requestId": next_request_id, "profileId": profile_id, "fields": adapter.observe_semantic_fields()})
+                    continue
                 if command_type == "execute-semantic-plan":
                     plan = next_command.get("plan")
                     if not isinstance(plan, list):
                         raise ValueError("execute-semantic-plan requires a plan array")
                     result = adapter.execute_semantic_plan(plan)
-                    _emit({"type": "semantic-plan-result", "requestId": next_request_id, "profileId": profile_id, **result}); continue
+                    _emit({"type": "semantic-plan-result", "requestId": next_request_id, "profileId": profile_id, **result})
+                    continue
                 if command_type == "apply-grid-selection":
                     indexes = next_command.get("indexes")
                     if not isinstance(indexes, list):
                         raise ValueError("apply-grid-selection requires an indexes array")
                     result = adapter.apply_grid_selection(indexes, submit=bool(next_command.get("submit", True)))
-                    _emit({"type": "grid-selection-applied", "requestId": next_request_id, "profileId": profile_id, **result}); continue
+                    _emit({"type": "grid-selection-applied", "requestId": next_request_id, "profileId": profile_id, **result})
+                    continue
                 if command_type == "apply-slider":
                     target = float(next_command.get("targetFraction", 0.96))
                     result = adapter.apply_slider(target)
-                    _emit({"type": "slider-applied", "requestId": next_request_id, "profileId": profile_id, **result}); continue
+                    _emit({"type": "slider-applied", "requestId": next_request_id, "profileId": profile_id, **result})
+                    continue
                 if command_type == "status":
-                    _emit({"type": "status", "requestId": next_request_id, "profileId": profile_id, "open": adapter.is_running(), "siteAdapterEnabled": True, "gridActionsEnabled": True, "sliderActionsEnabled": True, "autoInteractionsEnabled": True, "semanticInteractionsEnabled": True, "outcomeVerificationEnabled": True}); continue
+                    _emit({
+                        "type": "status",
+                        "requestId": next_request_id,
+                        "profileId": profile_id,
+                        "open": adapter.is_running(),
+                        "runtimeMode": "oopif",
+                        "oopifRoutingEnabled": oopif_enabled,
+                        "siteAdapterEnabled": True,
+                        "gridActionsEnabled": True,
+                        "sliderActionsEnabled": True,
+                        "autoInteractionsEnabled": True,
+                        "semanticInteractionsEnabled": True,
+                        "outcomeVerificationEnabled": True,
+                    })
+                    continue
                 raise ValueError(f"Unsupported SeleniumBase command: {command_type!r}")
             except Exception as exc:
-                _emit({"type": "error", "requestId": next_request_id, "profileId": profile_id, "errorType": type(exc).__name__, "error": str(exc)})
+                _emit({
+                    "type": "error",
+                    "requestId": next_request_id,
+                    "profileId": profile_id,
+                    "errorType": type(exc).__name__,
+                    "error": str(exc),
+                })
     finally:
         if not closed:
             try:
