@@ -17,19 +17,15 @@ Point = Tuple[float, float]
 class CursorPathProvider:
     """Plan and play smooth cursor paths through the existing CDP session.
 
-    Each runtime instance owns an in-memory random stream. Because a
-    VisualInteractionRuntime creates exactly one provider for its browser/task
-    session, parallel tasks get independent motion streams automatically. The
-    stream is never persisted, derived from a proxy, or exposed through the UI;
-    a fresh provider therefore starts with fresh motion on every task restart.
+    Every runtime instance owns a private in-memory RNG. Motion is generated
+    parametrically per action instead of selecting from a small set of fixed
+    profiles. Nothing is persisted or derived from proxy identity, so restarting
+    a task creates a fresh independent motion stream automatically.
     """
 
     def __init__(self, *, helper_path: str | Path | None = None) -> None:
         self._helper = Path(helper_path).expanduser().resolve() if helper_path else Path(__file__).with_name("cursor_path_helper.cjs")
         self._node = os.environ.get("ARES_NODE_EXECUTABLE", "node").strip() or "node"
-        # Session-local only: no profile/config/database persistence. 256 bits of
-        # fresh entropy makes independently-created task runtimes practically
-        # certain to have different path variations.
         self._rng = random.Random(int.from_bytes(os.urandom(32), "big"))
         self._movement_index = 0
 
@@ -44,12 +40,6 @@ class CursorPathProvider:
         return {"provider": "python-bezier", "points": points}
 
     def _sessionize_points(self, values: Iterable[Any], start: Point, end: Point) -> List[Point]:
-        """Apply tiny bounded per-movement variation while preserving endpoints.
-
-        The variation is deliberately small (sub-pixel to ~1.5px) so it changes
-        the shape without changing the requested target or reducing reliability.
-        Endpoints are copied exactly, which keeps slider/grid hit geometry intact.
-        """
         points = self._clean_points(values)
         if len(points) < 3:
             return points
@@ -58,18 +48,19 @@ class CursorPathProvider:
         dx, dy = end[0] - start[0], end[1] - start[1]
         distance = max(1.0, math.hypot(dx, dy))
         nx, ny = -dy / distance, dx / distance
-        amplitude = self._rng.uniform(0.45, 1.45)
-        phase = self._rng.uniform(-0.45, 0.45)
+        amplitude = self._rng.uniform(0.35, 1.55)
+        phase = self._rng.uniform(-0.55, 0.55)
+        secondary_phase = self._rng.uniform(0.0, math.tau)
         result: List[Point] = [start]
         denominator = max(1, len(points) - 1)
 
         for index, (x, y) in enumerate(points[1:-1], start=1):
             t = index / denominator
-            # Zero at both ends; strongest only in the middle of the path.
             envelope = 4.0 * t * (1.0 - t)
-            wave = math.sin(math.pi * t + phase)
-            micro = self._rng.uniform(-0.20, 0.20)
-            offset = envelope * (amplitude * wave + micro)
+            primary = math.sin(math.pi * t + phase)
+            secondary = 0.22 * math.sin(math.tau * t + secondary_phase)
+            micro = self._rng.uniform(-0.18, 0.18)
+            offset = envelope * (amplitude * (primary + secondary) + micro)
             result.append((x + nx * offset, y + ny * offset))
 
         result.append(end)
@@ -84,6 +75,20 @@ class CursorPathProvider:
         if self._play_cdp_click(seleniumbase_cdp, points):
             return {"clicked": True, "provider": f"{provider}:cdp", "pointCount": len(points)}
         return {"clicked": False, "provider": provider, "pointCount": len(points)}
+
+    def _motion_parameters(self, *, end_hold_backtrack: bool) -> Dict[str, float]:
+        """Generate one bounded, solve-safe motion recipe for a single drag."""
+        return {
+            "prePress": self._rng.uniform(0.026, 0.064),
+            "postPress": self._rng.uniform(0.038, 0.082),
+            "baseDelay": self._rng.uniform(0.0075, 0.0135),
+            "acceleration": self._rng.uniform(0.004, 0.015),
+            "wave": self._rng.uniform(0.0, 0.0045),
+            "waveCycles": self._rng.uniform(0.75, 2.15),
+            "endHold": self._rng.uniform(0.09, 0.18) if end_hold_backtrack else 0.0,
+            "backtrackPx": self._rng.uniform(0.8, 2.2) if end_hold_backtrack else 0.0,
+            "backtrackHold": self._rng.uniform(0.038, 0.078) if end_hold_backtrack else 0.0,
+        }
 
     def play_drag(
         self,
@@ -101,18 +106,16 @@ class CursorPathProvider:
         provider = str(plan.get("provider") or "path")
         if len(points) < 2:
             return {"moved": False, "provider": provider, "pointCount": len(points)}
-        profile = self._rng.randrange(4)
-        if self._play_cdp_drag(
-            seleniumbase_cdp,
-            points,
-            profile=profile,
-            end_hold_backtrack=end_hold_backtrack,
-        ):
+
+        motion = self._motion_parameters(end_hold_backtrack=end_hold_backtrack)
+        motion_id = f"m{self._movement_index}-{self._rng.getrandbits(48):012x}"
+        if self._play_cdp_drag(seleniumbase_cdp, points, motion=motion, end_hold_backtrack=end_hold_backtrack):
             return {
                 "moved": True,
                 "provider": f"{provider}:cdp",
                 "pointCount": len(points),
-                "dragProfile": profile + 1,
+                "motionId": motion_id,
+                "motionParameters": {key: round(value, 6) for key, value in motion.items()},
                 "endHoldBacktrack": bool(end_hold_backtrack),
             }
         if gui_start is not None and gui_end is not None:
@@ -168,7 +171,7 @@ class CursorPathProvider:
         seleniumbase_cdp: Any,
         points: List[Point],
         *,
-        profile: int = 0,
+        motion: Dict[str, float],
         end_hold_backtrack: bool = False,
     ) -> bool:
         context = cls._cdp_context(seleniumbase_cdp)
@@ -180,36 +183,33 @@ class CursorPathProvider:
             button = cdp_input.MouseButton("left")
             sx, sy = points[0]
             await tab.send(cdp_input.dispatch_mouse_event("mouseMoved", x=sx, y=sy, button=button, buttons=0))
-            await asyncio.sleep(0.035 + profile * 0.008)
+            await asyncio.sleep(motion["prePress"])
             await tab.send(cdp_input.dispatch_mouse_event("mousePressed", x=sx, y=sy, button=button, buttons=1, click_count=1))
-            await asyncio.sleep((0.045, 0.065, 0.055, 0.075)[profile])
+            await asyncio.sleep(motion["postPress"])
             ex, ey = points[-1]
             try:
                 count = max(1, len(points) - 1)
                 for index, (x, y) in enumerate(points[1:], start=1):
                     t = index / count
-                    if profile == 0:
-                        delay = 0.010 + 0.010 * t
-                    elif profile == 1:
-                        delay = 0.008 + 0.018 * (t * t)
-                    elif profile == 2:
-                        delay = 0.012 + 0.006 * abs(math.sin(t * math.pi * 2.0))
-                    else:
-                        delay = 0.009 + (0.020 if t > 0.72 else 0.006 * t)
+                    delay = (
+                        motion["baseDelay"]
+                        + motion["acceleration"] * (t * t)
+                        + motion["wave"] * abs(math.sin(math.pi * motion["waveCycles"] * t))
+                    )
                     await tab.send(cdp_input.dispatch_mouse_event("mouseMoved", x=x, y=y, button=button, buttons=1))
                     await asyncio.sleep(delay)
 
                 ex, ey = points[-1]
                 if end_hold_backtrack:
-                    await asyncio.sleep((0.10, 0.14, 0.12, 0.16)[profile])
+                    await asyncio.sleep(motion["endHold"])
                     px, py = points[-2]
                     dx, dy = ex - px, ey - py
                     length = max(1e-6, math.hypot(dx, dy))
-                    back = 1.0 if profile in (0, 2) else 2.0
+                    back = motion["backtrackPx"]
                     bx = ex - dx / length * back
                     by = ey - dy / length * back
                     await tab.send(cdp_input.dispatch_mouse_event("mouseMoved", x=bx, y=by, button=button, buttons=1))
-                    await asyncio.sleep((0.045, 0.060, 0.050, 0.070)[profile])
+                    await asyncio.sleep(motion["backtrackHold"])
                     ex, ey = bx, by
             finally:
                 await tab.send(cdp_input.dispatch_mouse_event("mouseReleased", x=ex, y=ey, button=button, buttons=0, click_count=1))
