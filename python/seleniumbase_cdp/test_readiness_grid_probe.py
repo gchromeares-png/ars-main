@@ -1,5 +1,19 @@
-from interaction_policy import InteractionPolicy
+from __future__ import annotations
+
+import json
+import queue
+import shutil
+import socketserver
+import tempfile
+import threading
+import time
+from http.server import BaseHTTPRequestHandler
+from pathlib import Path
+from typing import Any, Dict
+from urllib.parse import parse_qs, urlparse
+
 from extended_grid_site_adapter import ExtendedGridSiteAdapter
+from manual_profile_probe import WorkerClient
 from proximity_grid_action_executor import ProximityGridActionExecutor
 from robust_vision_grid_classifier import RobustVisionGridClassifier
 
@@ -28,32 +42,129 @@ def _marks(rows: int, columns: int):
     ]
 
 
-class FakeAdapter:
+class Recorder:
     def __init__(self) -> None:
-        self._overrides = {"tiles": ".tile", "submit": ".submit"}
-        self.calls = 0
-
-    def poll(self):
-        self.calls += 1
-        return {
-            "kind": "image-grid",
-            "scope": "document",
-            "rows": 8,
-            "columns": 8,
-            "tileCount": 64,
-            "generation": self.calls,
-            "signature": f"g-{self.calls}",
-            "marks": _marks(8, 8),
-        }
+        self.hits: queue.Queue[Dict[str, str]] = queue.Queue()
 
 
-class FakeCdp:
-    def __init__(self) -> None:
-        self.scripts = []
+class ProbeHandler(BaseHTTPRequestHandler):
+    recorder: Recorder
 
-    def evaluate(self, script):
-        self.scripts.append(script)
-        return True
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path == "/clicked":
+            params = parse_qs(parsed.query)
+            self.recorder.hits.put({"type": "tile", "index": (params.get("index") or [""])[0]})
+            self._send(b"ok", "text/plain; charset=utf-8")
+            return
+        if parsed.path == "/submitted":
+            self.recorder.hits.put({"type": "submit", "index": ""})
+            self._send(b"ok", "text/plain; charset=utf-8")
+            return
+        if parsed.path == "/":
+            tiles = "".join(
+                f"<button class='tile' data-index='{index}' onclick=\"fetch('/clicked?index={index}')\">{index}</button>"
+                for index in range(64)
+            )
+            body = f"""<!doctype html>
+<html><head><meta charset='utf-8'><style>
+body{{font-family:Arial;margin:20px}}
+#grid{{display:grid;grid-template-columns:repeat(8,40px);gap:8px;width:max-content}}
+.tile{{width:40px;height:40px}}
+.submit{{margin-top:16px;padding:10px 18px}}
+</style></head><body>
+<div id='grid'>{tiles}</div>
+<button class='submit' onclick=\"fetch('/submitted')\">OK</button>
+</body></html>""".encode("utf-8")
+            self._send(body, "text/html; charset=utf-8")
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def _send(self, body: bytes, content_type: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return
+
+
+def _start_server() -> tuple[socketserver.TCPServer, Recorder, str]:
+    recorder = Recorder()
+
+    class Handler(ProbeHandler):
+        pass
+
+    Handler.recorder = recorder
+    server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    host, port = server.server_address
+    return server, recorder, f"http://{host}:{port}/"
+
+
+def _collect_hits(recorder: Recorder, expected_count: int, timeout: float = 10.0) -> list[Dict[str, str]]:
+    hits: list[Dict[str, str]] = []
+    deadline = time.time() + timeout
+    while time.time() < deadline and len(hits) < expected_count:
+        try:
+            hits.append(recorder.hits.get(timeout=0.4))
+        except queue.Empty:
+            continue
+    return hits
+
+
+def _run_real_browser_probe(root: Path) -> None:
+    server, recorder, url = _start_server()
+    profile_dir = root / "profile" / ".ares-seleniumbase-cdp"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / ".ares-site-adapter.json").write_text(
+        json.dumps({"root": "#grid", "tiles": ".tile", "submit": ".submit"}),
+        encoding="utf-8",
+    )
+
+    client: WorkerClient | None = None
+    try:
+        client = WorkerClient(profile_dir, url)
+
+        request_id = "grid-state"
+        client.send({"type": "site-grid-state", "requestId": request_id})
+        state_message = client.wait("site-grid-state", request_id, 15)
+        state = state_message.get("state") or {}
+        assert state.get("kind") == "image-grid", state
+        assert int(state.get("rows") or 0) == 8, state
+        assert int(state.get("columns") or 0) == 8, state
+        assert int(state.get("tileCount") or 0) == 64, state
+
+        request_id = "apply-selection"
+        client.send({
+            "type": "apply-grid-selection",
+            "requestId": request_id,
+            "indexes": [9, 8, 1, 0],
+            "submit": True,
+        })
+        execution = client.wait("grid-selection-applied", request_id, 20)
+
+        assert execution.get("clickedIndexes") == [0, 1, 9, 8], execution
+        assert execution.get("clickOrder") == [0, 1, 9, 8], execution
+        assert execution.get("submitted") is True, execution
+
+        hits = _collect_hits(recorder, 5)
+        tile_hits = [int(hit["index"]) for hit in hits if hit.get("type") == "tile"]
+        submit_hits = [hit for hit in hits if hit.get("type") == "submit"]
+        assert tile_hits == [0, 1, 9, 8], hits
+        assert len(submit_hits) == 1, hits
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+        server.shutdown()
+        server.server_close()
 
 
 def main() -> int:
@@ -65,26 +176,18 @@ def main() -> int:
     order = ProximityGridActionExecutor._ordered_indexes(state, [15, 7, 3, 0])
     assert order == [0, 3, 7, 15], order
 
-    policy = InteractionPolicy({
-        "gridClickDelayMinMs": 0,
-        "gridClickDelayMaxMs": 0,
-        "gridSubmitDelayMs": 0,
-    })
-    cdp = FakeCdp()
-    executor = ProximityGridActionExecutor(cdp, FakeAdapter(), policy)
-    execution = executor.apply([9, 8, 1, 0], submit=True)
-    assert execution["clickedIndexes"] == [0, 1, 9, 8], execution
-    assert execution["clickOrder"] == [0, 1, 9, 8], execution
-    assert execution["submitted"] is True, execution
-    assert len(cdp.scripts) == 5, len(cdp.scripts)
-    assert all("count >= 4 && count <= 64" in script for script in cdp.scripts), cdp.scripts[0]
-
     classifier = RobustVisionGridClassifier()
     assert classifier._target_text("Klicke auf Ampeln") == "Ampeln"
     assert classifier._target_text("Click all traffic lights") == "traffic lights"
     assert classifier._target_text("Wähle alle Bilder mit Fahrrädern") == "Fahrrädern"
 
-    print("Test-readiness grid geometry, 8x8 proximity execution, and prompt extraction passed.")
+    temporary = Path(tempfile.mkdtemp(prefix="ares-readiness-grid-"))
+    try:
+        _run_real_browser_probe(temporary)
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+
+    print("PASS: real SeleniumBase CDP 8x8 grid clicks and submit verified by the browser test server.")
     return 0
 
 
