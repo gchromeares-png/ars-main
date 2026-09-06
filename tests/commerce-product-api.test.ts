@@ -2,12 +2,19 @@ import type { CommerceShop } from "../src/commerce/platforms";
 import { CommerceProductApiRouter } from "../src/commerce/product-api/router";
 import { ShopifyProductApiAdapter } from "../src/commerce/product-api/shopify-product-api-adapter";
 import { WooCommerceProductApiAdapter } from "../src/commerce/product-api/woocommerce-product-api-adapter";
-import type { JsonHttpClient, JsonHttpResponse } from "../src/commerce/product-api/types";
+import type { JsonHttpClient, JsonHttpResponse, TextHttpClient, TextHttpResponse } from "../src/commerce/product-api/types";
 
 class StubHttpClient implements JsonHttpClient {
   constructor(private readonly handler: (url: string) => JsonHttpResponse<any>) {}
   async get<T>(url: string): Promise<JsonHttpResponse<T>> {
     return this.handler(url) as JsonHttpResponse<T>;
+  }
+}
+
+class StubTextHttpClient implements TextHttpClient {
+  constructor(private readonly handler: (url: string) => TextHttpResponse) {}
+  async get(url: string): Promise<TextHttpResponse> {
+    return this.handler(url);
   }
 }
 
@@ -106,8 +113,7 @@ describe("commerce public product API adapters", () => {
     expect(results[0].available).toBe(true);
   });
 
-  it("does not pretend credentialed platforms have anonymous adapters", async () => {
-    const router = new CommerceProductApiRouter(false);
+  it("falls back to public storefront HTML when a platform has no anonymous product API adapter", async () => {
     const wixShop: CommerceShop = {
       id: "wix-test",
       name: "Wix",
@@ -115,8 +121,21 @@ describe("commerce public product API adapters", () => {
       platform: "wix",
       config: {}
     };
+    const router = new CommerceProductApiRouter(
+      false,
+      new StubHttpClient(() => ({ status: 500, headers: {} })),
+      new StubTextHttpClient(url => ({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url,
+        text: "<html><title>Pokemon Store</title><body>Pokemon Gengar Box <button>Add to cart</button></body></html>"
+      }))
+    );
 
-    await expect(router.search(wixShop, { searchTerm: "Pokemon" }))
-      .rejects.toThrow("auth-required");
+    const results = await router.search(wixShop, { searchTerm: "Pokemon Gengar" });
+    expect(results).toHaveLength(1);
+    expect(results[0].platform).toBe("wix");
+    expect(results[0].available).toBe(true);
+    expect(results[0].attributes?.["source"]).toBe("generic-html");
   });
 });

@@ -6,6 +6,14 @@ describe("profile browser runtime default", () => {
     path.resolve(__dirname, "../src/electron/profile-browser-controller.ts"),
     "utf8"
   );
+  const seleniumController = fs.readFileSync(
+    path.resolve(__dirname, "../src/electron/seleniumbase-profile-browser-controller.ts"),
+    "utf8"
+  );
+  const worker = fs.readFileSync(
+    path.resolve(__dirname, "../python/seleniumbase_cdp/manual_profile_browser.py"),
+    "utf8"
+  );
 
   it("routes normal profile-browser opens through SeleniumBase without an opt-in flag", () => {
     expect(controller).toContain("new SeleniumBaseProfileBrowserController");
@@ -20,5 +28,11 @@ describe("profile browser runtime default", () => {
     expect(controller).toContain("return this.seleniumBase.status(profileId)");
     expect(controller).toContain("return this.seleniumBase.isOpen(profileId)");
     expect(controller).toContain("return this.seleniumBase.closeAll()");
+  });
+
+  it("forces profile-browser sessions visible and sends that decision to the Python worker", () => {
+    expect(seleniumController).toContain("headless: false");
+    expect(worker).toContain('if "headless" in command:');
+    expect(worker).toContain("return bool(command.get(\"headless\"))");
   });
 });

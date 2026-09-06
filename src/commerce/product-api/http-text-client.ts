@@ -1,8 +1,8 @@
 import * as http from "http";
 import * as https from "https";
-import type { JsonHttpClient, JsonHttpResponse } from "./types";
+import type { TextHttpClient, TextHttpResponse } from "./types";
 
-function assertHttpTarget(value: string, base?: URL): URL {
+function resolveHttpUrl(value: string, base?: URL): URL {
   const target = base ? new URL(value, base) : new URL(value);
   if (target.protocol !== "http:" && target.protocol !== "https:") {
     throw new Error(`Unsupported HTTP protocol: ${target.protocol}`);
@@ -10,35 +10,37 @@ function assertHttpTarget(value: string, base?: URL): URL {
   return target;
 }
 
-export class NodeJsonHttpClient implements JsonHttpClient {
+export class NodeTextHttpClient implements TextHttpClient {
   constructor(
     private readonly timeoutMs = 12_000,
-    private readonly userAgent = "ARES-Product-Monitor/1.0",
-    private readonly maxRedirects = 5
+    private readonly userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+    private readonly maxRedirects = 5,
+    private readonly maxBodyBytes = 2 * 1024 * 1024
   ) {}
 
-  get<T>(url: string, headers: Record<string, string> = {}): Promise<JsonHttpResponse<T>> {
-    return this.getWithRedirects<T>(url, headers, 0);
+  get(url: string, headers: Record<string, string> = {}): Promise<TextHttpResponse> {
+    return this.getWithRedirects(url, headers, 0);
   }
 
-  private getWithRedirects<T>(
+  private getWithRedirects(
     url: string,
     headers: Record<string, string>,
     redirectCount: number
-  ): Promise<JsonHttpResponse<T>> {
+  ): Promise<TextHttpResponse> {
     return new Promise((resolve, reject) => {
       let target: URL;
       try {
-        target = assertHttpTarget(url);
+        target = resolveHttpUrl(url);
       } catch (error) {
         reject(error);
         return;
       }
+
       const transport = target.protocol === "http:" ? http : https;
       const request = transport.request(target, {
         method: "GET",
         headers: {
-          Accept: "application/json",
+          Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
           "User-Agent": this.userAgent,
           ...headers
         }
@@ -53,43 +55,39 @@ export class NodeJsonHttpClient implements JsonHttpClient {
             reject(new Error(`Too many HTTP redirects while requesting ${url}`));
             return;
           }
-
-          let nextUrl: string;
           try {
-            nextUrl = assertHttpTarget(location, target).toString();
+            const next = resolveHttpUrl(location, target).toString();
+            resolve(this.getWithRedirects(next, headers, redirectCount + 1));
           } catch (error) {
             reject(error instanceof Error ? error : new Error(String(error)));
-            return;
           }
-
-          resolve(this.getWithRedirects<T>(nextUrl, headers, redirectCount + 1));
           return;
         }
 
         const chunks: Buffer[] = [];
-        response.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        let bodyBytes = 0;
+        let tooLarge = false;
+        response.on("data", chunk => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          bodyBytes += buffer.length;
+          if (bodyBytes <= this.maxBodyBytes) chunks.push(buffer);
+          else tooLarge = true;
+        });
         response.on("end", () => {
-          const text = Buffer.concat(chunks).toString("utf8");
+          if (tooLarge) {
+            reject(new Error(`HTTP body exceeded ${this.maxBodyBytes} bytes for ${target.toString()}`));
+            return;
+          }
           const responseHeaders: Record<string, string> = {};
           for (const [key, value] of Object.entries(response.headers)) {
             if (typeof value === "string") responseHeaders[key] = value;
             else if (Array.isArray(value)) responseHeaders[key] = value.join(", ");
           }
-
-          let data: T | undefined;
-          if (text.trim()) {
-            try {
-              data = JSON.parse(text) as T;
-            } catch {
-              data = undefined;
-            }
-          }
-
           resolve({
             status,
             headers: responseHeaders,
-            data,
-            text: data === undefined ? text.slice(0, 1_000) : undefined
+            text: Buffer.concat(chunks).toString("utf8"),
+            url: target.toString()
           });
         });
       });

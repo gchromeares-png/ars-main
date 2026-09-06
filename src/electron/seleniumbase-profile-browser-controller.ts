@@ -120,6 +120,7 @@ export class SeleniumBaseProfileBrowserController {
       startUrl: startUrl?.trim() || undefined,
       proxy: this.toSeleniumBaseProxy(this.resolveProxy(profile)),
       userAgent: profile.browser?.userAgent || undefined,
+      headless: false,
       cookies
     };
 
