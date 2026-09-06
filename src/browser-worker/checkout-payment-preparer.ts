@@ -1,5 +1,4 @@
 import type { Frame, Locator, Page } from "./types";
-import { GhostCursorUiInteractionHelper } from "./ui-interaction-helper";
 import type {
   CheckoutPaymentSession,
   PaymentMethod,
@@ -106,7 +105,6 @@ export class CheckoutPaymentPreparer {
     const patterns = preferredLabel?.trim()
       ? [new RegExp(this.escapeRegex(preferredLabel.trim()), "i"), ...descriptors]
       : descriptors;
-    const interactions = new GhostCursorUiInteractionHelper(page);
 
     for (const frame of this.frames(page)) {
       for (const pattern of patterns) {
@@ -118,7 +116,10 @@ export class CheckoutPaymentPreparer {
         for (const locator of candidates) {
           if (!await this.isVisible(locator)) continue;
           try {
-            await interactions.click(locator);
+            // Keep iframe/payment selection on the locator-native click path.
+            // The SeleniumBase RPC locator owns frame/OOPIF offset resolution;
+            // routing this through page-level pointer geometry would drop that context.
+            await locator.click({ timeout: 1_000 });
             return true;
           } catch {}
         }
