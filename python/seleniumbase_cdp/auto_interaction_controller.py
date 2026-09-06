@@ -120,10 +120,32 @@ class AutoInteractionController:
                 "reason": "max-attempts-reached",
             }
 
-        attempt = previous_attempts + 1
-        self._grid_attempts[signature] = attempt
         sources = source_override if source_override is not None else list(state.get("sources") or [])
         decision = self._vision.classify(str(state.get("instruction") or ""), sources)
+        if str(decision.get("error") or "").strip():
+            decision = {
+                **decision,
+                "selectedIndexes": [],
+                "selectedMarkIds": [],
+                "source": decision_source,
+                "attempt": previous_attempts,
+                "maxAttempts": _MAX_GRID_ATTEMPTS,
+            }
+            self._record("decision", {"kind": "image-grid", "decision": decision})
+            return {
+                "acted": False,
+                "verified": False,
+                "kind": "image-grid",
+                "state": state,
+                "decision": decision,
+                "decisionSource": decision_source,
+                "attempt": previous_attempts,
+                "maxAttempts": _MAX_GRID_ATTEMPTS,
+                "reason": "vision-error-retry",
+            }
+
+        attempt = previous_attempts + 1
+        self._grid_attempts[signature] = attempt
         selected = self._selected_indexes(decision.get("selectedIndexes") or [], int(state.get("tileCount") or 0))
         tile_marks = [
             mark for mark in state.get("marks") or []
@@ -143,7 +165,7 @@ class AutoInteractionController:
             "maxAttempts": _MAX_GRID_ATTEMPTS,
         }
         self._record("decision", {"kind": "image-grid", "decision": decision})
-        if not selected:
+        if not selected or len(selected_mark_ids) != len(selected):
             reason = "max-attempts-reached" if attempt >= _MAX_GRID_ATTEMPTS else "no-selection-retry"
             return {
                 "acted": False,
@@ -160,17 +182,28 @@ class AutoInteractionController:
         self._last_action_at = time.monotonic()
         apply_marks = getattr(self._grid_actions, "apply_marks", None)
         if selected_mark_ids and callable(apply_marks):
-            result = apply_marks(selected_mark_ids, submit=True)
+            result = apply_marks(selected_mark_ids, submit=True, expected_state=state)
         else:
             result = self._grid_actions.apply(selected, submit=True)
 
-        clicked = result.get("clickedIndexes") if isinstance(result, dict) else []
-        if not clicked:
-            verification = {"verified": False, "reason": "no-click-resolved"}
+        clicked = [int(value) for value in (result.get("clickedIndexes") or [])] if isinstance(result, dict) else []
+        clicked_mark_ids = [str(value) for value in (result.get("clickedMarkIds") or [])] if isinstance(result, dict) else []
+        all_clicked = (
+            len(clicked) == len(selected)
+            and set(clicked_mark_ids) == set(selected_mark_ids)
+        )
+        submitted = bool(result.get("submitted")) if isinstance(result, dict) else False
+        if not all_clicked or not submitted:
+            verification = {
+                "verified": False,
+                "reason": str((result or {}).get("reason") or ("incomplete-click-set" if not all_clicked else "submit-not-confirmed")),
+            }
             self._record("action", {"kind": "image-grid", "decision": decision, "result": result, "verification": verification})
-            reason = "max-attempts-reached" if attempt >= _MAX_GRID_ATTEMPTS else "no-click-retry"
+            reason = verification["reason"]
+            if attempt >= _MAX_GRID_ATTEMPTS and reason not in {"stale-grid-during-selection", "stale-grid-before-selection"}:
+                reason = "max-attempts-reached"
             return {
-                "acted": False,
+                "acted": bool(clicked),
                 "verified": False,
                 "kind": "image-grid",
                 "state": state,
@@ -188,7 +221,12 @@ class AutoInteractionController:
         if verified:
             self._last_grid_signature = signature
             self._grid_attempts.pop(signature, None)
-        reason = "verified" if verified else ("max-attempts-reached" if attempt >= _MAX_GRID_ATTEMPTS else "verification-retry")
+        explicit_failure = str(verification.get("reason") or "") == "explicit-failure"
+        reason = "verified" if verified else (
+            "explicit-failure" if explicit_failure else (
+                "max-attempts-reached" if attempt >= _MAX_GRID_ATTEMPTS else "verification-retry"
+            )
+        )
         self._record("action", {"kind": "image-grid", "decision": decision, "result": result, "verification": verification})
         return {
             "acted": True,
@@ -258,16 +296,23 @@ class AutoInteractionController:
 
     def _verify_grid(self, before_signature: str, initial: Any) -> Dict[str, Any]:
         state = initial if isinstance(initial, dict) else self._grid_adapter.poll()
-        deadline = time.monotonic() + 1.0
+        deadline = time.monotonic() + 2.5
+        transition_seen = False
         while time.monotonic() < deadline:
-            if state.get("kind") != "image-grid":
-                return {"verified": True, "reason": "grid-cleared", "state": state}
+            if bool(state.get("complete")):
+                return {"verified": True, "reason": "explicit-complete", "state": state}
+            if bool(state.get("failed")):
+                return {"verified": False, "reason": "explicit-failure", "state": state}
             signature = str(state.get("signature") or "")
-            if signature and signature != before_signature:
-                return {"verified": True, "reason": "grid-changed", "state": state}
-            time.sleep(0.06)
+            if state.get("kind") != "image-grid" or (signature and signature != before_signature):
+                transition_seen = True
+            time.sleep(0.08)
             state = self._grid_adapter.poll()
-        return {"verified": False, "reason": "no-observed-change", "state": state}
+        return {
+            "verified": False,
+            "reason": "transition-without-explicit-success" if transition_seen else "no-explicit-success",
+            "state": state,
+        }
 
     def _verify_slider(self, before: Dict[str, Any], target: float, initial: Any) -> Dict[str, Any]:
         before_fraction = float(before.get("fraction") or 0.0)
