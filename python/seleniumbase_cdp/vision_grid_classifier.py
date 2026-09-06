@@ -32,6 +32,7 @@ class VisionGridClassifier:
         self._device = "cpu"
         self._error = ""
         self._load_retry_at = 0.0
+        self._remote_ready = False
         self._lock = threading.RLock()
 
     @property
@@ -45,9 +46,8 @@ class VisionGridClassifier:
         return self._error
 
     def status(self) -> Dict[str, Any]:
-        ready = self.ready
         return {
-            "ready": ready,
+            "ready": self._remote_ready if self.remote_url else self._model is not None,
             "model": self.model_name,
             "threshold": self.threshold,
             "selectionPolicy": "huggingface-siglip2-sigmoid",
@@ -125,9 +125,12 @@ class VisionGridClassifier:
                 result = __import__("json").loads(response.read(16 * 1024 * 1024).decode("utf-8"))
             if not isinstance(result, dict):
                 raise TypeError("Vision service returned a non-object response")
+            self._remote_ready = True
+            self._error = ""
             result["sharedService"] = True
             return result
         except Exception as exc:
+            self._remote_ready = False
             self._error = f"Shared vision service unavailable: {exc}"
             return {
                 "selectedIndexes": [],
@@ -149,10 +152,14 @@ class VisionGridClassifier:
             with urllib.request.urlopen(request, timeout=3) as response:
                 value = __import__("json").loads(response.read(64 * 1024).decode("utf-8"))
             ready = bool(isinstance(value, dict) and value.get("ready"))
-            if not ready:
+            self._remote_ready = ready
+            if ready:
+                self._error = ""
+            else:
                 self._error = str(value.get("error") or "Shared vision service is not ready") if isinstance(value, dict) else "Shared vision service is not ready"
             return ready
         except Exception as exc:
+            self._remote_ready = False
             self._error = f"Shared vision service unavailable: {exc}"
             return False
 
