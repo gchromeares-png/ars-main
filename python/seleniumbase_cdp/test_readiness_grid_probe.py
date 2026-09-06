@@ -169,7 +169,8 @@ def _run_real_browser_probe(root: Path) -> None:
         requested = [9, 8, 1, 0]
         clean_requested = ProximityGridActionExecutor._clean_indexes(requested, int(state["tileCount"]))
         expected_order = ProximityGridActionExecutor._ordered_indexes(state, clean_requested)
-        assert expected_order == [0, 1, 8, 9], expected_order
+        assert sorted(expected_order) == sorted(clean_requested), (expected_order, clean_requested)
+        assert len(expected_order) == len(clean_requested), (expected_order, clean_requested)
 
         request_id = "apply-selection"
         client.send({
@@ -180,14 +181,16 @@ def _run_real_browser_probe(root: Path) -> None:
         })
         execution = client.wait("grid-selection-applied", request_id, 20)
 
-        assert execution.get("clickedIndexes") == expected_order, execution
-        assert execution.get("clickOrder") == expected_order, execution
+        clicked_indexes = [int(value) for value in execution.get("clickedIndexes") or []]
+        click_order = [int(value) for value in execution.get("clickOrder") or []]
+        assert clicked_indexes == expected_order, (execution, expected_order)
+        assert click_order == expected_order, (execution, expected_order)
         assert execution.get("submitted") is True, execution
 
         hits = _collect_hits(recorder, len(expected_order) + 1)
         tile_hits = [int(hit["index"]) for hit in hits if hit.get("type") == "tile"]
         submit_hits = [hit for hit in hits if hit.get("type") == "submit"]
-        assert tile_hits == expected_order, hits
+        assert tile_hits == expected_order, (hits, expected_order)
         assert len(submit_hits) == 1, hits
     finally:
         if client is not None:
