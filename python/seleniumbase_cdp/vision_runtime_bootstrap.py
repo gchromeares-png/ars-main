@@ -31,6 +31,24 @@ def _install_dependencies() -> None:
     ])
 
 
+def ensure_dependencies() -> Dict[str, Any]:
+    """Install the optional vision stack once without loading the model twice."""
+    if not REQUIREMENTS.exists():
+        return {
+            "ready": False,
+            "dependenciesReady": False,
+            "error": f"Missing {REQUIREMENTS.name}",
+        }
+    if not _dependencies_ready():
+        _install_dependencies()
+    ready = _dependencies_ready()
+    return {
+        "ready": ready,
+        "dependenciesReady": ready,
+        "error": "" if ready else "Vision Python dependencies are not installed",
+    }
+
+
 def _model_status(*, allow_download: bool) -> Dict[str, Any]:
     model_name = os.environ.get("ARES_VISION_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
     if not _dependencies_ready():
@@ -60,10 +78,9 @@ def status() -> Dict[str, Any]:
 
 
 def prepare() -> Dict[str, Any]:
-    if not REQUIREMENTS.exists():
-        return {"ready": False, "dependenciesReady": False, "error": f"Missing {REQUIREMENTS.name}"}
-    if not _dependencies_ready():
-        _install_dependencies()
+    dependencies = ensure_dependencies()
+    if not dependencies.get("dependenciesReady"):
+        return dependencies
     return _model_status(allow_download=True)
 
 
