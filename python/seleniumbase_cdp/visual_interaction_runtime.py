@@ -11,6 +11,7 @@ from cursor_path_provider import CursorPathProvider
 from extended_grid_site_adapter import ExtendedGridSiteAdapter
 from interaction_policy import InteractionPolicy
 from interaction_trace import InteractionTrace
+from observation_capture import ObservationCapture
 from proximity_grid_action_executor import ProximityGridActionExecutor
 from screenshot_grid_tile_provider import ScreenshotGridTileProvider
 from site_slider_adapter import SliderSiteAdapter
@@ -31,6 +32,7 @@ class VisualInteractionRuntime:
         self._sb = seleniumbase_cdp
         self._profile_dir = Path(profile_dir).expanduser().resolve()
         self._policy = InteractionPolicy.from_profile(self._profile_dir)
+        self._capture = ObservationCapture(self._sb, profile_dir=self._profile_dir, policy=self._policy)
         self._grid = ExtendedGridSiteAdapter(self._sb, overrides=overrides or {})
         self._slider = SliderSiteAdapter(self._sb, overrides=overrides or {})
         self._paths = CursorPathProvider()
@@ -50,7 +52,6 @@ class VisualInteractionRuntime:
             self._slider_grounder,
             self._trace,
         )
-        self._debug_root = self._profile_dir / ".ares-observations"
         self._last_grid_debug_signature = ""
 
     def poll_and_act(self) -> Dict[str, Any]:
@@ -68,7 +69,11 @@ class VisualInteractionRuntime:
         if grid_state.get("kind") == "image-grid":
             signature = str(grid_state.get("signature") or "")
             if signature and signature != self._last_grid_debug_signature:
-                captured = self._capture_grid_debug_screenshot(signature)
+                captured = self._capture.capture(
+                    "grid-candidate",
+                    generation=int(grid_state.get("generation") or 0),
+                    force=True,
+                )
                 self._trace.append(
                     "grid-screenshot-captured",
                     {
@@ -239,7 +244,7 @@ class VisualInteractionRuntime:
             "freshScreenshotPerRetry": True,
             "screenshotGridFallback": True,
             "screenshotFirstForGrid": True,
-            "debugScreenshotRoot": str(self._debug_root),
+            "debugScreenshotRoot": str(self._capture.root),
             "sliderProviders": self._slider_grounder.status(),
         }
 
@@ -257,44 +262,3 @@ class VisualInteractionRuntime:
 
     def apply_slider(self, target_fraction: float) -> Dict[str, Any]:
         return self._slider_actions.apply(target_fraction)
-
-    def _capture_grid_debug_screenshot(self, signature: str) -> Dict[str, Any]:
-        self._debug_root.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-        unique = time.time_ns() % 1_000_000_000
-        short_signature = signature[:12] if signature else "unknown"
-        filename = f"{stamp}-{unique:09d}-grid-{short_signature}.png"
-        path = self._debug_root / filename
-        try:
-            self._sb.save_screenshot(filename, folder=str(self._debug_root))
-            captured = path.exists() and path.stat().st_size > 0
-        except Exception as exc:
-            return {
-                "captured": False,
-                "reason": "capture-error",
-                "error": str(exc),
-                "path": str(path),
-            }
-
-        if captured:
-            self._rotate_debug_screenshots()
-        return {
-            "captured": captured,
-            "reason": "captured" if captured else "missing-output",
-            "path": str(path),
-        }
-
-    def _rotate_debug_screenshots(self) -> None:
-        try:
-            files = sorted(
-                (path for path in self._debug_root.glob("*.png") if path.is_file()),
-                key=lambda path: path.stat().st_mtime,
-                reverse=True,
-            )
-        except OSError:
-            return
-        for path in files[self._policy.max_saved_captures :]:
-            try:
-                path.unlink()
-            except OSError:
-                pass
