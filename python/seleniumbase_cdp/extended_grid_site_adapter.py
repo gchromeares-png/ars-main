@@ -14,6 +14,7 @@ _ACTION_CONTEXT_RE = re.compile(
 
 _OOPIF_GRID_SCRIPT = r"""
 return (() => {
+  const overrides = arguments[0] || {};
   const MIN_DIM = 2, MAX_DIM = 8, MIN_COUNT = 4, MAX_COUNT = 64;
   const viewport = {
     width: window.innerWidth || document.documentElement.clientWidth || 0,
@@ -31,6 +32,12 @@ return (() => {
       && s.display !== 'none'
       && s.visibility !== 'hidden'
       && Number(s.opacity || 1) > 0;
+  };
+  const visualReady = el => {
+    if (!el) return false;
+    if (el instanceof HTMLImageElement) return Boolean(el.complete && el.naturalWidth > 0 && el.naturalHeight > 0);
+    if (el instanceof HTMLCanvasElement) return el.width > 0 && el.height > 0;
+    return true;
   };
   const text = el => (el?.innerText || el?.textContent || el?.getAttribute?.('aria-label') || '')
     .trim().replace(/\s+/g, ' ');
@@ -64,7 +71,7 @@ return (() => {
     'button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i]'
   ) || visual;
   const visualsIn = root => {
-    const direct = [...(root.querySelectorAll?.('img,canvas') || [])].filter(visible);
+    const direct = [...(root.querySelectorAll?.('img,canvas') || [])].filter(el => visible(el) && visualReady(el));
     const backgrounds = [...(root.querySelectorAll?.(
       'button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i],[class*="image" i]'
     ) || [])].filter(el => visible(el) && bgUrl(el));
@@ -100,6 +107,10 @@ return (() => {
     return {rows, columns, regular, avgW, avgH};
   };
   const instructionNear = groupRoot => {
+    if (overrides.instruction) {
+      const exact = document.querySelector(overrides.instruction);
+      if (exact) return exact;
+    }
     if (groupRoot?.previousElementSibling && visible(groupRoot.previousElementSibling)) {
       return groupRoot.previousElementSibling;
     }
@@ -109,6 +120,8 @@ return (() => {
       'h1,h2,h3,h4,p,[class*="instruction" i],[class*="prompt" i],[class*="question" i]'
     )].find(visible) || null;
   };
+  const complete = Boolean(overrides.complete && visible(document.querySelector(overrides.complete)));
+  const failed = Boolean(overrides.failed && visible(document.querySelector(overrides.failed)));
   const actionRx = /(select|click|choose|mark|verify|verification|continue|confirm|wähl|waehl|klick|markier|prüf|pruef|bestät|bestaet|weiter)/i;
   const parents = new Set();
   for (const visual of visualsIn(document)) {
@@ -127,9 +140,11 @@ return (() => {
     const sources = tiles.map(sourceOf);
     const sourceCount = sources.filter(Boolean).length;
     const instructionEl = instructionNear(parent);
-    const submitEl = [...(parent.parentElement?.querySelectorAll(
-      'button[type="submit"],input[type="submit"],button,[role="button"]'
-    ) || [])].find(el => visible(el) && !tiles.includes(el)) || null;
+    const submitEl = overrides.submit
+      ? document.querySelector(overrides.submit)
+      : [...(parent.parentElement?.querySelectorAll(
+          'button[type="submit"],input[type="submit"],button,[role="button"]'
+        ) || [])].find(el => visible(el) && !tiles.includes(el)) || null;
     const instruction = text(instructionEl).slice(0,600);
     const submitText = text(submitEl).slice(0,120);
     const hasActionContext = actionRx.test(instruction + ' ' + submitText);
@@ -151,7 +166,7 @@ return (() => {
       label:text(tile).slice(0,160),
       score:index,
     }));
-    const submitBounds = submitEl ? rectOf(submitEl) : null;
+    const submitBounds = submitEl && visible(submitEl) ? rectOf(submitEl) : null;
     const avgSide = Math.min(shape.avgW, shape.avgH);
     let score = 72;
     score += Math.round(14 * sourceCount / count);
@@ -173,6 +188,8 @@ return (() => {
       sources,
       submitText,
       submitBounds,
+      complete,
+      failed,
       override:false,
       rawMarks,
       viewport,
@@ -181,7 +198,8 @@ return (() => {
   candidates.sort((a,b) => b.score-a.score);
   return candidates[0] || {
     kind:'none',scope:'oopif',score:0,rows:0,columns:0,tileCount:0,
-    instruction:'',sources:[],submitText:'',submitBounds:null,override:false,rawMarks:[],viewport
+    instruction:'',sources:[],submitText:'',submitBounds:null,complete,failed,
+    override:false,rawMarks:[],viewport
   };
 })();
 """
@@ -206,11 +224,14 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
             self._snapshot_oopif_frames,
         )
         rejected: Dict[str, Any] | None = None
+        outcome: Dict[str, Any] | None = None
         best: Dict[str, Any] | None = None
         best_rank = float("-inf")
         for producer in producers:
             snapshot = producer()
             if snapshot.get("kind") == "none":
+                if bool(snapshot.get("complete")) or bool(snapshot.get("failed")):
+                    outcome = snapshot
                 continue
             if not self._candidate_is_plausible(snapshot):
                 rejected = snapshot
@@ -221,6 +242,8 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                 best_rank = rank
         if best is not None:
             return self._with_generation(best)
+        if outcome is not None:
+            return self._with_generation(outcome)
         scope = str((rejected or {}).get("scope") or "document")
         return self._with_generation(self._empty(scope))
 
@@ -311,17 +334,19 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
         return rank
 
     def _snapshot_extended_document(self) -> Dict[str, Any]:
-        script = r"""
-        (() => {
+        overrides = __import__("json").dumps(self._overrides)
+        script = f"""
+        (() => {{
+          const overrides = {overrides};
           const MIN_DIM = 2, MAX_DIM = 8, MIN_COUNT = 4, MAX_COUNT = 64;
-          const viewport = {
+          const viewport = {{
             width: window.innerWidth || document.documentElement.clientWidth || 0,
             height: window.innerHeight || document.documentElement.clientHeight || 0,
             scrollX: window.scrollX || 0,
             scrollY: window.scrollY || 0,
             devicePixelRatio: window.devicePixelRatio || 1,
-          };
-          const visible = el => {
+          }};
+          const visible = el => {{
             if (!el?.getBoundingClientRect) return false;
             const r = el.getBoundingClientRect(), s = getComputedStyle(el);
             return r.width > 0 && r.height > 0
@@ -330,52 +355,58 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
               && s.display !== 'none'
               && s.visibility !== 'hidden'
               && Number(s.opacity || 1) > 0;
-          };
+          }};
+          const visualReady = el => {{
+            if (!el) return false;
+            if (el instanceof HTMLImageElement) return Boolean(el.complete && el.naturalWidth > 0 && el.naturalHeight > 0);
+            if (el instanceof HTMLCanvasElement) return el.width > 0 && el.height > 0;
+            return true;
+          }};
           const text = el => (el?.innerText || el?.textContent || el?.getAttribute?.('aria-label') || '')
-            .trim().replace(/\s+/g, ' ');
-          const rectOf = el => {
+            .trim().replace(/\\s+/g, ' ');
+          const rectOf = el => {{
             const r = el.getBoundingClientRect();
-            return {x:r.x,y:r.y,width:r.width,height:r.height};
-          };
-          const bgUrl = el => {
+            return {{x:r.x,y:r.y,width:r.width,height:r.height}};
+          }};
+          const bgUrl = el => {{
             if (!el || !visible(el)) return '';
             const bg = getComputedStyle(el).backgroundImage || '';
-            const match = bg.match(/url\(["']?(.*?)["']?\)/i);
+            const match = bg.match(/url\\(["']?(.*?)["']?\\)/i);
             return match?.[1] || '';
-          };
-          const sourceOf = tile => {
+          }};
+          const sourceOf = tile => {{
             const img = tile?.matches?.('img') ? tile : tile?.querySelector?.('img');
             if (img) return img.currentSrc || img.src || img.getAttribute('src') || img.getAttribute('data-src') || '';
             const canvas = tile?.matches?.('canvas') ? tile : tile?.querySelector?.('canvas');
-            if (canvas) {
-              try { return canvas.toDataURL?.('image/png') || ''; } catch (_) { return ''; }
-            }
+            if (canvas) {{
+              try {{ return canvas.toDataURL?.('image/png') || ''; }} catch (_) {{ return ''; }}
+            }}
             return bgUrl(tile);
-          };
+          }};
           const tileFor = visual => visual.closest?.(
             'button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i]'
           ) || visual;
-          const visualsIn = root => {
-            const direct = [...(root.querySelectorAll?.('img,canvas') || [])].filter(visible);
+          const visualsIn = root => {{
+            const direct = [...(root.querySelectorAll?.('img,canvas') || [])].filter(el => visible(el) && visualReady(el));
             const backgrounds = [...(root.querySelectorAll?.(
               'button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i],[class*="image" i]'
             ) || [])].filter(el => visible(el) && bgUrl(el));
             return [...new Set([...direct, ...backgrounds])];
-          };
-          const clusterCount = (values, tolerance) => {
+          }};
+          const clusterCount = (values, tolerance) => {{
             const sorted = [...values].sort((a,b) => a-b);
             const clusters = [];
-            for (const value of sorted) {
+            for (const value of sorted) {{
               const last = clusters[clusters.length - 1];
-              if (!last || Math.abs(value - last.mean) > tolerance) clusters.push({mean:value,count:1});
-              else {
+              if (!last || Math.abs(value - last.mean) > tolerance) clusters.push({{mean:value,count:1}});
+              else {{
                 last.mean = (last.mean * last.count + value) / (last.count + 1);
                 last.count += 1;
-              }
-            }
+              }}
+            }}
             return clusters.length;
-          };
-          const inferShape = tiles => {
+          }};
+          const inferShape = tiles => {{
             const rects = tiles.map(el => el.getBoundingClientRect());
             const avgW = rects.reduce((a,r) => a+r.width,0) / rects.length;
             const avgH = rects.reduce((a,r) => a+r.height,0) / rects.length;
@@ -387,43 +418,49 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
               Math.abs(r.width-avgW) <= Math.max(10, avgW*.28)
               && Math.abs(r.height-avgH) <= Math.max(10, avgH*.28)
             ).length;
-            return regular / tiles.length >= 0.82 ? {rows, columns, regular, avgW, avgH} : null;
-          };
+            return regular / tiles.length >= 0.82 ? {{rows, columns, regular, avgW, avgH}} : null;
+          }};
           const actionRx = /(select|click|choose|mark|verify|verification|continue|confirm|wähl|waehl|klick|markier|prüf|pruef|bestät|bestaet|weiter)/i;
           const parents = new Set();
-          for (const visual of visualsIn(document)) {
+          for (const visual of visualsIn(document)) {{
             let node = tileFor(visual);
-            for (let depth=0; node && depth<5; depth++, node=node.parentElement) {
+            for (let depth=0; node && depth<5; depth++, node=node.parentElement) {{
               if (node.parentElement) parents.add(node.parentElement);
-            }
-          }
+            }}
+          }}
+          const complete = Boolean(overrides.complete && visible(document.querySelector(overrides.complete)));
+          const failed = Boolean(overrides.failed && visible(document.querySelector(overrides.failed)));
           const candidates = [];
-          for (const parent of parents) {
+          for (const parent of parents) {{
             const tiles = [...new Set(visualsIn(parent).map(tileFor))].filter(visible);
             if (tiles.length < MIN_COUNT || tiles.length > MAX_COUNT) continue;
             const shape = inferShape(tiles);
             if (!shape) continue;
             const sources = tiles.map(sourceOf);
-            const instructionEl = parent.previousElementSibling || parent.parentElement?.querySelector(
-              'h1,h2,h3,h4,p,[class*="instruction" i],[class*="prompt" i],[class*="question" i]'
-            );
-            const submitEl = [...(parent.parentElement?.querySelectorAll(
-              'button[type="submit"],input[type="submit"],button,[role="button"]'
-            ) || [])].find(el => visible(el) && !tiles.includes(el)) || null;
+            const instructionEl = overrides.instruction
+              ? document.querySelector(overrides.instruction)
+              : parent.previousElementSibling || parent.parentElement?.querySelector(
+                  'h1,h2,h3,h4,p,[class*="instruction" i],[class*="prompt" i],[class*="question" i]'
+                );
+            const submitEl = overrides.submit
+              ? document.querySelector(overrides.submit)
+              : [...(parent.parentElement?.querySelectorAll(
+                  'button[type="submit"],input[type="submit"],button,[role="button"]'
+                ) || [])].find(el => visible(el) && !tiles.includes(el)) || null;
             const instruction = text(instructionEl).slice(0,600);
             const submitText = text(submitEl).slice(0,120);
             const hasActionContext = actionRx.test(instruction + ' ' + submitText);
-            const rawMarks = tiles.map((tile,index) => ({
+            const rawMarks = tiles.map((tile,index) => ({{
               role:'grid-tile',
               visualBounds:rectOf(tile),
               confidence:0.90,
               selector:'',
-              structuralKey:['grid-tile',tile?.tagName||'',`slot:${index}`].join('|'),
+              structuralKey:['grid-tile',tile?.tagName||'',`slot:${{index}}`].join('|'),
               semanticSignature:['grid-tile',text(tile).slice(0,160),sources[index]].join('|'),
               source:sources[index],
               label:text(tile).slice(0,160),
               score:index,
-            }));
+            }}));
             const avgSide = Math.min(shape.avgW, shape.avgH);
             let score = 72 + Math.round(14 * sources.filter(Boolean).length / tiles.length);
             if (hasActionContext) score += 8;
@@ -432,17 +469,20 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
             if (avgSide < 20) score -= 18;
             else if (avgSide < 40) score -= 8;
             else if (avgSide >= 64) score += 4;
-            candidates.push({
+            candidates.push({{
               kind:'image-grid',scope:'document',score,rows:shape.rows,columns:shape.columns,
-              tileCount:tiles.length,instruction,sources,submitText,override:false,rawMarks,viewport
-            });
-          }
+              tileCount:tiles.length,instruction,sources,submitText,
+              submitBounds:submitEl && visible(submitEl) ? rectOf(submitEl) : null,
+              complete,failed,override:false,rawMarks,viewport
+            }});
+          }}
           candidates.sort((a,b) => b.score-a.score);
-          return candidates[0] || {
+          return candidates[0] || {{
             kind:'none',scope:'document',score:0,rows:0,columns:0,tileCount:0,
-            instruction:'',sources:[],submitText:'',override:false,rawMarks:[],viewport
-          };
-        })()
+            instruction:'',sources:[],submitText:'',submitBounds:null,
+            complete,failed,override:false,rawMarks:[],viewport
+          }};
+        }})()
         """
         try:
             value = self._evaluate(script)
@@ -456,23 +496,44 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
         except Exception:
             return self._empty("iframe")
 
+        viewport = self._top_level_viewport()
         best = self._empty("iframe")
         best_rank = float("-inf")
         for frame_index, frame in enumerate(frames):
+            frame_position = self._element_position(frame)
+            if not isinstance(frame_position, dict):
+                continue
+            try:
+                frame_x = float(frame_position.get("x") or 0.0)
+                frame_y = float(frame_position.get("y") or 0.0)
+            except (TypeError, ValueError):
+                continue
             try:
                 images = [img for img in (frame.query_selector_all("img") or []) if self._element_visible(img)]
             except Exception:
                 continue
             if not (self.MIN_COUNT <= len(images) <= self.MAX_COUNT):
                 continue
-            rects = [self._element_position(image) for image in images]
-            shape = self._infer_shape(rects)
+            local_rects = [self._element_position(image) for image in images]
+            shape = self._infer_shape(local_rects)
             if shape is None:
                 continue
             rows, columns = shape
             sources = [self._element_image_source(img) for img in images]
             raw_marks = []
+            valid = True
             for index, image in enumerate(images):
+                local = local_rects[index]
+                if not isinstance(local, dict):
+                    valid = False
+                    break
+                bounds = dict(local)
+                try:
+                    bounds["x"] = float(bounds.get("x") or 0.0) + frame_x
+                    bounds["y"] = float(bounds.get("y") or 0.0) + frame_y
+                except (TypeError, ValueError):
+                    valid = False
+                    break
                 alt = self._element_attribute(image, "alt")
                 identity = (
                     self._element_attribute(image, "id")
@@ -481,7 +542,7 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                 )
                 raw_marks.append({
                     "role": "grid-tile",
-                    "visualBounds": rects[index],
+                    "visualBounds": bounds,
                     "confidence": 0.92 if sources[index] else 0.70,
                     "structuralKey": f"img|{identity}",
                     "semanticSignature": f"grid-tile|{alt}|{sources[index]}",
@@ -489,8 +550,10 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                     "label": alt,
                     "score": index,
                 })
+            if not valid:
+                continue
             scope = f"iframe:{frame_index}"
-            marks = build_stable_marks(raw_marks, scope=scope, viewport={})
+            marks = build_stable_marks(raw_marks, scope=scope, viewport=viewport)
             candidate = {
                 "kind": "image-grid",
                 "scope": scope,
@@ -501,7 +564,11 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                 "instruction": self._frame_descriptor(frame),
                 "sources": sources,
                 "submitText": "",
+                "submitBounds": None,
+                "complete": False,
+                "failed": False,
                 "override": False,
+                "viewport": viewport,
                 "marks": marks,
             }
             if not self._candidate_is_plausible(candidate):
@@ -523,6 +590,8 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
         except Exception:
             return self._empty("oopif")
 
+        viewport = self._top_level_viewport()
+        outcome: Dict[str, Any] | None = None
         best = self._empty("oopif")
         best_rank = float("-inf")
         for entry in frames:
@@ -532,19 +601,30 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
             if not path:
                 continue
             try:
-                evaluated = evaluate(path, _OOPIF_GRID_SCRIPT, [])
+                evaluated = evaluate(path, _OOPIF_GRID_SCRIPT, [self._overrides])
             except Exception:
                 continue
             if not isinstance(evaluated, dict):
                 continue
             value = evaluated.get("value")
-            if not isinstance(value, dict) or value.get("kind") != "image-grid":
+            if not isinstance(value, dict):
                 continue
             try:
                 offset_x = float(evaluated.get("offsetX") or 0.0)
                 offset_y = float(evaluated.get("offsetY") or 0.0)
             except (TypeError, ValueError):
                 offset_x = offset_y = 0.0
+
+            scope = "oopif:" + "/".join(path)
+            if value.get("kind") != "image-grid":
+                if bool(value.get("complete")) or bool(value.get("failed")):
+                    outcome = {
+                        **self._empty(scope),
+                        "complete": bool(value.get("complete")),
+                        "failed": bool(value.get("failed")),
+                        "viewport": viewport,
+                    }
+                continue
 
             raw_marks = []
             for raw in value.get("rawMarks") or []:
@@ -560,8 +640,7 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                 item["visualBounds"] = bounds
                 raw_marks.append(item)
 
-            scope = "oopif:" + "/".join(path)
-            marks = build_stable_marks(raw_marks, scope=scope, viewport={})
+            marks = build_stable_marks(raw_marks, scope=scope, viewport=viewport)
             candidate = {
                 "kind": "image-grid",
                 "scope": scope,
@@ -572,7 +651,10 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                 "instruction": str(value.get("instruction") or ""),
                 "sources": [str(source) for source in value.get("sources") or []],
                 "submitText": str(value.get("submitText") or ""),
+                "complete": bool(value.get("complete")),
+                "failed": bool(value.get("failed")),
                 "override": False,
+                "viewport": viewport,
                 "marks": marks,
             }
             submit_bounds = value.get("submitBounds")
@@ -585,7 +667,9 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                         "height": float(submit_bounds.get("height") or 0.0),
                     }
                 except (TypeError, ValueError):
-                    pass
+                    candidate["submitBounds"] = None
+            else:
+                candidate["submitBounds"] = None
 
             if not self._candidate_is_plausible(candidate):
                 continue
@@ -593,7 +677,9 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
             if rank > best_rank:
                 best = candidate
                 best_rank = rank
-        return best
+        if best.get("kind") == "image-grid":
+            return best
+        return outcome if outcome is not None else best
 
     @classmethod
     def _infer_shape(cls, rects: List[Dict[str, Any] | None]) -> Tuple[int, int] | None:
