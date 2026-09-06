@@ -15,8 +15,10 @@ class ObservationCapture:
         self._sb = seleniumbase_cdp
         self._policy = policy
         self._root = Path(profile_dir).expanduser().resolve() / ".ares-observations"
+        self._root.mkdir(parents=True, exist_ok=True)
         self._counter = 0
         self._last: Dict[str, Any] = {"captured": False, "reason": "not-run"}
+        self.capture("session-start", generation=0, force=True)
 
     @property
     def root(self) -> Path:
