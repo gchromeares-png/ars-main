@@ -306,7 +306,7 @@ class ProximityGridActionExecutor(AuthorizedGridActionExecutor):
     @classmethod
     def _visual_fingerprint(cls, state: Dict[str, Any]) -> Tuple[str, ...]:
         return tuple(
-            str(mark.get("semanticVisualSignature") or mark.get("source") or "")
+            str(mark.get("source") or mark.get("semanticVisualSignature") or "")
             for mark in cls._grid_marks(state)
         )
 
