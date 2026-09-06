@@ -1,5 +1,5 @@
 {
-  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "$schema": "./node_modules/@angular/cli/lib/schema.json",
   "version": 1,
   "newProjectRoot": "projects",
   "projects": {
@@ -20,7 +20,7 @@
             "tsConfig": "tsconfig.app.json",
             "inlineStyleLanguage": "scss",
             "assets": [],
-            "styles": ["src/app/app.component.scss", "src/app/early-gate-ui.scss", "src/app/runtime-control/runtime-control-extras.scss", "src/app/navigation-cleanup.scss", "src/app/cosmic-theme.scss"],
+            "styles": ["src/app/app.component.scss", "src/app/early-gate-ui.scss", "src/app/runtime-control/runtime-control-extras.scss", "src/app/navigation-cleanup.scss", "src/app/cosmic-theme.scss", "src/app/aio-minimal-overhaul.scss"],
             "scripts": []
           },
           "configurations": {
