@@ -34,8 +34,9 @@ export class AresBrowserRuntime extends SeleniumBaseBrowserWorker {
   constructor() {
     super();
     if (!this.sharedVisionDisabled() && !process.env["ARES_VISION_SERVICE_URL"]?.trim()) {
-      // Start the service immediately, while the Python side preloads the model
-      // in the background. Browser worker readiness itself stays non-blocking.
+      // Start the lightweight loopback listener immediately. Model/dependency
+      // preparation runs in the service background and never blocks browser
+      // worker readiness.
       void this.ensureSharedVisionService();
     }
   }
@@ -66,7 +67,7 @@ export class AresBrowserRuntime extends SeleniumBaseBrowserWorker {
     if (process.env["ARES_VISION_SERVICE_URL"]?.trim() && !this.sharedVision) return undefined;
 
     const existing = this.sharedVision;
-    if (existing?.child.exitCode == null) {
+    if (existing !== undefined && existing.child.exitCode === null) {
       this.publishSharedVisionEnvironment(existing);
       return existing;
     }
@@ -90,6 +91,7 @@ export class AresBrowserRuntime extends SeleniumBaseBrowserWorker {
         "--token", token
       ];
       if (process.env["ARES_VISION_SERVICE_PRELOAD"]?.trim() !== "0") args.push("--preload");
+      if (process.env["ARES_VISION_AUTO_PREPARE"]?.trim() !== "0") args.push("--auto-prepare");
 
       child = spawn(
         process.env["ARES_PYTHON_EXECUTABLE"]?.trim() || "python",
@@ -113,13 +115,13 @@ export class AresBrowserRuntime extends SeleniumBaseBrowserWorker {
       this.publishSharedVisionEnvironment(service);
       child.once("exit", () => {
         const current = this.sharedVision;
-        if (current?.child !== child) return;
+        if (current === undefined || current.child !== child) return;
         this.clearSharedVisionEnvironment(current);
         this.sharedVision = undefined;
       });
       return service;
     } catch (error) {
-      if (child && child.exitCode == null) child.kill("SIGKILL");
+      if (child !== undefined && child.exitCode === null) child.kill("SIGKILL");
       // Availability beats optimization: if the shared owner cannot start,
       // session processes retain the existing local lazy-classifier fallback.
       process.stderr.write(`[ARES vision] shared service unavailable; using local fallback: ${error instanceof Error ? error.message : String(error)}\n`);
