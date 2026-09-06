@@ -43,17 +43,21 @@ def _command_reader(target: queue.Queue[Dict[str, Any]]) -> None:
 
 
 def _snapshot(adapter: SeleniumBaseCdpAdapter) -> Dict[str, Any]:
+    # Pure CDP evaluates JavaScript as an expression. Keep the return inside
+    # an IIFE instead of relying on WebDriver-style function-body semantics.
     value = adapter.execute_script(
         """
-        const root = document.documentElement;
-        const body = document.body;
-        return {
-          url: String(window.location.href || ''),
-          title: String(document.title || ''),
-          readyState: String(document.readyState || ''),
-          html: root ? String(root.outerHTML || '') : '',
-          text: body ? String(body.innerText || body.textContent || '') : ''
-        };
+        (() => {
+          const root = document.documentElement;
+          const body = document.body;
+          return {
+            url: String(window.location.href || ''),
+            title: String(document.title || ''),
+            readyState: String(document.readyState || ''),
+            html: root ? String(root.outerHTML || '') : '',
+            text: body ? String(body.innerText || body.textContent || '') : ''
+          };
+        })()
         """
     )
     if not isinstance(value, dict):
@@ -75,7 +79,7 @@ def _rendered_document(
     timeout_ms: int,
 ) -> Dict[str, Any]:
     if url:
-        current = str(adapter.execute_script("return String(window.location.href || '');") or "")
+        current = str(adapter.execute_script("String(window.location.href || '')") or "")
         if current != url:
             adapter.goto(url)
 
