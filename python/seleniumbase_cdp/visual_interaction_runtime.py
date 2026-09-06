@@ -68,7 +68,6 @@ class VisualInteractionRuntime:
         if grid_state.get("kind") == "image-grid":
             signature = str(grid_state.get("signature") or "")
             if signature and signature != self._last_grid_debug_signature:
-                self._last_grid_debug_signature = signature
                 captured = self._capture_grid_debug_screenshot(signature)
                 self._trace.append(
                     "grid-screenshot-captured",
@@ -80,6 +79,8 @@ class VisualInteractionRuntime:
                 )
                 if bool(captured.get("captured")):
                     screenshot_result = self.poll_and_act_from_screenshot(str(captured.get("path") or ""))
+                    if screenshot_result.get("kind") == "image-grid" and screenshot_result.get("reason") != "screenshot-grid-unavailable":
+                        self._last_grid_debug_signature = signature
                     screenshot_result = self._finalize_interaction(screenshot_result)
                     self._trace.append(
                         "grid-screenshot-result",
@@ -124,19 +125,47 @@ class VisualInteractionRuntime:
         if state.get("kind") != "image-grid":
             return {"acted": False, "kind": "none", "reason": "no-image-grid", "state": state}
 
+        tile_count = int(state.get("tileCount") or 0)
+        marks = [
+            mark for mark in state.get("marks") or []
+            if isinstance(mark, dict) and mark.get("role") == "grid-tile"
+        ]
         provided = self._screenshot_tiles.sources(screenshot_path, state)
         sources = list(provided.get("sources") or [])
-        if not sources or not any(sources):
+        readable = int(provided.get("readable") or 0)
+        crop_count = int(provided.get("cropCount") or 0)
+        geometry_ready = tile_count > 0 and len(marks) == tile_count
+        crops_ready = len(sources) == tile_count and readable == tile_count and crop_count == tile_count
+        if not geometry_ready or not crops_ready:
             return {
                 "acted": False,
                 "kind": "image-grid",
                 "reason": "screenshot-grid-unavailable",
                 "state": state,
                 "screenshot": provided,
+                "invariants": {
+                    "tileCount": tile_count,
+                    "markCount": len(marks),
+                    "cropCount": crop_count,
+                    "readable": readable,
+                    "geometryReady": geometry_ready,
+                    "cropsReady": crops_ready,
+                },
             }
 
         result = self._controller.act_grid_from_sources(state, sources, source="screenshot-crops")
-        return {**result, "screenshot": provided}
+        return {
+            **result,
+            "screenshot": provided,
+            "invariants": {
+                "tileCount": tile_count,
+                "markCount": len(marks),
+                "cropCount": crop_count,
+                "readable": readable,
+                "geometryReady": True,
+                "cropsReady": True,
+            },
+        }
 
     def _finalize_interaction(self, result: Dict[str, Any]) -> Dict[str, Any]:
         kind = str(result.get("kind") or "")
@@ -145,14 +174,13 @@ class VisualInteractionRuntime:
         if kind == "image-grid" and not verified:
             attempt = int(result.get("attempt") or 0)
             max_attempts = int(result.get("maxAttempts") or 3)
-            if 0 < attempt < max_attempts:
-                # A retry must be a real new observation, not the same cached crop.
+            if result.get("reason") == "screenshot-grid-unavailable" or 0 < attempt < max_attempts:
                 self._last_grid_debug_signature = ""
                 self._trace.append(
                     "grid-retry-scheduled",
                     {
                         "attempt": attempt,
-                        "nextAttempt": attempt + 1,
+                        "nextAttempt": attempt + 1 if attempt else 1,
                         "maxAttempts": max_attempts,
                         "reason": result.get("reason"),
                     },
@@ -199,6 +227,7 @@ class VisualInteractionRuntime:
             "markIdentity": "structural+semantic-visual",
             "gridGeometry": "dynamic-2x2-through-8x8",
             "gridClickOrder": "nearest-neighbour",
+            "gridCropInvariant": "one-mark-one-readable-crop",
             "gridTiming": {
                 "clickDelaySeconds": self._policy.grid_click_delay_seconds,
                 "submitDelaySeconds": self._policy.grid_submit_delay_seconds,

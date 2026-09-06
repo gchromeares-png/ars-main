@@ -155,6 +155,7 @@ def _wait_for_siglip_action(profile_dir: Path, recorder: Recorder, variant: str,
     observations = profile_dir / ".ares-observations"
     clicked: set[int] = set()
     decision: Dict[str, Any] | None = None
+    grid_result: Dict[str, Any] | None = None
     deadline = time.time() + timeout
 
     while time.time() < deadline:
@@ -172,16 +173,29 @@ def _wait_for_siglip_action(profile_dir: Path, recorder: Recorder, variant: str,
                     entry = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if entry.get("phase") != "decision":
-                    continue
                 payload = entry.get("payload") or {}
-                candidate = payload.get("decision") or {}
-                if candidate.get("model") == "google/siglip2-base-patch16-224":
-                    decision = candidate
+                if entry.get("phase") == "decision":
+                    candidate = payload.get("decision") or {}
+                    if candidate.get("model") == "google/siglip2-base-patch16-224":
+                        decision = candidate
+                if entry.get("phase") == "grid-screenshot-result":
+                    candidate = payload.get("result") or {}
+                    invariants = candidate.get("invariants") or {}
+                    screenshot = candidate.get("screenshot") or {}
+                    if (
+                        int(invariants.get("tileCount") or 0) == 9
+                        and int(invariants.get("markCount") or 0) == 9
+                        and int(invariants.get("cropCount") or 0) == 9
+                        and int(invariants.get("readable") or 0) == 9
+                        and bool(invariants.get("geometryReady"))
+                        and bool(invariants.get("cropsReady"))
+                        and len(screenshot.get("cropBoxes") or []) == 9
+                    ):
+                        grid_result = candidate
 
         screenshots = list(observations.glob("*.png")) if observations.exists() else []
         screenshot_ok = any(path.stat().st_size > 0 for path in screenshots)
-        if decision is not None and clicked and screenshot_ok:
+        if decision is not None and grid_result is not None and clicked and screenshot_ok:
             selected = {int(value) for value in decision.get("selectedIndexes") or []}
             expected = TARGETS[variant]
             if not selected:
@@ -202,7 +216,7 @@ def _wait_for_siglip_action(profile_dir: Path, recorder: Recorder, variant: str,
 
     trace_tail = trace.read_text(encoding="utf-8")[-6000:] if trace.exists() else "<missing trace>"
     raise AssertionError(
-        f"Variant {variant}: no complete Screenshot -> SigLIP2 -> click result within timeout. "
+        f"Variant {variant}: no complete 9 marks -> screenshot -> 9 crops -> SigLIP2 -> click result within timeout. "
         f"clicked={sorted(clicked)} trace_tail={trace_tail}"
     )
 
@@ -224,7 +238,7 @@ def main() -> int:
     try:
         _run_variant(base_url, recorder, temporary, "A")
         _run_variant(base_url, recorder, temporary, "B")
-        print("SeleniumBase delayed iframe grid smoke passed end-to-end with real SigLIP2 for variants A and B.")
+        print("SeleniumBase delayed iframe grid smoke passed: 9 marks -> screenshot -> 9 crops -> real SigLIP2 -> trusted clicks.")
         return 0
     finally:
         server.shutdown()
