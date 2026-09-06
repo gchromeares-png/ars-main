@@ -22,12 +22,13 @@ describe("profile browser runtime default", () => {
     expect(controller).not.toContain("spawn(");
   });
 
-  it("uses the same SeleniumBase owner for status, cookies and lifecycle", () => {
+  it("uses SeleniumBase owners for status, cookies and full lifecycle cleanup", () => {
     expect(controller).toContain("return this.seleniumBase.captureCookies(profileId)");
     expect(controller).toContain("return this.seleniumBase.close(profileId)");
     expect(controller).toContain("return this.seleniumBase.status(profileId)");
     expect(controller).toContain("return this.seleniumBase.isOpen(profileId)");
-    expect(controller).toContain("return this.seleniumBase.closeAll()");
+    expect(controller).toContain("this.seleniumBase.closeAll()");
+    expect(controller).toContain("this.productMonitorBrowser.close()");
   });
 
   it("forces profile-browser sessions visible and sends that decision to the Python worker", () => {

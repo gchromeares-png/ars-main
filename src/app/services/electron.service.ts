@@ -62,6 +62,40 @@ export class ElectronService {
     return Promise.resolve({ success: true });
   }
 
+  getProfileBrowserStatus(profileId: string): Promise<any> {
+    if (this.api?.getProfileBrowserStatus) return this.api.getProfileBrowserStatus(profileId);
+    return Promise.resolve({ success: true, status: { engine: "seleniumbase-cdp", profileId, open: false } });
+  }
+
+  openProfileBrowser(profileId: string, startUrl?: string): Promise<any> {
+    if (this.api?.openProfileBrowser) return this.api.openProfileBrowser(profileId, startUrl);
+    return Promise.resolve({
+      success: true,
+      status: { engine: "seleniumbase-cdp", profileId, open: true, startedAt: new Date().toISOString(), startUrl }
+    });
+  }
+
+  closeProfileBrowser(profileId: string): Promise<any> {
+    if (this.api?.closeProfileBrowser) return this.api.closeProfileBrowser(profileId);
+    return Promise.resolve({ success: true, status: { engine: "seleniumbase-cdp", profileId, open: false } });
+  }
+
+  getSeleniumBaseVisionStatus(): Promise<any> {
+    if (this.api?.getSeleniumBaseVisionStatus) return this.api.getSeleniumBaseVisionStatus();
+    return Promise.resolve({
+      success: true,
+      status: { ready: true, dependenciesReady: true, model: "preview", device: "preview" }
+    });
+  }
+
+  prepareSeleniumBaseVision(): Promise<any> {
+    if (this.api?.prepareSeleniumBaseVision) return this.api.prepareSeleniumBaseVision();
+    return Promise.resolve({
+      success: true,
+      status: { ready: true, dependenciesReady: true, model: "preview", device: "preview" }
+    });
+  }
+
   getProxies(): Promise<any> {
     if (this.api) return this.api.getProxies();
     return Promise.resolve({ success: true, proxies: this.previewProxies });

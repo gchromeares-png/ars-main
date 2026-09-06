@@ -14,6 +14,7 @@ describe("SeleniumBase CDP architecture guard", () => {
   const visualRuntime = read("python/seleniumbase_cdp/visual_interaction_runtime.py");
   const worker = read("python/seleniumbase_cdp/worker.py");
   const manualWorker = read("python/seleniumbase_cdp/manual_profile_browser.py");
+  const productMonitorWorker = read("python/seleniumbase_cdp/product_monitor_browser.py");
   const manualController = read("src/electron/seleniumbase-profile-browser-controller.ts");
   const profileController = read("src/electron/profile-browser-controller.ts");
   const preload = read("src/electron/preload.ts");
@@ -35,7 +36,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("self._sb.set_all_cookies(params)");
     expect(adapter).toContain("self._sb.get_all_cookies()");
     expect(adapter).toContain("mycdp.network.CookieParam.from_json(payload)");
-    for (const source of [worker, manualWorker]) {
+    for (const source of [worker, manualWorker, productMonitorWorker]) {
       expect(source).toContain("from seleniumbase_adapter import SeleniumBaseCdpAdapter");
       expect(source).not.toContain("from seleniumbase import");
       expect(source).not.toContain("import mycdp");
@@ -139,13 +140,20 @@ describe("SeleniumBase CDP architecture guard", () => {
   });
 
   it("keeps the SeleniumBase worker isolated from protected ARES cores", () => {
-    for (const source of [adapter, tracker, siteAdapter, gridActions, visualRuntime, worker, manualWorker, manualController]) {
+    for (const source of [adapter, tracker, siteAdapter, gridActions, visualRuntime, worker, manualWorker, productMonitorWorker, manualController]) {
       expect(source).not.toContain("src/challenges");
       expect(source).not.toContain("field-semantic-resolver");
       expect(source).not.toContain("payment-preparer");
     }
     expect(manualController).toContain('const SELENIUMBASE_PROFILE_DIR = ".ares-seleniumbase-cdp"');
     expect(manualController).toContain("resolveUserDataDir(profileId)");
+  });
+
+  it("uses the same full SeleniumBase runtime for rendered product monitoring", () => {
+    expect(productMonitorWorker).toContain("SeleniumBaseCdpAdapter(");
+    expect(productMonitorWorker).toContain("adapter.poll_runtime()");
+    expect(productMonitorWorker).toContain("adapter._poll_observation_watchdog(force=True)");
+    expect(productMonitorWorker).toContain('\"type\": \"rendered-document\"');
   });
 
   it("uses SeleniumBase as the default profile-browser owner", () => {

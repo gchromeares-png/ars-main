@@ -21,6 +21,23 @@ describe("ARES unified task control UX", () => {
     expect(component).not.toContain("async createMonitorTask()");
   });
 
+  it("keeps pure monitoring profile-optional while exposing visible/headless and proxy runtime controls", () => {
+    const createStart = component.indexOf("async createTask()");
+    const startTaskStart = component.indexOf("async startTask(", createStart + 1);
+    const createBlock = component.slice(createStart, startTaskStart);
+
+    expect(createBlock).toContain('mode: "monitor-only"');
+    expect(createBlock).toContain("headless: this.headless");
+    expect(createBlock).toContain("runtimeProfileId");
+    expect(createBlock).toContain("runtimeUserAgent");
+    expect(createBlock).toContain("runtimePreferredProxyId");
+    expect(createBlock).not.toContain('if (!this.selectedProfileId) {\n        this.error = "Für den Browser-Checkout ist ein Profil erforderlich.";\n        return;\n      }\n    }');
+    expect(html).toContain("Runtime profile (optional)");
+    expect(html).toContain("Headless browser fallback");
+    expect(html).toContain("monitorStrategyMode === 'product-monitor'");
+    expect(html).toContain("HTTP fast path; Chromium + full runtime only when HTML is empty or ambiguous.");
+  });
+
   it("uses the command-center sidebar and keeps core modules separate", () => {
     expect(html).toContain('class="nav"');
     expect(html).toContain("<b>Overview</b>");

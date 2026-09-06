@@ -97,16 +97,18 @@
               <button [class.active]="taskMode === 'auto-checkout'" (click)="taskMode = 'auto-checkout'">Auto checkout</button>
             </div>
 
+            <app-monitor-runtime-preload *ngIf="monitorStrategyMode === 'product-monitor'"></app-monitor-runtime-preload>
+
             <div class="form-grid compact">
               <label><span>Name</span><input [(ngModel)]="taskName" placeholder="Pokemon Drop"></label>
               <label><span>Shop</span><select [(ngModel)]="selectedShopId"><option value="">Select shop</option><option *ngFor="let shop of shops; trackBy: trackShop" [value]="shop.id">{{ shop.name }}</option></select></label>
               <label class="span-2" *ngIf="monitorStrategyMode === 'product-monitor'"><span>Product / keyword / URL</span><input [(ngModel)]="searchTerm" placeholder="Pokemon 151 Booster Bundle"></label>
               <label class="span-2" *ngIf="monitorStrategyMode === 'early-gate'"><span>Product name</span><input [(ngModel)]="earlyGateProductName" placeholder="Elite Trainer Box"></label>
               <label><span>Interval</span><div class="input-unit"><input [(ngModel)]="taskIntervalSeconds" type="number" min="1"><b>sec</b></div></label>
-              <label *ngIf="taskNeedsCheckoutSession"><span>Profile</span><select [(ngModel)]="selectedProfileId" (ngModelChange)="syncProfileDefaults()"><option value="">Select profile</option><option *ngFor="let profile of profiles" [value]="profile.id">{{ profile.name }}</option></select></label>
-              <label *ngIf="taskNeedsCheckoutSession"><span>Proxy route</span><select [(ngModel)]="taskProxyMode"><option value="profile-default">Profile default</option><option value="direct">Direct</option><option value="proxy">Specific proxy</option></select></label>
-              <label *ngIf="taskNeedsCheckoutSession && taskProxyMode === 'proxy'"><span>Proxy</span><select [(ngModel)]="selectedTaskProxyId"><option value="">Select proxy</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }}</option></select></label>
-              <label class="toggle" *ngIf="taskNeedsCheckoutSession"><input type="checkbox" [(ngModel)]="headless"><span>Headless browser</span></label>
+              <label *ngIf="taskNeedsCheckoutSession || monitorStrategyMode === 'product-monitor'"><span>{{ taskNeedsCheckoutSession ? 'Profile' : 'Runtime profile (optional)' }}</span><select [(ngModel)]="selectedProfileId" (ngModelChange)="syncProfileDefaults()"><option value="">{{ taskNeedsCheckoutSession ? 'Select profile' : 'No runtime profile' }}</option><option *ngFor="let profile of profiles" [value]="profile.id">{{ profile.name }}</option></select></label>
+              <label *ngIf="taskNeedsCheckoutSession || monitorStrategyMode === 'product-monitor'"><span>Proxy route</span><select [(ngModel)]="taskProxyMode"><option value="profile-default">{{ selectedProfileId ? 'Profile default' : 'Direct default' }}</option><option value="direct">Direct</option><option value="proxy">Specific proxy</option></select></label>
+              <label *ngIf="(taskNeedsCheckoutSession || monitorStrategyMode === 'product-monitor') && taskProxyMode === 'proxy'"><span>Proxy</span><select [(ngModel)]="selectedTaskProxyId"><option value="">Select proxy</option><option *ngFor="let proxy of proxies; trackBy: trackProxy" [value]="proxy.id">{{ proxy.name }}</option></select></label>
+              <label class="toggle" *ngIf="taskNeedsCheckoutSession || monitorStrategyMode === 'product-monitor'"><input type="checkbox" [(ngModel)]="headless"><span>Headless browser fallback</span></label>
             </div>
 
             <div class="keyword-line" *ngIf="monitorStrategyMode === 'early-gate'">
@@ -116,7 +118,7 @@
 
             <app-profile-cookie-snapshots *ngIf="taskNeedsCheckoutSession" [profileId]="selectedProfileId" mode="select"></app-profile-cookie-snapshots>
 
-            <div class="composer-actions"><small *ngIf="taskNeedsCheckoutSession">Profile vault + runtime isolation; no card data is stored in the task.</small><button class="primary" (click)="createTask()">Create task</button></div>
+            <div class="composer-actions"><small *ngIf="taskNeedsCheckoutSession">Profile vault + runtime isolation; no card data is stored in the task.</small><small *ngIf="monitorStrategyMode === 'product-monitor' && !taskNeedsCheckoutSession">HTTP fast path; Chromium + full runtime only when HTML is empty or ambiguous.</small><button class="primary" (click)="createTask()">Create task</button></div>
           </div>
         </details>
 
