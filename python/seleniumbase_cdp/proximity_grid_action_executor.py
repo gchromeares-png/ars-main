@@ -8,6 +8,24 @@ from authorized_grid_action_executor import AuthorizedGridActionExecutor
 from interaction_policy import InteractionPolicy
 
 
+_CONFIRM_TEXT = (
+    "ok",
+    "yes",
+    "ja",
+    "verify",
+    "bestätigen",
+    "bestaetigen",
+    "weiter",
+    "continue",
+    "accept",
+    "accept all",
+    "alles akzeptieren",
+    "akzeptieren",
+    "allow",
+    "zulassen",
+)
+
+
 class ProximityGridActionExecutor(AuthorizedGridActionExecutor):
     """Click selected grid tiles in a deterministic nearest-neighbour order."""
 
@@ -77,7 +95,7 @@ class ProximityGridActionExecutor(AuthorizedGridActionExecutor):
         for position, index in enumerate(selected):
             if index >= len(images):
                 continue
-            click = getattr(images[index], "mouse_click", None) or getattr(images[index], "click", None)
+            click = getattr(images[index], "mouse_click", None)
             if callable(click):
                 click()
                 clicked.append(index)
@@ -89,49 +107,152 @@ class ProximityGridActionExecutor(AuthorizedGridActionExecutor):
             delay = self._policy.grid_submit_delay_seconds
             if delay > 0:
                 time.sleep(delay)
-            overrides = getattr(self._site_adapter, "_overrides", {})
-            for selector in (overrides.get("submit"), 'button[type="submit"]', 'input[type="submit"]', 'button'):
-                if not selector:
-                    continue
-                try:
-                    button = frame.query_selector(selector)
-                except Exception:
-                    button = None
-                click = (getattr(button, "mouse_click", None) or getattr(button, "click", None)) if button else None
-                if callable(click):
-                    click()
-                    submitted = True
-                    break
+            submitted = self._click_marked_confirmation(frame=frame)
         return {"clicked": clicked, "submitted": submitted}
 
     def _document_click(self, index: int) -> bool:
+        marker = f"ares-grid-target-{int(index)}"
         action = f"""
           const tile = group.tiles[{int(index)}];
           if (!tile) return false;
           tile.scrollIntoView({{block:'center', inline:'center'}});
-          tile.click();
+          tile.setAttribute('data-ares-cdp-target', {json.dumps(marker)});
           return true;
         """
         try:
-            return bool(self._evaluate(self._document_group_script(action)))
+            if not bool(self._evaluate(self._document_group_script(action))):
+                return False
+            return self._click_marked(marker)
         except Exception:
             return False
+        finally:
+            self._clear_marker(marker)
 
     def _document_submit(self) -> bool:
         overrides = getattr(self._site_adapter, "_overrides", {})
         selector = json.dumps(overrides.get("submit") or 'button[type="submit"],input[type="submit"],button,[role="button"]')
+        accepted = json.dumps(list(_CONFIRM_TEXT))
+        marker = "ares-grid-submit"
         action = f"""
           const selector = {selector};
-          const button = [...(group.root.parentElement?.querySelectorAll(selector) || [])]
-            .filter(el => visible(el) && !group.tiles.includes(el))[0];
+          const accepted = {accepted};
+          const norm = value => String(value || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+          const candidates = [...(group.root.parentElement?.querySelectorAll(selector) || [])]
+            .filter(el => visible(el) && !group.tiles.includes(el));
+          let button = candidates.find(el => {{
+            const text = norm(el.innerText || el.textContent || el.value || el.getAttribute('aria-label'));
+            return accepted.includes(text);
+          }});
+          if (!button && overrides.submit) button = candidates[0];
           if (!button) return false;
-          button.click();
+          button.scrollIntoView({{block:'center', inline:'center'}});
+          button.setAttribute('data-ares-cdp-target', {json.dumps(marker)});
           return true;
         """
         try:
-            return bool(self._evaluate(self._document_group_script(action)))
+            if not bool(self._evaluate(self._document_group_script(action))):
+                return False
+            return self._click_marked(marker)
         except Exception:
             return False
+        finally:
+            self._clear_marker(marker)
+
+    def _click_marked_confirmation(self, frame: Any = None) -> bool:
+        accepted = set(_CONFIRM_TEXT)
+        selectors = ('button[type="submit"]', 'input[type="submit"]', 'button', '[role="button"]')
+        roots = [frame] if frame is not None else [getattr(self._sb, "cdp", None)]
+        for root in roots:
+            if root is None:
+                continue
+            for selector in selectors:
+                try:
+                    elements = list(root.find_elements(selector) or []) if hasattr(root, "find_elements") else list(root.query_selector_all(selector) or [])
+                except Exception:
+                    elements = []
+                for element in elements:
+                    text = self._element_text(element)
+                    if text not in accepted:
+                        continue
+                    click = getattr(element, "mouse_click", None)
+                    if callable(click):
+                        click()
+                        return True
+        return False
+
+    def _click_marked(self, marker: str) -> bool:
+        selector = f'[data-ares-cdp-target="{marker}"]'
+        cdp = getattr(self._sb, "cdp", None)
+        if cdp is not None:
+            try:
+                elements = list(cdp.find_elements(selector) or [])
+            except Exception:
+                elements = []
+            for element in elements:
+                click = getattr(element, "mouse_click", None)
+                if callable(click):
+                    click()
+                    return True
+            try:
+                frames = list(cdp.find_elements("iframe") or [])
+            except Exception:
+                frames = []
+            for frame in frames:
+                try:
+                    element = frame.query_selector(selector)
+                except Exception:
+                    element = None
+                click = getattr(element, "mouse_click", None) if element is not None else None
+                if callable(click):
+                    click()
+                    return True
+        return False
+
+    def _clear_marker(self, marker: str) -> None:
+        try:
+            self._evaluate(
+                f"""(() => {{
+                  const wanted = {json.dumps(marker)};
+                  const roots = [], seen = new Set();
+                  const walk = root => {{
+                    if (!root || seen.has(root)) return;
+                    seen.add(root); roots.push(root);
+                    for (const el of root.querySelectorAll?.('*') || []) if (el.shadowRoot) walk(el.shadowRoot);
+                    for (const frame of root.querySelectorAll?.('iframe') || []) {{
+                      try {{ if (frame.contentDocument) walk(frame.contentDocument); }} catch (_) {{}}
+                    }}
+                  }};
+                  walk(document);
+                  for (const root of roots) for (const el of root.querySelectorAll?.('[data-ares-cdp-target]') || [])
+                    if (el.getAttribute('data-ares-cdp-target') === wanted) el.removeAttribute('data-ares-cdp-target');
+                  return true;
+                }})()"""
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _element_text(element: Any) -> str:
+        for name in ("text", "text_content"):
+            try:
+                value = getattr(element, name, "")
+                if callable(value):
+                    value = value()
+                text = str(value or "").strip().lower()
+                if text:
+                    return " ".join(text.split())
+            except Exception:
+                pass
+        for attr in ("value", "aria-label"):
+            try:
+                getter = getattr(element, "get_attribute", None)
+                value = getter(attr) if callable(getter) else ""
+                text = str(value or "").strip().lower()
+                if text:
+                    return " ".join(text.split())
+            except Exception:
+                pass
+        return ""
 
     def _document_group_script(self, action: str) -> str:
         overrides = getattr(self._site_adapter, "_overrides", {})
