@@ -28,11 +28,12 @@ class VisualInteractionRuntime:
         *,
         profile_dir: str | Path,
         overrides: Dict[str, str] | None = None,
+        capture: ObservationCapture | None = None,
     ) -> None:
         self._sb = seleniumbase_cdp
         self._profile_dir = Path(profile_dir).expanduser().resolve()
         self._policy = InteractionPolicy.from_profile(self._profile_dir)
-        self._capture = ObservationCapture(self._sb, profile_dir=self._profile_dir, policy=self._policy)
+        self._capture = capture or ObservationCapture(self._sb, profile_dir=self._profile_dir, policy=self._policy)
         self._grid = ExtendedGridSiteAdapter(self._sb, overrides=overrides or {})
         self._slider = SliderSiteAdapter(self._sb, overrides=overrides or {})
         self._paths = CursorPathProvider()
