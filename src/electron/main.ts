@@ -765,7 +765,7 @@ app.whenReady().then(async () => {
     mainWindow.on("closed", () => { mainWindow = null; });
 
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows()).length === 0) mainWindow = createWindow();
+      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
