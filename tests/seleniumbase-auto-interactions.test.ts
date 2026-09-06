@@ -49,12 +49,14 @@ describe("SeleniumBase automatic interaction runtime", () => {
     expect(sliderActions).not.toContain("2captcha.com");
   });
 
-  it("keeps zero-shot vision lazy and model-configurable", () => {
+  it("keeps zero-shot vision lazy, calibrated and model-configurable", () => {
     expect(vision).toContain('google/siglip2-base-patch16-224');
     expect(vision).toContain("from transformers import AutoModel, AutoProcessor");
     expect(vision).toContain("ARES_VISION_MODEL");
-    expect(vision).toContain("ARES_VISION_THRESHOLD");
+    expect(vision).toContain("ARES_VISION_LOGIT_THRESHOLD");
+    expect(vision).toContain("DEFAULT_RAW_LOGIT_THRESHOLD");
     expect(vision).toContain("ARES_VISION_OFFLINE");
+    expect(vision).not.toContain("ARES_VISION_THRESHOLD");
   });
 
   it("keeps automatic interaction modules on SeleniumBase-owned primitives", () => {

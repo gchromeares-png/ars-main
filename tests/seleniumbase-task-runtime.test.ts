@@ -6,9 +6,11 @@ describe("SeleniumBase task-runtime source guard", () => {
   const pkg = JSON.parse(read("package.json"));
   const runtime = read("src/browser-worker/ares-browser-runtime.ts");
   const owner = read("src/browser-worker/seleniumbase-browser-worker.ts");
+  const workerProcess = read("src/browser-worker/worker.ts");
   const rpc = read("src/browser-worker/seleniumbase-rpc-page.ts");
   const py = read("python/seleniumbase_cdp/task_browser_worker.py");
   const adapter = read("python/seleniumbase_cdp/seleniumbase_adapter.py");
+  const visionService = read("python/seleniumbase_cdp/vision_inference_service.py");
   const profileController = read("src/electron/profile-browser-controller.ts");
 
   it("keeps SeleniumBase CDP as the configured runtime boundary", () => {
@@ -104,6 +106,18 @@ describe("SeleniumBase task-runtime source guard", () => {
     expect(owner).toContain('transport.request("add-init-script"');
     expect(py).toContain("add_script_to_evaluate_on_new_document");
     expect(py).toContain('command_type == "add-init-script"');
+  });
+
+  it("owns one shared vision service per Node browser worker and closes it with the runtime", () => {
+    expect(runtime).toContain("ensureSharedVisionService");
+    expect(runtime).toContain('ARES_VISION_SERVICE_URL');
+    expect(runtime).toContain('ARES_VISION_SERVICE_TOKEN');
+    expect(runtime).toContain("await this.stopSharedVisionService()");
+    expect(runtime).toContain("randomBytes(24)");
+    expect(runtime).toContain("127.0.0.1");
+    expect(visionService).toContain("ThreadingHTTPServer");
+    expect(visionService).toContain("preload_async");
+    expect(workerProcess).toContain("await browserCore.shutdown()");
   });
 
   it("does not block manual browser startup on optional vision readiness", () => {
