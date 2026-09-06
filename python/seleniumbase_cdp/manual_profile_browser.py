@@ -121,6 +121,10 @@ def _close_adapter(adapter: SeleniumBaseCdpAdapter) -> None:
 
     adapter.quit()
 
+    # A clean SeleniumBase quit can return on Windows while one of Chromium's
+    # profile-owning child processes is still winding down. An immediate reopen
+    # of the same user-data-dir then blocks on the stale profile lock. Only
+    # processes captured for this exact profile are considered here.
     deadline = time.monotonic() + (12.0 if sys.platform.startswith("win") else 3.0)
     remaining: list[psutil.Process] = []
     for pid in dict.fromkeys(owned_pids):
