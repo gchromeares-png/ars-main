@@ -25,7 +25,7 @@ return (() => {
   const visible = el => {
     if (!el?.getBoundingClientRect) return false;
     const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-    return r.width >= 40 && r.height >= 40
+    return r.width > 0 && r.height > 0
       && r.right > 0 && r.bottom > 0
       && r.left < viewport.width && r.top < viewport.height
       && s.display !== 'none'
@@ -97,7 +97,7 @@ return (() => {
       && Math.abs(r.height-avgH) <= Math.max(10, avgH*.28)
     ).length;
     if (regular / tiles.length < 0.82) return null;
-    return {rows, columns, regular};
+    return {rows, columns, regular, avgW, avgH};
   };
   const instructionNear = groupRoot => {
     if (groupRoot?.previousElementSibling && visible(groupRoot.previousElementSibling)) {
@@ -126,14 +126,13 @@ return (() => {
     if (!shape) continue;
     const sources = tiles.map(sourceOf);
     const sourceCount = sources.filter(Boolean).length;
-    if (sourceCount < Math.max(4, Math.ceil(count * 0.5))) continue;
     const instructionEl = instructionNear(parent);
     const submitEl = [...(parent.parentElement?.querySelectorAll(
       'button[type="submit"],input[type="submit"],button,[role="button"]'
     ) || [])].find(el => visible(el) && !tiles.includes(el)) || null;
     const instruction = text(instructionEl).slice(0,600);
     const submitText = text(submitEl).slice(0,120);
-    if (!actionRx.test(instruction + ' ' + submitText)) continue;
+    const hasActionContext = actionRx.test(instruction + ' ' + submitText);
     const rawMarks = tiles.map((tile,index) => ({
       role:'grid-tile',
       visualBounds:rectOf(tile),
@@ -153,11 +152,16 @@ return (() => {
       score:index,
     }));
     const submitBounds = submitEl ? rectOf(submitEl) : null;
+    const avgSide = Math.min(shape.avgW, shape.avgH);
     let score = 72;
     score += Math.round(14 * sourceCount / count);
     score += Math.round(10 * shape.regular / count);
-    if (instruction) score += 6;
-    if (submitEl) score += 4;
+    if (hasActionContext) score += 8;
+    else if (instruction) score += 1;
+    if (submitEl) score += 3;
+    if (avgSide < 20) score -= 18;
+    else if (avgSide < 40) score -= 8;
+    else if (avgSide >= 64) score += 4;
     candidates.push({
       kind:'image-grid',
       scope:'oopif',
@@ -184,13 +188,13 @@ return (() => {
 
 
 class ExtendedGridSiteAdapter(GridSiteAdapter):
-    """Grid adapter with false-positive suppression and OOPIF-aware discovery."""
+    """Grid adapter with broad visual discovery, ranked false-positive suppression, and OOPIF routing."""
 
     MIN_DIM = 2
     MAX_DIM = 8
     MIN_COUNT = MIN_DIM * MIN_DIM
     MAX_COUNT = MAX_DIM * MAX_DIM
-    MIN_TILE_SIDE = 40.0
+    SOFT_TILE_SIDE = 40.0
     MIN_VIEWPORT_RATIO = 0.55
 
     def poll(self) -> Dict[str, Any]:
@@ -202,13 +206,21 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
             self._snapshot_oopif_frames,
         )
         rejected: Dict[str, Any] | None = None
+        best: Dict[str, Any] | None = None
+        best_rank = float("-inf")
         for producer in producers:
             snapshot = producer()
             if snapshot.get("kind") == "none":
                 continue
-            if self._candidate_is_plausible(snapshot):
-                return self._with_generation(snapshot)
-            rejected = snapshot
+            if not self._candidate_is_plausible(snapshot):
+                rejected = snapshot
+                continue
+            rank = self._candidate_rank(snapshot)
+            if best is None or rank > best_rank:
+                best = snapshot
+                best_rank = rank
+        if best is not None:
+            return self._with_generation(best)
         scope = str((rejected or {}).get("scope") or "document")
         return self._with_generation(self._empty(scope))
 
@@ -225,7 +237,6 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
         if len(marks) < self.MIN_COUNT:
             return False
 
-        large = 0
         viewport_known = 0
         in_viewport = 0
         for mark in marks:
@@ -239,8 +250,8 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                 height = float(bounds.get("height") or 0.0)
             except (TypeError, ValueError):
                 continue
-            if min(width, height) >= self.MIN_TILE_SIDE:
-                large += 1
+            if width <= 0 or height <= 0:
+                continue
 
             viewport = mark.get("viewport")
             if isinstance(viewport, dict):
@@ -254,18 +265,50 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                     if x + width > 0 and y + height > 0 and x < vw and y < vh:
                         in_viewport += 1
 
-        if large < max(self.MIN_COUNT, math.ceil(len(marks) * 0.6)):
-            return False
         if viewport_known:
             required = max(self.MIN_COUNT, math.ceil(viewport_known * self.MIN_VIEWPORT_RATIO))
             if in_viewport < required:
                 return False
+        return True
+
+    def _candidate_rank(self, snapshot: Dict[str, Any]) -> float:
+        rank = float(snapshot.get("score") or 0.0)
+        marks = [
+            mark for mark in snapshot.get("marks") or []
+            if isinstance(mark, dict) and mark.get("role") == "grid-tile"
+        ]
+        sides: List[float] = []
+        for mark in marks:
+            bounds = mark.get("visualBounds")
+            if not isinstance(bounds, dict):
+                continue
+            try:
+                width = float(bounds.get("width") or 0.0)
+                height = float(bounds.get("height") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if width > 0 and height > 0:
+                sides.append(min(width, height))
+        if sides:
+            ordered = sorted(sides)
+            middle = len(ordered) // 2
+            median_side = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2.0
+            if median_side < 20.0:
+                rank -= 18.0
+            elif median_side < self.SOFT_TILE_SIDE:
+                rank -= 8.0
+            elif median_side >= 64.0:
+                rank += 4.0
 
         context = " ".join([
             str(snapshot.get("instruction") or ""),
             str(snapshot.get("submitText") or ""),
         ])
-        return bool(_ACTION_CONTEXT_RE.search(context))
+        if _ACTION_CONTEXT_RE.search(context):
+            rank += 8.0
+        elif context.strip():
+            rank += 1.0
+        return rank
 
     def _snapshot_extended_document(self) -> Dict[str, Any]:
         script = r"""
@@ -281,7 +324,7 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
           const visible = el => {
             if (!el?.getBoundingClientRect) return false;
             const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-            return r.width >= 40 && r.height >= 40
+            return r.width > 0 && r.height > 0
               && r.right > 0 && r.bottom > 0
               && r.left < viewport.width && r.top < viewport.height
               && s.display !== 'none'
@@ -344,7 +387,7 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
               Math.abs(r.width-avgW) <= Math.max(10, avgW*.28)
               && Math.abs(r.height-avgH) <= Math.max(10, avgH*.28)
             ).length;
-            return regular / tiles.length >= 0.82 ? {rows, columns, regular} : null;
+            return regular / tiles.length >= 0.82 ? {rows, columns, regular, avgW, avgH} : null;
           };
           const actionRx = /(select|click|choose|mark|verify|verification|continue|confirm|wähl|waehl|klick|markier|prüf|pruef|bestät|bestaet|weiter)/i;
           const parents = new Set();
@@ -369,7 +412,7 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
             ) || [])].find(el => visible(el) && !tiles.includes(el)) || null;
             const instruction = text(instructionEl).slice(0,600);
             const submitText = text(submitEl).slice(0,120);
-            if (!actionRx.test(instruction + ' ' + submitText)) continue;
+            const hasActionContext = actionRx.test(instruction + ' ' + submitText);
             const rawMarks = tiles.map((tile,index) => ({
               role:'grid-tile',
               visualBounds:rectOf(tile),
@@ -381,9 +424,14 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
               label:text(tile).slice(0,160),
               score:index,
             }));
+            const avgSide = Math.min(shape.avgW, shape.avgH);
             let score = 72 + Math.round(14 * sources.filter(Boolean).length / tiles.length);
-            if (instruction) score += 6;
-            if (submitEl) score += 4;
+            if (hasActionContext) score += 8;
+            else if (instruction) score += 1;
+            if (submitEl) score += 3;
+            if (avgSide < 20) score -= 18;
+            else if (avgSide < 40) score -= 8;
+            else if (avgSide >= 64) score += 4;
             candidates.push({
               kind:'image-grid',scope:'document',score,rows:shape.rows,columns:shape.columns,
               tileCount:tiles.length,instruction,sources,submitText,override:false,rawMarks,viewport
@@ -409,6 +457,7 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
             return self._empty("iframe")
 
         best = self._empty("iframe")
+        best_rank = float("-inf")
         for frame_index, frame in enumerate(frames):
             try:
                 images = [img for img in (frame.query_selector_all("img") or []) if self._element_visible(img)]
@@ -455,8 +504,12 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                 "override": False,
                 "marks": marks,
             }
-            if self._candidate_is_plausible(candidate) and int(candidate["score"]) > int(best.get("score") or 0):
+            if not self._candidate_is_plausible(candidate):
+                continue
+            rank = self._candidate_rank(candidate)
+            if rank > best_rank:
                 best = candidate
+                best_rank = rank
         return best
 
     def _snapshot_oopif_frames(self) -> Dict[str, Any]:
@@ -471,6 +524,7 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
             return self._empty("oopif")
 
         best = self._empty("oopif")
+        best_rank = float("-inf")
         for entry in frames:
             if not isinstance(entry, dict):
                 continue
@@ -533,8 +587,12 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
                 except (TypeError, ValueError):
                     pass
 
-            if self._candidate_is_plausible(candidate) and int(candidate["score"]) > int(best.get("score") or 0):
+            if not self._candidate_is_plausible(candidate):
+                continue
+            rank = self._candidate_rank(candidate)
+            if rank > best_rank:
                 best = candidate
+                best_rank = rank
         return best
 
     @classmethod
@@ -554,7 +612,7 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
             ]
         except (TypeError, ValueError):
             return None
-        if not widths or min(widths) < cls.MIN_TILE_SIDE or min(heights) < cls.MIN_TILE_SIDE:
+        if not widths or min(widths) <= 0 or min(heights) <= 0:
             return None
         avg_w = sum(widths) / len(widths)
         avg_h = sum(heights) / len(heights)
