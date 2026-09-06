@@ -74,7 +74,13 @@ jobs:
             $content = $content.Replace('payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}', 'payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else entry')
             $content = $content.Replace('}}, 2800);', '}}, 15000);')
             Set-Content -Path $path -Value $content -Encoding utf8
-            python -m py_compile $path
+
+            $manualPath = 'python/seleniumbase_cdp/manual_profile_browser.py'
+            $manualContent = Get-Content $manualPath -Raw
+            $manualContent = $manualContent.Replace('from task_browser_worker_oopif_impl import FlatCdpTargetRegistry', 'from task_browser_worker_oopif import FlatCdpTargetRegistry')
+            Set-Content -Path $manualPath -Value $manualContent -Encoding utf8
+
+            python -m py_compile $path $manualPath python/seleniumbase_cdp/task_browser_worker_oopif.py python/seleniumbase_cdp/task_browser_worker_oopif_impl.py
 
             python python/seleniumbase_cdp/grid_runtime_smoke_probe.py 2>&1 | Tee-Object -FilePath $runLog
             $exitCode = $LASTEXITCODE
