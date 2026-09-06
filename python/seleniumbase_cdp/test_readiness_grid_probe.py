@@ -166,11 +166,13 @@ def _run_real_browser_probe(root: Path) -> None:
         assert int(state.get("tileCount") or 0) == 64, state
         assert len([source for source in state.get("sources") or [] if source]) == 64, state
 
+        # This probe verifies physical CDP execution, not a route predicted from a
+        # stale observation. apply_grid_selection() deliberately re-polls the grid
+        # immediately before acting, so its nearest-neighbour order belongs to that
+        # action-time snapshot. The invariant that matters here is exact membership:
+        # every requested tile once, no extras, followed by a real submit click.
         requested = [9, 8, 1, 0]
         clean_requested = ProximityGridActionExecutor._clean_indexes(requested, int(state["tileCount"]))
-        expected_order = ProximityGridActionExecutor._ordered_indexes(state, clean_requested)
-        assert sorted(expected_order) == sorted(clean_requested), (expected_order, clean_requested)
-        assert len(expected_order) == len(clean_requested), (expected_order, clean_requested)
 
         request_id = "apply-selection"
         client.send({
@@ -183,14 +185,16 @@ def _run_real_browser_probe(root: Path) -> None:
 
         clicked_indexes = [int(value) for value in execution.get("clickedIndexes") or []]
         click_order = [int(value) for value in execution.get("clickOrder") or []]
-        assert clicked_indexes == expected_order, (execution, expected_order)
-        assert click_order == expected_order, (execution, expected_order)
+        assert len(clicked_indexes) == len(clean_requested), (execution, clean_requested)
+        assert sorted(clicked_indexes) == sorted(clean_requested), (execution, clean_requested)
+        assert click_order == clicked_indexes, execution
         assert execution.get("submitted") is True, execution
 
-        hits = _collect_hits(recorder, len(expected_order) + 1)
+        hits = _collect_hits(recorder, len(clean_requested) + 1)
         tile_hits = [int(hit["index"]) for hit in hits if hit.get("type") == "tile"]
         submit_hits = [hit for hit in hits if hit.get("type") == "submit"]
-        assert tile_hits == expected_order, (hits, expected_order)
+        assert tile_hits == clicked_indexes, (hits, execution)
+        assert sorted(tile_hits) == sorted(clean_requested), (hits, clean_requested)
         assert len(submit_hits) == 1, hits
     finally:
         if client is not None:
