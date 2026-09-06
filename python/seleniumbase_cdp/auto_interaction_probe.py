@@ -86,7 +86,18 @@ class FakePaths:
             "moved": True,
             "provider": "ghost-cursor:cdp",
             "pointCount": 33,
-            "dragProfile": 1,
+            "motionId": "m1-testmotion",
+            "motionParameters": {
+                "prePress": 0.04,
+                "postPress": 0.05,
+                "baseDelay": 0.01,
+                "acceleration": 0.008,
+                "wave": 0.002,
+                "waveCycles": 1.25,
+                "endHold": 0.12,
+                "backtrackPx": 1.4,
+                "backtrackHold": 0.05,
+            },
             "endHoldBacktrack": True,
         }
 
@@ -168,7 +179,9 @@ def main() -> int:
 
     moved = SliderActionExecutor(sb, slider, FakePaths()).apply(0.96)
     assert moved["moved"] is True and moved["mode"] == "path:ghost-cursor:cdp"
-    assert moved["dragProfile"] == 1 and moved["endHoldBacktrack"] is True
+    assert moved["motionId"] == "m1-testmotion"
+    assert moved["motionParameters"]["backtrackPx"] == 1.4
+    assert moved["endHoldBacktrack"] is True
     assert moved["state"]["fraction"] == 0.96 and len(sb.drags) == 1
 
     grid = FakeGridAdapter()
