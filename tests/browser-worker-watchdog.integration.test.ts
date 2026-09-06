@@ -91,4 +91,59 @@ describeBrowserIntegration("browser worker watchdog integration", () => {
       await client.close().catch(() => undefined);
     }
   });
+
+  it("starts and health-checks four real browser-worker processes through the production pool", async () => {
+    type ProcessClient = {
+      start(): Promise<void>;
+    };
+    type PoolHealth = {
+      workers: Array<{ pid?: number; running: boolean }>;
+    };
+    type PoolClient = {
+      clients: ProcessClient[];
+      health(): Promise<PoolHealth>;
+      close(): Promise<void>;
+    };
+
+    const compiled = require("../dist/backend/browser-worker/client.js") as {
+      BrowserWorkerPoolClient: new (
+        getShop: (shopId: string) => unknown,
+        getProfile: (profileId: string) => unknown,
+        options?: {
+          processCount?: number;
+          requestTimeoutMs?: number;
+          heartbeatIntervalMs?: number;
+          heartbeatTimeoutMs?: number;
+          executeTimeoutMs?: number;
+        }
+      ) => unknown;
+    };
+
+    const pool = new compiled.BrowserWorkerPoolClient(
+      () => undefined,
+      () => undefined,
+      {
+        processCount: 4,
+        requestTimeoutMs: 2_000,
+        heartbeatIntervalMs: 500,
+        heartbeatTimeoutMs: 1_000,
+        executeTimeoutMs: 5_000
+      }
+    ) as PoolClient;
+
+    try {
+      expect(pool.clients).toHaveLength(4);
+      await Promise.all(pool.clients.map(client => client.start()));
+
+      const health = await pool.health();
+      expect(health.workers).toHaveLength(4);
+      expect(health.workers.every(worker => worker.running)).toBe(true);
+
+      const pids = health.workers.map(worker => worker.pid);
+      expect(pids.every(pid => typeof pid === "number" && pid > 0)).toBe(true);
+      expect(new Set(pids).size).toBe(4);
+    } finally {
+      await pool.close().catch(() => undefined);
+    }
+  });
 });
