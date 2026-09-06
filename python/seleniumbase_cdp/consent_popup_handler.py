@@ -17,6 +17,7 @@ _BUTTON_SELECTORS = (
     'input[type="submit"]',
     'input[type="button"]',
     '[role="button"]',
+    'a[href]',
 )
 _ACCEPT_TEXT = (
     'alles akzeptieren',
@@ -31,10 +32,35 @@ _ACCEPT_TEXT = (
     'weiter',
     'continue',
 )
+_PROGRESS_TEXT = (
+    'weiter zur kasse',
+    'zur kasse',
+    'checkout',
+    'go to checkout',
+    'continue to checkout',
+    'proceed to checkout',
+    'weiter zum checkout',
+    'zum checkout',
+    'weiter zur lieferung',
+    'weiter zur zahlung',
+    'continue to shipping',
+    'continue to payment',
+)
+_BLOCKED_FINAL_TEXT = (
+    'jetzt kaufen',
+    'zahlungspflichtig bestellen',
+    'kostenpflichtig bestellen',
+    'bestellung abschicken',
+    'place order',
+    'buy now',
+    'pay now',
+    'complete purchase',
+    'submit order',
+)
 
 
 class ConsentPopupHandler:
-    """Dismiss explicit consent/continue controls with CDP element mouse clicks."""
+    """Dismiss consent controls and advance safe checkout steps with CDP mouse clicks."""
 
     def __init__(self, seleniumbase_cdp: Any) -> None:
         self._sb = seleniumbase_cdp
@@ -71,6 +97,36 @@ class ConsentPopupHandler:
 
         return {'dismissed': False, 'reason': 'no-explicit-consent-control'}
 
+    def advance_safe_checkout_once(self) -> Dict[str, Any]:
+        """Advance non-final checkout navigation without placing an order."""
+        cdp = getattr(self._sb, 'cdp', None)
+        if cdp is None:
+            return {'advanced': False, 'reason': 'cdp-unavailable'}
+
+        for root, scope in self._roots(cdp):
+            for selector in _BUTTON_SELECTORS:
+                for element in self._elements(root, selector):
+                    text = self._element_text(element)
+                    if not text or self._matches(text, _BLOCKED_FINAL_TEXT):
+                        continue
+                    if not self._matches(text, _PROGRESS_TEXT):
+                        continue
+                    click = getattr(element, 'mouse_click', None)
+                    if not callable(click):
+                        continue
+                    try:
+                        click()
+                        return {
+                            'advanced': True,
+                            'text': text,
+                            'selector': selector,
+                            'scope': scope,
+                            'mode': 'cdp-mouse-click',
+                        }
+                    except Exception:
+                        continue
+        return {'advanced': False, 'reason': 'no-safe-checkout-progress-control'}
+
     def _click_in_root(self, root: Any, *, fallback: bool = False) -> Dict[str, Any]:
         accepted = set(_ACCEPT_TEXT)
         strong = {'alles akzeptieren', 'alle akzeptieren', 'accept all', 'allow all', 'zustimmen', 'i agree'}
@@ -96,6 +152,21 @@ class ConsentPopupHandler:
                 except Exception:
                     continue
         return {'dismissed': False}
+
+    @classmethod
+    def _roots(cls, cdp: Any):
+        yield cdp, 'document'
+        try:
+            frames = list(cdp.find_elements('iframe') or [])
+        except Exception:
+            frames = []
+        for frame in frames:
+            yield frame, 'iframe'
+
+    @staticmethod
+    def _matches(text: str, values: Iterable[str]) -> bool:
+        normalized = ' '.join(str(text or '').strip().lower().split())
+        return any(normalized == value or value in normalized for value in values)
 
     @staticmethod
     def _elements(root: Any, selector: str) -> Iterable[Any]:
