@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable
 
 from auto_interaction_controller import AutoInteractionController
 from composite_slider_grounder import CompositeSliderGrounder
+from consent_popup_handler import ConsentPopupHandler
 from cursor_path_provider import CursorPathProvider
 from extended_grid_site_adapter import ExtendedGridSiteAdapter
 from interaction_policy import InteractionPolicy
@@ -39,6 +40,7 @@ class VisualInteractionRuntime:
         self._screenshot_tiles = ScreenshotGridTileProvider()
         self._slider_grounder = CompositeSliderGrounder(self._sb, profile_dir=self._profile_dir)
         self._trace = InteractionTrace(self._profile_dir)
+        self._popup_handler = ConsentPopupHandler(self._sb)
         self._controller = AutoInteractionController(
             self._grid,
             self._slider,
@@ -52,6 +54,16 @@ class VisualInteractionRuntime:
         self._last_grid_debug_signature = ""
 
     def poll_and_act(self) -> Dict[str, Any]:
+        popup = self._popup_handler.dismiss_once()
+        if popup.get("dismissed"):
+            self._trace.append("popup-action", popup)
+            return {"acted": True, "kind": "popup", "result": popup}
+
+        checkout = self._popup_handler.advance_checkout_once()
+        if checkout.get("advanced"):
+            self._trace.append("checkout-action", checkout)
+            return {"acted": True, "kind": "checkout", "result": checkout}
+
         # Image grids need pixels before vision can make a meaningful decision.
         # Capture first, then crop/classify/click. Structural sources remain a
         # fallback only when screenshot capture/cropping is unavailable.
@@ -139,6 +151,8 @@ class VisualInteractionRuntime:
                 "clickDelaySeconds": self._policy.grid_click_delay_seconds,
                 "submitDelaySeconds": self._policy.grid_submit_delay_seconds,
             },
+            "popupAutoProgress": True,
+            "checkoutAutoProgress": True,
             "screenshotGridFallback": True,
             "screenshotFirstForGrid": True,
             "debugScreenshotRoot": str(self._debug_root),
