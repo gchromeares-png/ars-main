@@ -49,6 +49,8 @@ export class AresBrowserRuntime extends SeleniumBaseBrowserWorker {
 
   override async shutdown(): Promise<void> {
     await super.shutdown();
+    const starting = this.sharedVisionStart;
+    if (starting) await starting.catch(() => undefined);
     await this.stopSharedVisionService();
   }
 
