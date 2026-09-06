@@ -26,3 +26,14 @@ export interface JsonHttpResponse<T> {
 export interface JsonHttpClient {
   get<T>(url: string, headers?: Record<string, string>): Promise<JsonHttpResponse<T>>;
 }
+
+export interface TextHttpResponse {
+  status: number;
+  headers: Record<string, string>;
+  text: string;
+  url: string;
+}
+
+export interface TextHttpClient {
+  get(url: string, headers?: Record<string, string>): Promise<TextHttpResponse>;
+}

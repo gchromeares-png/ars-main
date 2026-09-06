@@ -1,20 +1,30 @@
-import {
-  getCommercePlatformCapability,
-  type CommercePlatform,
-  type CommerceShop
-} from "../platforms";
+import type { CommercePlatform, CommerceShop } from "../platforms";
 import type { ProductObservation, ProductQuery } from "../../monitor/models";
+import { GenericHtmlProductApiAdapter } from "./generic-html-product-api-adapter";
+import { NodeJsonHttpClient } from "./http-json-client";
+import { NodeTextHttpClient } from "./http-text-client";
 import { ShopifyProductApiAdapter } from "./shopify-product-api-adapter";
+import type {
+  CommerceProductApiAdapter,
+  JsonHttpClient,
+  ProductApiProbeResult,
+  TextHttpClient
+} from "./types";
 import { WooCommerceProductApiAdapter } from "./woocommerce-product-api-adapter";
-import type { CommerceProductApiAdapter, ProductApiProbeResult } from "./types";
 
 export class CommerceProductApiRouter {
   private readonly adapters = new Map<CommercePlatform, CommerceProductApiAdapter>();
+  private readonly genericHtml: GenericHtmlProductApiAdapter;
 
-  constructor(registerDefaults = true) {
-    if (registerDefaults) {
-      this.register(new ShopifyProductApiAdapter());
-      this.register(new WooCommerceProductApiAdapter());
+  constructor(
+    includeBuiltIns = true,
+    http: JsonHttpClient = new NodeJsonHttpClient(),
+    textHttp: TextHttpClient = new NodeTextHttpClient()
+  ) {
+    this.genericHtml = new GenericHtmlProductApiAdapter(textHttp);
+    if (includeBuiltIns) {
+      this.register(new ShopifyProductApiAdapter(http));
+      this.register(new WooCommerceProductApiAdapter(http));
     }
   }
 
@@ -22,36 +32,39 @@ export class CommerceProductApiRouter {
     this.adapters.set(adapter.platform, adapter);
   }
 
-  hasAdapter(platform: CommercePlatform): boolean {
-    return this.adapters.has(platform);
-  }
-
-  listAdapterPlatforms(): CommercePlatform[] {
-    return [...this.adapters.keys()];
+  get(platform: CommercePlatform): CommerceProductApiAdapter | undefined {
+    return this.adapters.get(platform);
   }
 
   async probe(shop: CommerceShop): Promise<ProductApiProbeResult> {
-    const adapter = this.adapters.get(shop.platform);
-    if (adapter) return adapter.probe(shop);
-
-    const capability = getCommercePlatformCapability(shop.platform);
-    return {
-      platform: shop.platform,
-      endpoint: capability.productEndpoint || shop.baseUrl,
-      reachable: false,
-      publicReadable: false,
-      reason: capability.notes
-    };
+    const adapter = this.get(shop.platform);
+    if (adapter) {
+      try {
+        const result = await adapter.probe(shop);
+        if (result.publicReadable) return result;
+      } catch {
+        // Public storefront HTML remains a valid fallback even when a platform
+        // specific anonymous endpoint is missing or disabled by the merchant.
+      }
+    }
+    return this.genericHtml.probe(shop);
   }
 
   async search(shop: CommerceShop, query: ProductQuery, limit = 50): Promise<ProductObservation[]> {
-    const adapter = this.adapters.get(shop.platform);
-    if (!adapter) {
-      const capability = getCommercePlatformCapability(shop.platform);
-      throw new Error(
-        `No anonymous product API adapter for ${shop.platform}. Access mode: ${capability.productApi}. ${capability.notes}`
-      );
+    const adapter = this.get(shop.platform);
+    if (adapter) {
+      try {
+        const results = await adapter.search(shop, query, limit);
+        if (results.length) return results;
+      } catch {
+        // Fall through to the public HTML monitor. This deliberately does not
+        // attempt credentialed/private platform APIs.
+      }
     }
-    return adapter.search(shop, query, limit);
+    return this.genericHtml.search(shop, query, limit);
+  }
+
+  supportedPlatforms(): CommercePlatform[] {
+    return [...this.adapters.keys()];
   }
 }
