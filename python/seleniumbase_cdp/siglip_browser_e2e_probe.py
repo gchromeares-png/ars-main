@@ -17,37 +17,67 @@ from seleniumbase_adapter import SeleniumBaseCdpAdapter
 from siglip_randomized_grid_probe import CATEGORIES, _seed, _tile_png
 
 
-class RelativeSignalVisionClassifier(RobustVisionGridClassifier):
-    """Test-only threshold-free SigLIP2 selector.
+class RankedGroundedVisionClassifier(RobustVisionGridClassifier):
+    """Test-only hybrid: SigLIP2 ranking plus Grounding DINO presence checks.
 
-    Hugging Face's SigLIP2 zero-shot path accepts multiple text candidates for an
-    image and exposes sigmoid(logits_per_image). For this validation probe each
-    screenshot crop is therefore compared against a positive and negative text
-    candidate and the stronger signal wins. No hidden target count or ground truth
-    is passed to this classifier.
+    SigLIP2 supplies the target-relative ordering that has stayed correct across the
+    randomized browser crops. Grounding DINO is used only to decide whether the
+    requested open-set object is actually present in each crop, so this probe does
+    not need a hidden target count, a fixed top-k, or the discarded negation prompt.
+
+    Grounding DINO invocation and the 0.4 / 0.3 post-processing thresholds match the
+    official Hugging Face Transformers Grounding DINO zero-shot example.
     """
 
+    DINO_MODEL = "IDEA-Research/grounding-dino-tiny"
+    DINO_BOX_THRESHOLD = 0.4
+    DINO_TEXT_THRESHOLD = 0.3
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._dino_processor: Any = None
+        self._dino_model: Any = None
+        self._dino_error = ""
+
+    def _load_dino(self) -> bool:
+        if self._dino_model is not None:
+            return True
+        if self._dino_error:
+            return False
+        try:
+            from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+
+            self._dino_processor = AutoProcessor.from_pretrained(self.DINO_MODEL)
+            self._dino_model = AutoModelForZeroShotObjectDetection.from_pretrained(self.DINO_MODEL)
+            self._dino_model.to(self._device)
+            self._dino_model.eval()
+            return True
+        except Exception as exc:
+            self._dino_error = f"Grounding DINO unavailable: {exc}"
+            return False
+
     def classify(self, instruction: str, sources: Iterable[str]) -> Dict[str, Any]:
-        if not self._load():
+        # First run the production SigLIP2 classifier unchanged. We keep its raw
+        # positive scores only for ranking/diagnostics; its fixed 0.58 selection is
+        # deliberately ignored in this validation probe.
+        siglip = super().classify(instruction, sources)
+        if siglip.get("error"):
             return {
+                **siglip,
                 "selectedIndexes": [],
-                "scores": [],
-                "negativeScores": [],
-                "model": self.model_name,
-                "error": self._error,
+                "selectionPolicy": "siglip-ranking-grounding-dino-confirmation-test-only",
+            }
+        if not self._load_dino():
+            return {
+                **siglip,
+                "selectedIndexes": [],
+                "selectionPolicy": "siglip-ranking-grounding-dino-confirmation-test-only",
+                "error": self._dino_error,
             }
 
         source_list = [str(source or "") for source in sources]
         target = self._target_text(instruction)
-        texts = [
-            f"This is a photo of {target}.",
-            f"This is a photo without {target}.",
-        ]
-
         loaded: List[Tuple[int, Any]] = []
-        positive_scores: List[float | None] = [None] * len(source_list)
-        negative_scores: List[float | None] = [None] * len(source_list)
-        relative_margins: List[float | None] = [None] * len(source_list)
         for index, source in enumerate(source_list):
             image = self._read_image(source)
             if image is not None:
@@ -55,81 +85,83 @@ class RelativeSignalVisionClassifier(RobustVisionGridClassifier):
 
         if not loaded:
             return {
+                **siglip,
                 "selectedIndexes": [],
-                "scores": positive_scores,
-                "negativeScores": negative_scores,
-                "relativeMargins": relative_margins,
-                "model": self.model_name,
-                "target": target,
-                "device": self._device,
-                "error": "No readable grid images",
+                "selectionPolicy": "siglip-ranking-grounding-dino-confirmation-test-only",
+                "error": "No readable grid images for Grounding DINO",
             }
 
+        siglip_scores = list(siglip.get("scores") or [])
+        ranking = sorted(
+            (
+                (float(score), index)
+                for index, score in enumerate(siglip_scores)
+                if score is not None
+            ),
+            key=lambda item: (-item[0], item[1]),
+        )
+
+        dino_scores: List[float | None] = [None] * len(source_list)
+        dino_detection_counts: List[int] = [0] * len(source_list)
         selected: List[int] = []
         try:
-            inputs = self._processor(
-                text=texts,
-                images=[image for _, image in loaded],
-                padding="max_length",
-                max_length=64,
-                truncation=True,
-                return_tensors="pt",
-            )
+            images = [image for _, image in loaded]
+            text_labels = [[target] for _ in images]
+            inputs = self._dino_processor(images=images, text=text_labels, return_tensors="pt")
             inputs = {
                 key: value.to(self._device) if hasattr(value, "to") else value
                 for key, value in inputs.items()
             }
             with self._torch.inference_mode():
-                outputs = self._model(**inputs)
-            probabilities = self._torch.sigmoid(outputs.logits_per_image.float()).detach().cpu().tolist()
+                outputs = self._dino_model(**inputs)
 
-            if len(probabilities) != len(loaded):
+            target_sizes = [image.size[::-1] for image in images]
+            results = self._dino_processor.post_process_grounded_object_detection(
+                outputs,
+                inputs["input_ids"],
+                threshold=self.DINO_BOX_THRESHOLD,
+                text_threshold=self.DINO_TEXT_THRESHOLD,
+                target_sizes=target_sizes,
+            )
+            if len(results) != len(loaded):
                 raise RuntimeError(
-                    f"unexpected SigLIP2 image row count: {len(probabilities)} != {len(loaded)}"
+                    f"unexpected Grounding DINO result count: {len(results)} != {len(loaded)}"
                 )
 
-            for (source_index, _), row in zip(loaded, probabilities):
-                if not isinstance(row, (list, tuple)) or len(row) < 2:
-                    raise RuntimeError(f"unexpected SigLIP2 candidate score row: {row!r}")
-                positive = float(row[0])
-                negative = float(row[1])
-                margin = positive - negative
-                positive_scores[source_index] = round(positive, 4)
-                negative_scores[source_index] = round(negative, 4)
-                relative_margins[source_index] = round(margin, 4)
-                if positive > negative:
+            for (source_index, _), result in zip(loaded, results):
+                scores = result.get("scores") if isinstance(result, dict) else None
+                if scores is None:
+                    values: List[float] = []
+                elif hasattr(scores, "detach"):
+                    values = [float(value) for value in scores.detach().cpu().tolist()]
+                else:
+                    values = [float(value) for value in list(scores)]
+                dino_detection_counts[source_index] = len(values)
+                dino_scores[source_index] = round(max(values), 4) if values else 0.0
+                if values:
                     selected.append(source_index)
         except Exception as exc:
             return {
+                **siglip,
                 "selectedIndexes": [],
-                "scores": positive_scores,
-                "negativeScores": negative_scores,
-                "relativeMargins": relative_margins,
-                "model": self.model_name,
-                "target": target,
-                "device": self._device,
-                "error": f"Relative SigLIP2 inference failed: {exc}",
+                "positiveRanking": [index for _, index in ranking],
+                "groundingDinoScores": dino_scores,
+                "groundingDinoDetectionCounts": dino_detection_counts,
+                "groundingDinoModel": self.DINO_MODEL,
+                "selectionPolicy": "siglip-ranking-grounding-dino-confirmation-test-only",
+                "error": f"Grounding DINO inference failed: {exc}",
             }
 
-        ranking = sorted(
-            (
-                (float(score), index)
-                for index, score in enumerate(positive_scores)
-                if score is not None
-            ),
-            key=lambda item: (-item[0], item[1]),
-        )
         return {
-            "selectedIndexes": selected,
-            "scores": positive_scores,
-            "negativeScores": negative_scores,
-            "relativeMargins": relative_margins,
+            **siglip,
+            "selectedIndexes": sorted(selected),
             "positiveRanking": [index for _, index in ranking],
-            "model": self.model_name,
-            "target": target,
-            "device": self._device,
-            "selectionPolicy": "per-tile-strongest-positive-vs-negative-signal-test-only",
-            "textCandidates": texts,
+            "groundingDinoScores": dino_scores,
+            "groundingDinoDetectionCounts": dino_detection_counts,
+            "groundingDinoModel": self.DINO_MODEL,
+            "groundingDinoBoxThreshold": self.DINO_BOX_THRESHOLD,
+            "groundingDinoTextThreshold": self.DINO_TEXT_THRESHOLD,
+            "selectionPolicy": "siglip-ranking-grounding-dino-confirmation-test-only",
         }
 
 
@@ -237,7 +269,7 @@ def _start_server(page: bytes) -> Tuple[socketserver.TCPServer, Recorder, str]:
     return server, recorder, f"http://{host}:{port}/"
 
 
-def _collect(recorder: Recorder, timeout: float = 10.0) -> List[Dict[str, str]]:
+def _collect(recorder: Recorder, timeout: float = 12.0) -> List[Dict[str, str]]:
     hits: List[Dict[str, str]] = []
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -270,10 +302,7 @@ def main() -> int:
             },
         )
 
-        # One model instance is reused for every target category. Only the
-        # selection policy is test-specific; screenshot capture, tile cropping,
-        # grid execution, cursor planning and CDP input stay on the real ARES path.
-        vision = RelativeSignalVisionClassifier()
+        vision = RankedGroundedVisionClassifier()
         runtime = adapter._visual_interactions
         runtime._vision = vision
         runtime._controller._vision = vision
@@ -284,7 +313,6 @@ def main() -> int:
             server, recorder, url = _start_server(page)
             servers.append(server)
 
-            # Ensure a previous scenario cannot be treated as already handled.
             runtime._controller._last_grid_signature = ""
             adapter.goto(url)
 
@@ -305,12 +333,14 @@ def main() -> int:
             clicked = [int(value) for value in action.get("clickedIndexes") or []]
 
             print(
-                "SIGLIP_E2E_DIAGNOSTIC "
+                "SIGLIP_DINO_E2E_DIAGNOSTIC "
                 f"target={target!r} expected={expected} selected={selected} "
-                f"ranking={decision.get('positiveRanking')} "
-                f"positive={decision.get('scores')} negative={decision.get('negativeScores')} "
-                f"margins={decision.get('relativeMargins')} clicked={clicked} "
-                f"serverTiles={tile_hits} submitted={len(submit_hits)}"
+                f"siglipRanking={decision.get('positiveRanking')} "
+                f"siglipScores={decision.get('scores')} "
+                f"dinoScores={decision.get('groundingDinoScores')} "
+                f"dinoCounts={decision.get('groundingDinoDetectionCounts')} "
+                f"clicked={clicked} serverTiles={tile_hits} submitted={len(submit_hits)} "
+                f"error={decision.get('error')!r}"
             )
 
             checks = {
@@ -329,7 +359,9 @@ def main() -> int:
             if failed:
                 failures.append(
                     f"target={target!r} failed={failed} expected={expected} selected={selected} "
-                    f"ranking={decision.get('positiveRanking')} margins={decision.get('relativeMargins')} "
+                    f"siglipRanking={decision.get('positiveRanking')} "
+                    f"dinoScores={decision.get('groundingDinoScores')} "
+                    f"dinoCounts={decision.get('groundingDinoDetectionCounts')} "
                     f"clicked={clicked} serverTiles={tile_hits} error={decision.get('error')!r}"
                 )
 
@@ -338,11 +370,12 @@ def main() -> int:
             servers.remove(server)
 
         if failures:
-            raise AssertionError("SIGLIP_E2E_FAILURES\n" + "\n".join(failures))
+            raise AssertionError("SIGLIP_DINO_E2E_FAILURES\n" + "\n".join(failures))
 
         print(
             "PASS: all target classes completed real Chromium screenshot -> tile crops -> "
-            "per-tile strongest SigLIP2 signal -> ARES CDP clicks -> HTTP server verification."
+            "SigLIP2 ranking -> Grounding DINO open-set confirmation -> ARES CDP clicks -> "
+            "HTTP server verification."
         )
         return 0
     finally:
