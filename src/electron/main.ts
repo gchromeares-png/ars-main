@@ -167,6 +167,7 @@ function readSystemNodeStatus(): SystemNodeStatus {
 function monitorAction(task: any): {
   mode?: string;
   profileId?: string;
+  runtimeProfileId?: string;
   headless?: boolean;
   cookieSnapshotId?: string;
 } | undefined {
@@ -177,6 +178,10 @@ function monitorAction(task: any): {
 async function openVisibleProductMonitorBrowser(task: any): Promise<void> {
   if (!task || getMonitorStrategy(task).mode === "early-gate") return;
   const action = monitorAction(task);
+  // New monitor tasks carry runtimeProfileId and let CommerceMonitorService's
+  // SeleniumBase fallback own the monitor browser. Older persisted tasks keep
+  // the previous visible profile-browser path for backward compatibility.
+  if (action?.runtimeProfileId) return;
   if (action?.mode !== "auto-checkout" || action.headless === true) return;
   if (visibleMonitorBrowserProfiles.has(String(task.id))) return;
 
@@ -760,7 +765,7 @@ app.whenReady().then(async () => {
     mainWindow.on("closed", () => { mainWindow = null; });
 
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
+      if (BrowserWindow.getAllWindows()).length === 0) mainWindow = createWindow();
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
