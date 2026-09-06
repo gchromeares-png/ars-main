@@ -63,9 +63,10 @@ export class AresBrowserRuntime extends SeleniumBaseBrowserWorker {
     // shadowing operator configuration.
     if (process.env["ARES_VISION_SERVICE_URL"]?.trim() && !this.sharedVision) return undefined;
 
-    if (this.sharedVision?.child.exitCode == null) {
-      this.publishSharedVisionEnvironment(this.sharedVision);
-      return this.sharedVision;
+    const existing = this.sharedVision;
+    if (existing?.child.exitCode == null) {
+      this.publishSharedVisionEnvironment(existing);
+      return existing;
     }
     if (this.sharedVisionStart) return this.sharedVisionStart;
 
@@ -109,13 +110,14 @@ export class AresBrowserRuntime extends SeleniumBaseBrowserWorker {
       this.sharedVision = service;
       this.publishSharedVisionEnvironment(service);
       child.once("exit", () => {
-        if (this.sharedVision?.child !== child) return;
-        this.clearSharedVisionEnvironment(this.sharedVision);
+        const current = this.sharedVision;
+        if (current?.child !== child) return;
+        this.clearSharedVisionEnvironment(current);
         this.sharedVision = undefined;
       });
       return service;
     } catch (error) {
-      if (child?.exitCode == null) child.kill("SIGKILL");
+      if (child && child.exitCode == null) child.kill("SIGKILL");
       // Availability beats optimization: if the shared owner cannot start,
       // session processes retain the existing local lazy-classifier fallback.
       process.stderr.write(`[ARES vision] shared service unavailable; using local fallback: ${error instanceof Error ? error.message : String(error)}\n`);
