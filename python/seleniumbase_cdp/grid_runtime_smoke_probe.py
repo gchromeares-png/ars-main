@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import shutil
 import socketserver
+import sys
 import tempfile
 import threading
 import time
@@ -19,6 +21,45 @@ TARGETS = {
     "A": {0, 2, 4, 6, 8},
     "B": {1, 3, 5, 7},
 }
+
+
+def _diagnostic(root: Path, event: str, **payload: Any) -> None:
+    record = {
+        "event": event,
+        "wall": time.time(),
+        "mono": time.monotonic(),
+        **payload,
+    }
+    line = "ARES_GRID_TIMING\t" + json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+    print(line, file=sys.stderr, flush=True)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        with (root / "grid-smoke-timing.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
+def _drain_worker_stderr(client: WorkerClient, output: Path, variant: str) -> threading.Thread | None:
+    stream = client.process.stderr
+    if stream is None:
+        return None
+
+    def run() -> None:
+        try:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open("a", encoding="utf-8") as handle:
+                for line in stream:
+                    stamped = f"{time.time():.6f}\t{variant}\t{line.rstrip()}"
+                    handle.write(stamped + "\n")
+                    handle.flush()
+                    print(f"ARES_WORKER_STDERR\t{stamped}", file=sys.stderr, flush=True)
+        except Exception as exc:
+            print(f"ARES_WORKER_STDERR_DRAIN_ERROR\t{variant}\t{exc}", file=sys.stderr, flush=True)
+
+    thread = threading.Thread(target=run, name=f"ares-grid-stderr-{variant}", daemon=True)
+    thread.start()
+    return thread
 
 
 class Recorder:
@@ -391,7 +432,7 @@ def _wait_for_complete_result(
     )
 
 
-def _run_variant(base_url: str, recorder: Recorder, root: Path, variant: str) -> None:
+def _run_variant(base_url: str, recorder: Recorder, root: Path, variant: str, diagnostics_root: Path) -> None:
     profile_dir = root / f"profile-{variant}" / ".ares-seleniumbase-cdp"
     profile_dir.mkdir(parents=True, exist_ok=True)
     (profile_dir / ".ares-site-adapter.json").write_text(
@@ -409,15 +450,32 @@ def _run_variant(base_url: str, recorder: Recorder, root: Path, variant: str) ->
         encoding="utf-8",
     )
 
+    _diagnostic(diagnostics_root, "worker-start", variant=variant)
     client = WorkerClient(profile_dir, f"{base_url}/case/{variant}")
+    _drain_worker_stderr(client, diagnostics_root / f"worker-{variant}.stderr.log", variant)
+    primary_error: BaseException | None = None
     try:
+        _diagnostic(diagnostics_root, "baseline-poll-start", variant=variant)
         parent_baseline = _wait_for_parent_iframe_baseline(client, variant)
+        _diagnostic(diagnostics_root, "baseline-poll-end", variant=variant, fingerprint=parent_baseline)
+
+        _diagnostic(diagnostics_root, "grid-poll-start", variant=variant)
         state = _wait_for_grid(client, variant)
+        _diagnostic(
+            diagnostics_root,
+            "grid-poll-end",
+            variant=variant,
+            signature=str(state.get("signature") or ""),
+            tileCount=int(state.get("tileCount") or 0),
+            visualReadyCount=int(state.get("visualReadyCount") or 0),
+        )
         if int(state.get("rows") or 0) != 3 or int(state.get("columns") or 0) != 3:
             raise AssertionError(f"Variant {variant}: detected grid is not 3x3: {state}")
         _assert_top_level_geometry(state, variant)
 
+        _diagnostic(diagnostics_root, "post-grid-runtime-poll-start", variant=variant)
         post_grid_runtime = _runtime_state(client, f"post-grid-{variant}")
+        _diagnostic(diagnostics_root, "post-grid-runtime-poll-end", variant=variant)
         watchdog = post_grid_runtime.get("watchdog") if isinstance(post_grid_runtime.get("watchdog"), dict) else {}
         last = watchdog.get("last") if isinstance(watchdog.get("last"), dict) else {}
         post_grid_fingerprint = str(last.get("actionFingerprint") or "")
@@ -427,32 +485,76 @@ def _run_variant(base_url: str, recorder: Recorder, root: Path, variant: str) ->
                 f"before={parent_baseline} after={post_grid_fingerprint}"
             )
 
+        _diagnostic(diagnostics_root, "completion-wait-start", variant=variant)
         _wait_for_complete_result(
             profile_dir,
             recorder,
             variant,
             require_stale_retry=(variant == "B"),
         )
+        _diagnostic(diagnostics_root, "completion-wait-end", variant=variant, success=True)
+    except BaseException as exc:
+        primary_error = exc
+        _diagnostic(
+            diagnostics_root,
+            "variant-error",
+            variant=variant,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        raise
     finally:
-        client.close()
+        try:
+            _diagnostic(diagnostics_root, "worker-close-start", variant=variant)
+            client.close()
+            _diagnostic(diagnostics_root, "worker-close-end", variant=variant, success=True)
+        except Exception as close_exc:
+            _diagnostic(
+                diagnostics_root,
+                "worker-close-error",
+                variant=variant,
+                error=f"{type(close_exc).__name__}: {close_exc}",
+                maskedPrimary=False,
+            )
+            try:
+                client._terminate_process()
+            except Exception:
+                pass
+            if primary_error is None:
+                raise
 
 
 def main() -> int:
-    temporary = Path(tempfile.mkdtemp(prefix="ares-grid-runtime-smoke-"))
+    artifact_dir = str(os.environ.get("ARES_GRID_SMOKE_ARTIFACT_DIR") or "").strip()
+    keep_artifacts = bool(artifact_dir)
+    if keep_artifacts:
+        diagnostics_root = Path(artifact_dir).expanduser().resolve()
+        temporary = diagnostics_root / "probe"
+        if temporary.exists():
+            shutil.rmtree(temporary, ignore_errors=True)
+        temporary.mkdir(parents=True, exist_ok=True)
+    else:
+        temporary = Path(tempfile.mkdtemp(prefix="ares-grid-runtime-smoke-"))
+        diagnostics_root = temporary / "diagnostics"
+    _diagnostic(diagnostics_root, "probe-start", root=str(temporary), keepArtifacts=keep_artifacts)
     server, recorder, base_url = _start_server()
     try:
-        _run_variant(base_url, recorder, temporary, "A")
-        _run_variant(base_url, recorder, temporary, "B")
+        _run_variant(base_url, recorder, temporary, "A", diagnostics_root)
+        _run_variant(base_url, recorder, temporary, "B", diagnostics_root)
         print(
             "ARES visual-grid proof passed: checkbox -> delayed existing iframe -> top-level offsets -> "
             "9 screenshot crops -> exact real SigLIP2 selection -> refreshed stable-mark clicks -> submit -> explicit success; "
             "variant B also proved image-change stale-state recovery."
         )
+        _diagnostic(diagnostics_root, "probe-end", success=True)
         return 0
+    except BaseException as exc:
+        _diagnostic(diagnostics_root, "probe-end", success=False, error=f"{type(exc).__name__}: {exc}")
+        raise
     finally:
         server.shutdown()
         server.server_close()
-        shutil.rmtree(temporary, ignore_errors=True)
+        if not keep_artifacts:
+            shutil.rmtree(temporary, ignore_errors=True)
 
 
 if __name__ == "__main__":
