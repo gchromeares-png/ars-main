@@ -26,7 +26,42 @@ jobs:
         run: python python/seleniumbase_cdp/vision_runtime_bootstrap.py --prepare
 
       - name: Compile smoke probe
-        run: python -m py_compile python/seleniumbase_cdp/grid_runtime_smoke_probe.py
+        run: python -m py_compile python/seleniumbase_cdp/grid_runtime_smoke_probe.py python/seleniumbase_cdp/vision_inference_service.py
+
+      - name: Start and warm shared SigLIP2 service
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $diag = Join-Path $env:RUNNER_TEMP 'ares-grid-smoke-artifacts'
+          New-Item -ItemType Directory -Force -Path $diag | Out-Null
+          $token = [guid]::NewGuid().ToString('N')
+          $stdout = Join-Path $diag 'vision-service.stdout.log'
+          $stderr = Join-Path $diag 'vision-service.stderr.log'
+          $proc = Start-Process python -ArgumentList @('python/seleniumbase_cdp/vision_inference_service.py','--token',$token,'--preload') -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $deadline = (Get-Date).AddSeconds(30)
+          $ready = $null
+          while ((Get-Date) -lt $deadline) {
+            if ($proc.HasExited) { throw "Vision service exited early. stderr: $(Get-Content $stderr -Raw)" }
+            if (Test-Path $stdout) {
+              $line = Get-Content $stdout -TotalCount 1
+              if ($line) { $ready = $line | ConvertFrom-Json; break }
+            }
+            Start-Sleep -Milliseconds 250
+          }
+          if (-not $ready.url) { throw 'Vision service did not publish ready URL' }
+          $headers = @{ Authorization = "Bearer $token" }
+          $healthDeadline = (Get-Date).AddSeconds(120)
+          do {
+            try { $health = Invoke-RestMethod -Uri "$($ready.url)/health" -Headers $headers -TimeoutSec 5 } catch { $health = $null }
+            if ($health.ready) { break }
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $healthDeadline)
+          if (-not $health.ready) { throw "Vision model did not become ready. stderr: $(Get-Content $stderr -Raw)" }
+          "ARES_VISION_SERVICE_URL=$($ready.url)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ARES_VISION_SERVICE_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ARES_GRID_SMOKE_ARTIFACT_DIR=$diag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ARES_VISION_SERVICE_PID=$($proc.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Shared SigLIP2 ready at $($ready.url); PID=$($proc.Id)"
 
       - name: Diagnostic delay fixture beyond worker startup
         shell: pwsh
@@ -37,4 +72,26 @@ jobs:
           Set-Content -Path $path -Value $content -Encoding utf8
 
       - name: Run delayed iframe grid smoke variants through real SigLIP2
-        run: python python/seleniumbase_cdp/grid_runtime_smoke_probe.py
+        shell: pwsh
+        run: |
+          $diag = $env:ARES_GRID_SMOKE_ARTIFACT_DIR
+          $runLog = Join-Path $diag 'grid-smoke.console.log'
+          python python/seleniumbase_cdp/grid_runtime_smoke_probe.py 2>&1 | Tee-Object -FilePath $runLog
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stop shared vision service
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:ARES_VISION_SERVICE_PID) {
+            Stop-Process -Id ([int]$env:ARES_VISION_SERVICE_PID) -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload grid smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grid-runtime-smoke-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/ares-grid-smoke-artifacts
+          if-no-files-found: warn
+          retention-days: 7
