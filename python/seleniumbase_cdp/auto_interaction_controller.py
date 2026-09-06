@@ -9,6 +9,7 @@ _ACTION_TERMS = re.compile(
     r"(?i)(select|click|choose|mark|verify|verification|drag|slide|move|hold|"
     r"wähl|klick|markier|prüf|bestät|zieh|schieb|regler|bewegen|gedrückt)"
 )
+_MAX_GRID_ATTEMPTS = 3
 
 
 class AutoInteractionController:
@@ -34,6 +35,7 @@ class AutoInteractionController:
         self._last_grid_signature = ""
         self._last_slider_signature = ""
         self._last_action_at = 0.0
+        self._grid_attempts: Dict[str, int] = {}
 
     def poll_and_act(self) -> Dict[str, Any]:
         grid = self._grid_adapter.poll()
@@ -69,6 +71,8 @@ class AutoInteractionController:
             "vision": self._vision.status(),
             "gridSignature": self._last_grid_signature,
             "sliderSignature": self._last_slider_signature,
+            "maxGridAttempts": _MAX_GRID_ATTEMPTS,
+            "gridAttempts": dict(self._grid_attempts),
         }
         trace_path = getattr(self._trace, "path", None)
         if trace_path:
@@ -85,16 +89,39 @@ class AutoInteractionController:
     ) -> Dict[str, Any]:
         signature = str(state.get("signature") or "")
         actionable = self._actionable(state) or force_actionable
-        if not actionable or not signature or signature == self._last_grid_signature:
-            reason = "already-handled" if signature and signature == self._last_grid_signature else "not-actionable"
+        if not actionable or not signature:
             return {
                 "acted": False,
                 "kind": "image-grid",
                 "state": state,
                 "decisionSource": decision_source,
-                "reason": reason,
+                "reason": "not-actionable",
+            }
+        if signature == self._last_grid_signature:
+            return {
+                "acted": False,
+                "verified": True,
+                "kind": "image-grid",
+                "state": state,
+                "decisionSource": decision_source,
+                "reason": "already-handled",
             }
 
+        previous_attempts = int(self._grid_attempts.get(signature) or 0)
+        if previous_attempts >= _MAX_GRID_ATTEMPTS:
+            return {
+                "acted": False,
+                "verified": False,
+                "kind": "image-grid",
+                "state": state,
+                "decisionSource": decision_source,
+                "attempt": previous_attempts,
+                "maxAttempts": _MAX_GRID_ATTEMPTS,
+                "reason": "max-attempts-reached",
+            }
+
+        attempt = previous_attempts + 1
+        self._grid_attempts[signature] = attempt
         sources = source_override if source_override is not None else list(state.get("sources") or [])
         decision = self._vision.classify(str(state.get("instruction") or ""), sources)
         selected = self._selected_indexes(decision.get("selectedIndexes") or [], int(state.get("tileCount") or 0))
@@ -112,16 +139,22 @@ class AutoInteractionController:
             "selectedIndexes": selected,
             "selectedMarkIds": selected_mark_ids,
             "source": decision_source,
+            "attempt": attempt,
+            "maxAttempts": _MAX_GRID_ATTEMPTS,
         }
         self._record("decision", {"kind": "image-grid", "decision": decision})
         if not selected:
+            reason = "max-attempts-reached" if attempt >= _MAX_GRID_ATTEMPTS else "no-selection-retry"
             return {
                 "acted": False,
+                "verified": False,
                 "kind": "image-grid",
                 "state": state,
                 "decision": decision,
                 "decisionSource": decision_source,
-                "reason": "no-selection",
+                "attempt": attempt,
+                "maxAttempts": _MAX_GRID_ATTEMPTS,
+                "reason": reason,
             }
 
         self._last_action_at = time.monotonic()
@@ -133,7 +166,9 @@ class AutoInteractionController:
 
         clicked = result.get("clickedIndexes") if isinstance(result, dict) else []
         if not clicked:
-            self._record("action", {"kind": "image-grid", "decision": decision, "result": result, "verification": {"verified": False, "reason": "no-click-resolved"}})
+            verification = {"verified": False, "reason": "no-click-resolved"}
+            self._record("action", {"kind": "image-grid", "decision": decision, "result": result, "verification": verification})
+            reason = "max-attempts-reached" if attempt >= _MAX_GRID_ATTEMPTS else "no-click-retry"
             return {
                 "acted": False,
                 "verified": False,
@@ -142,22 +177,31 @@ class AutoInteractionController:
                 "decision": decision,
                 "decisionSource": decision_source,
                 "result": result,
-                "verification": {"verified": False, "reason": "no-click-resolved"},
-                "reason": "no-click-resolved",
+                "verification": verification,
+                "attempt": attempt,
+                "maxAttempts": _MAX_GRID_ATTEMPTS,
+                "reason": reason,
             }
 
-        self._last_grid_signature = signature
         verification = self._verify_grid(signature, result.get("state") if isinstance(result, dict) else None)
+        verified = bool(verification.get("verified"))
+        if verified:
+            self._last_grid_signature = signature
+            self._grid_attempts.pop(signature, None)
+        reason = "verified" if verified else ("max-attempts-reached" if attempt >= _MAX_GRID_ATTEMPTS else "verification-retry")
         self._record("action", {"kind": "image-grid", "decision": decision, "result": result, "verification": verification})
         return {
             "acted": True,
-            "verified": bool(verification.get("verified")),
+            "verified": verified,
             "kind": "image-grid",
             "state": state,
             "decision": decision,
             "decisionSource": decision_source,
             "result": result,
             "verification": verification,
+            "attempt": attempt,
+            "maxAttempts": _MAX_GRID_ATTEMPTS,
+            "reason": reason,
         }
 
     def _handle_slider(self, state: Dict[str, Any]) -> Dict[str, Any]:
