@@ -53,7 +53,7 @@ class GridSiteAdapter:
           const visible = el => {{
             if (!el?.getBoundingClientRect) return false;
             const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-            return r.width >= 24 && r.height >= 24 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
+            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
           }};
           const text = el => (el?.innerText || el?.textContent || el?.getAttribute?.('aria-label') || '').trim().replace(/\\s+/g, ' ');
           const rectOf = (el, offset) => {{
@@ -160,6 +160,7 @@ class GridSiteAdapter:
               const rects = group.tiles.map(tile => tile.getBoundingClientRect());
               const avgW = rects.reduce((a,r) => a+r.width,0)/count;
               const avgH = rects.reduce((a,r) => a+r.height,0)/count;
+              const avgSide = Math.min(avgW, avgH);
               const regular = rects.filter(r => Math.abs(r.width-avgW)<=Math.max(12,avgW*.35) && Math.abs(r.height-avgH)<=Math.max(12,avgH*.35)).length;
               const clickableFlags = group.tiles.map(tile => Boolean(tile.matches?.('button,[role="button"],[tabindex],label') || tile.onclick));
               const clickable = clickableFlags.filter(Boolean).length;
@@ -187,6 +188,14 @@ class GridSiteAdapter:
               if (group.override) score += 20;
               if (submitEl) score += 5;
               if (text(instructionEl)) score += 5;
+              if (avgSide < 20) score -= 18;
+              else if (avgSide < 40) score -= 8;
+              else if (avgSide >= 64) score += 4;
+              if (!scope.includes('/iframe')) {{
+                const viewportHits = rects.filter(r => r.right > 0 && r.bottom > 0 && r.left < viewport.width && r.top < viewport.height).length;
+                score += Math.round(12 * viewportHits / count);
+                if (viewportHits === 0) score -= 30;
+              }}
               candidates.push({{
                 kind:'image-grid', scope, score, rows, columns, tileCount:count,
                 instruction:text(instructionEl).slice(0,600), sources,
@@ -316,7 +325,7 @@ class GridSiteAdapter:
         position = GridSiteAdapter._element_position(element)
         if isinstance(position, dict):
             try:
-                return float(position.get("width") or 0) >= 24 and float(position.get("height") or 0) >= 24
+                return float(position.get("width") or 0) > 0 and float(position.get("height") or 0) > 0
             except (TypeError, ValueError):
                 return False
         return True
