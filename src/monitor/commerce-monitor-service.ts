@@ -2,11 +2,13 @@ import type { ITaskExecutor } from "../interfaces";
 import type { Task, TaskLogEntry } from "../models";
 import type { CommerceShop } from "../commerce/platforms";
 import type { CommerceProductApiRouter } from "../commerce/product-api/router";
-import type { ProductCriteria, ProductMonitorEvent } from "./models";
+import type { ProductCriteria, ProductMonitorEvent, ProductObservation } from "./models";
 import { ProductMatcher } from "./product-matcher";
 import { ProductMonitor } from "./product-monitor";
 import { getMonitorStrategy, setEarlyGateRuntime, type PreCheckoutGateEvent } from "./early-gate";
 import type { PreCheckoutGate } from "./pre-checkout-gate";
+import type { BrowserProductFallback } from "./browser-product-fallback";
+import { getDefaultBrowserProductFallback } from "./browser-product-fallback-registry";
 
 export interface ProductMonitorEventRepository {
   recordProductMonitorEvent(taskId: string, event: ProductMonitorEvent): Promise<void>;
@@ -19,6 +21,7 @@ export interface CommerceMonitorServiceOptions {
   minimumIntervalMs?: number;
   searchLimit?: number;
   preCheckoutGate?: PreCheckoutGate;
+  browserFallback?: BrowserProductFallback;
   onEvent?: (taskId: string, event: ProductMonitorEvent) => void;
   onGateEvent?: (taskId: string, event: PreCheckoutGateEvent) => void;
 }
@@ -80,6 +83,17 @@ function monitorMessage(event: ProductMonitorEvent): string {
   return `${product} · ${event.type}${stock}${price}`;
 }
 
+function browserFallbackNeeded(
+  ranked: Array<{ observation: ProductObservation; match: ReturnType<ProductMatcher["match"]> }>
+): boolean {
+  if (!ranked.length) return true;
+  return ranked.every(candidate => {
+    const source = String(candidate.observation.attributes?.["source"] ?? "");
+    const signal = String(candidate.observation.attributes?.["availabilitySignal"] ?? "");
+    return source === "generic-html" && signal === "unknown";
+  });
+}
+
 export class CommerceMonitorService implements ITaskExecutor {
   private readonly matcher = new ProductMatcher();
   private readonly monitors = new Map<string, ProductMonitor>();
@@ -89,6 +103,7 @@ export class CommerceMonitorService implements ITaskExecutor {
   private readonly defaultIntervalMs: number;
   private readonly minimumIntervalMs: number;
   private readonly searchLimit: number;
+  private readonly browserFallback?: BrowserProductFallback;
 
   constructor(
     private readonly getShop: (shopId: string) => CommerceShop | undefined,
@@ -99,6 +114,7 @@ export class CommerceMonitorService implements ITaskExecutor {
     this.defaultIntervalMs = Math.max(1, options.defaultIntervalMs ?? 30_000);
     this.minimumIntervalMs = Math.max(1, options.minimumIntervalMs ?? 1_000);
     this.searchLimit = Math.min(250, Math.max(1, options.searchLimit ?? 50));
+    this.browserFallback = options.browserFallback ?? getDefaultBrowserProductFallback();
   }
 
   onTaskUpdate(callback: (task: Task) => void): () => void {
@@ -170,6 +186,7 @@ export class CommerceMonitorService implements ITaskExecutor {
       return false;
     } finally {
       if (this.activeRuns.get(task.id) === run) this.activeRuns.delete(task.id);
+      await this.browserFallback?.cancelTask(task.id).catch(() => undefined);
     }
   }
 
@@ -221,13 +238,31 @@ export class CommerceMonitorService implements ITaskExecutor {
     const resolvedCriteria = criteria ?? getTaskProductCriteria(task);
     if (!resolvedCriteria) throw new Error("Monitoring-Task hat keine productCriteria.");
 
-    const observations = await this.productApiRouter.search(resolvedShop, resolvedCriteria, this.searchLimit);
+    let observations = await this.productApiRouter.search(resolvedShop, resolvedCriteria, this.searchLimit);
     if (signal?.aborted) return [];
 
-    const ranked = observations
+    let ranked = observations
       .map(observation => ({ observation, match: this.matcher.match(observation, resolvedCriteria) }))
       .filter(candidate => candidate.match.matched)
       .sort((a, b) => b.match.score - a.match.score);
+
+    if (this.browserFallback && browserFallbackNeeded(ranked) && !signal?.aborted) {
+      const rendered = await this.browserFallback.search(
+        task,
+        resolvedShop,
+        resolvedCriteria,
+        this.searchLimit,
+        signal
+      );
+      if (signal?.aborted) return [];
+      if (rendered.length) {
+        observations = rendered;
+        ranked = observations
+          .map(observation => ({ observation, match: this.matcher.match(observation, resolvedCriteria) }))
+          .filter(candidate => candidate.match.matched)
+          .sort((a, b) => b.match.score - a.match.score);
+      }
+    }
 
     const monitor = this.monitorFor(task.id);
     const relevantEvents: ProductMonitorEvent[] = [];
@@ -257,6 +292,7 @@ export class CommerceMonitorService implements ITaskExecutor {
 
   async cancelTask(taskId: string): Promise<void> {
     this.activeRuns.get(taskId)?.controller.abort();
+    await this.browserFallback?.cancelTask(taskId).catch(() => undefined);
   }
 
   resetTask(taskId: string): void {
@@ -270,6 +306,7 @@ export class CommerceMonitorService implements ITaskExecutor {
     this.monitors.clear();
     this.gateSignaled.clear();
     this.runtimeListeners.clear();
+    await this.browserFallback?.close().catch(() => undefined);
   }
 
   private emitTaskUpdate(task: Task): void {
