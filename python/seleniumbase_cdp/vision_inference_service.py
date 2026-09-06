@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
 
@@ -10,6 +12,18 @@ from vision_grid_classifier import VisionGridClassifier
 
 
 MAX_BODY = 24 * 1024 * 1024
+
+
+def _timing(event: str, **payload: Any) -> None:
+    print(
+        "ARES_VISION_TIMING\t" + json.dumps(
+            {"event": event, "wall": time.time(), "mono": time.monotonic(), **payload},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 class VisionService:
@@ -30,7 +44,16 @@ class VisionService:
             self._preload_started = True
 
         def run() -> None:
-            _ = self.classifier.ready
+            started = time.monotonic()
+            _timing("model-load-start", model=self.classifier.model_name)
+            ready = self.classifier.ready
+            _timing(
+                "model-load-end",
+                model=self.classifier.model_name,
+                ready=bool(ready),
+                durationMs=round((time.monotonic() - started) * 1000.0, 3),
+                error=self.classifier.error,
+            )
 
         threading.Thread(target=run, name="ares-vision-preload", daemon=True).start()
 
@@ -56,7 +79,29 @@ class VisionService:
         sources = [str(value or "") for value in raw_sources]
         with self._lock:
             self._requests += 1
-        return self.classifier.classify(instruction, sources)
+            request_number = self._requests
+        started = time.monotonic()
+        _timing("inference-start", request=request_number, tiles=len(sources))
+        try:
+            result = self.classifier.classify(instruction, sources)
+            _timing(
+                "inference-end",
+                request=request_number,
+                tiles=len(sources),
+                durationMs=round((time.monotonic() - started) * 1000.0, 3),
+                selectedIndexes=result.get("selectedIndexes") or [],
+                error=str(result.get("error") or ""),
+            )
+            return result
+        except Exception as exc:
+            _timing(
+                "inference-error",
+                request=request_number,
+                tiles=len(sources),
+                durationMs=round((time.monotonic() - started) * 1000.0, 3),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
 
 
 def handler_for(service: VisionService):
