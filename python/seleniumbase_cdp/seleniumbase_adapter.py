@@ -256,7 +256,7 @@ class SeleniumBaseCdpAdapter:
     def interaction_outcome_state(self) -> Dict[str, Any]:
         return {
             "enabled": True,
-            "mode": "event-driven-default",
+            "mode": "event-or-frame-heartbeat",
             "semantic": self._last_semantic_outcome,
             "visual": self._last_auto_result.get("outcome", from_visual_result(self._last_auto_result)),
             "instructionInput": self._last_instruction_result,
@@ -389,16 +389,36 @@ class SeleniumBaseCdpAdapter:
         events = {str(event) for event in state.get("events") or []}
         action_changed = bool(state.get("changed"))
         visual_changed = bool(events)
-        if not force and not action_changed and not visual_changed:
+        frame_heartbeat = int(state.get("iframes") or 0) > 0
+
+        last = self._last_auto_result if isinstance(self._last_auto_result, dict) else {}
+        last_reason = str(last.get("reason") or "")
+        last_attempt = int(last.get("attempt") or 0)
+        last_max_attempts = int(last.get("maxAttempts") or 3)
+        retry_pending = (
+            str(last.get("kind") or "") == "image-grid"
+            and last.get("verified") is not True
+            and last_reason not in {"max-attempts-reached", "explicit-failure"}
+            and last_attempt < last_max_attempts
+        )
+
+        if not force and not action_changed and not visual_changed and not frame_heartbeat and not retry_pending:
             return
+        if visual_changed:
+            try:
+                self._capture_for_events(state)
+            except Exception as exc:
+                self._record_debug_error("capture-for-events", exc)
+
         try:
-            self._capture_for_events(state)
-        except Exception as exc:
-            self._record_debug_error("capture-for-events", exc)
-        if not force and not action_changed:
-            return
-        try:
-            self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+            if force or action_changed:
+                self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+            else:
+                # Existing iframes need a bounded visual heartbeat because their
+                # content can change without mutating the top-level document.
+                # Retryable visual results use the same path, so a scheduled retry
+                # cannot be lost behind an unchanged main-document fingerprint.
+                self._orchestrator.run_action("visual-heartbeat", self._run_visual_auto)
         except Exception:
             pass
 
