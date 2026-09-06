@@ -318,385 +318,193 @@ class TaskRpcRuntime:
                 current_url, raw_descriptors = self._in_frames(
                     path,
                     lambda: (
-                        str(self._execute_script_retry("return window.location.href;") or ""),
-                        self._execute_script_retry(_FRAME_DESCRIPTORS_SCRIPT),
+                        str(self.sb.get_current_url() or "") if not path else str(self._execute_script_in_frame_path(path, "return window.location.href;", []) or ""),
+                        self._execute_script_in_frame_path(path, _FRAME_DESCRIPTORS_SCRIPT, []),
                     ),
                 )
-                descriptors = raw_descriptors if isinstance(raw_descriptors, list) else []
-                if path and key in entries and current_url:
-                    entries[key]["url"] = current_url
-                for raw in descriptors:
-                    if not isinstance(raw, dict):
-                        continue
-                    selector = str(raw.get("selector") or "").strip()
-                    if not selector:
-                        continue
-                    child_path = [*path, selector]
-                    child_key = tuple(child_path)
-                    if child_key in entries:
-                        continue
+            except Exception:
+                continue
+            if path:
+                entries[key] = {
+                    "path": list(path),
+                    "url": current_url,
+                    "name": entries.get(key, {}).get("name", ""),
+                    "depth": len(path),
+                }
+            if not isinstance(raw_descriptors, list):
+                continue
+            for raw in raw_descriptors:
+                if not isinstance(raw, dict):
+                    continue
+                selector = str(raw.get("selector") or "").strip()
+                if not selector:
+                    continue
+                child_path = [*path, selector]
+                child_key = tuple(child_path)
+                if child_key not in entries:
                     entries[child_key] = {
                         "path": child_path,
                         "url": str(raw.get("src") or ""),
                         "name": str(raw.get("name") or ""),
                         "depth": len(child_path),
                     }
-                    if len(entries) < MAX_DISCOVERED_FRAMES:
-                        queue_paths.append(child_path)
-            except Exception:
-                continue
-
+                if child_key not in visited and len(entries) < MAX_DISCOVERED_FRAMES:
+                    queue_paths.append(child_path)
         return list(entries.values())
-
-    def rpc(self, command: Dict[str, Any]) -> Dict[str, Any]:
-        self._sync_newest_target()
-        action = str(command.get("action") or "")
-        if action == "title":
-            return {"result": str(self.sb.get_title() or ""), "url": str(self.sb.get_current_url() or "")}
-        if action == "page-state":
-            state = self.page_state()
-            return {"result": state, "url": str(state.get("url") or "")}
-        if action == "evaluate-page":
-            result = self._evaluate_function(str(command.get("script") or ""), command.get("args") if isinstance(command.get("args"), list) else [])
-            return {"result": result, "url": str(self.sb.get_current_url() or "")}
-        if action == "wait-load-state":
-            self._wait_ready(int(command.get("timeoutMs") or 15_000))
-            return {"result": True, "url": str(self.sb.get_current_url() or "")}
-        if action == "bring-to-front":
-            bring = getattr(self.sb, "bring_active_window_to_front", None)
-            if callable(bring):
-                bring()
-            return {"result": True}
-        if action in {"mouse-move", "mouse-click"}:
-            return {"result": self._mouse(action, command)}
-
-        locator = command.get("locator")
-        if not isinstance(locator, dict):
-            raise ValueError(f"RPC action {action!r} requires locator")
-        frame_path = [str(value) for value in locator.get("framePath") or [] if str(value)]
-        return {
-            "result": self._in_frames(frame_path, lambda: self._locator_op(action, locator, command)),
-            "url": str(self.sb.get_current_url() or ""),
-        }
 
     def _execute_script_in_frame_path(self, frame_path: Iterable[str], script: str, args: Iterable[Any]) -> Any:
         path = [str(value) for value in frame_path if str(value)]
         if not path:
             return self.adapter.execute_script(script, *list(args))
-        wrapper = r"""
-const framePath = Array.isArray(arguments[0]) ? arguments[0] : [];
-const source = String(arguments[1] || '');
-const callArgs = Array.isArray(arguments[2]) ? arguments[2] : [];
-let targetWindow = window;
-for (const rawSelector of framePath) {
-  const selector = String(rawSelector || '');
-  let frame;
-  try {
-    frame = targetWindow.document.querySelector(selector);
-  } catch (error) {
-    return {__aresFrameExecutionError:true, selector, message:String(error?.message || error)};
-  }
-  if (!frame || !frame.contentWindow) return {__aresFrameMissing:true, selector};
-  targetWindow = frame.contentWindow;
-}
-try {
-  const fn = targetWindow.Function(source);
-  return fn.apply(targetWindow, callArgs);
-} catch (error) {
-  return {__aresFrameExecutionError:true, message:String(error?.message || error)};
-}
-"""
-        value = self.adapter.execute_script(wrapper, path, script, list(args))
-        if isinstance(value, dict) and value.get("__aresFrameMissing"):
-            raise LookupError(f"Frame path no longer resolves at {value.get('selector')}")
-        if isinstance(value, dict) and value.get("__aresFrameExecutionError"):
-            raise RuntimeError(
-                "Frame execution is not script-accessible; an attached OOPIF CDP session is required: "
-                f"{value.get('message') or 'unknown frame execution error'}"
-            )
-        return value
-
-    def _execute_script_retry_for_path(self, frame_path: Iterable[str], script: str, *args: Any) -> Any:
-        last: Exception | None = None
-        path = [str(value) for value in frame_path if str(value)]
-        for attempt in range(3):
-            try:
-                return self._execute_script_in_frame_path(path, script, args)
-            except Exception as exc:
-                last = exc
-                message = str(exc).lower()
-                if not any(marker in message for marker in _CONTEXT_RETRY_ERRORS) or attempt >= 2:
-                    raise
-                time.sleep(0.10 * (attempt + 1))
-                self._sync_newest_target()
-                self._wait_ready(2_000)
-        if last:
-            raise last
-        return None
-
-    def _execute_script_retry(self, script: str, *args: Any) -> Any:
-        return self._execute_script_retry_for_path(self._active_frame_path, script, *args)
+        return self._in_frames(path, lambda: self.adapter.execute_script(script, *list(args)))
 
     def _frame_viewport_offset(self, frame_path: Iterable[str]) -> tuple[float, float]:
         path = [str(value) for value in frame_path if str(value)]
         if not path:
             return 0.0, 0.0
-        geometry = self._execute_script_retry_for_path(
-            [],
-            r"""
-const framePath = Array.isArray(arguments[0]) ? arguments[0] : [];
-let targetWindow = window;
-let x = 0;
-let y = 0;
-for (const rawSelector of framePath) {
-  const selector = String(rawSelector || '');
-  let frame;
-  try {
-    frame = targetWindow.document.querySelector(selector);
-  } catch (error) {
-    return {__aresFrameExecutionError:true, selector, message:String(error?.message || error)};
-  }
-  if (!frame || !frame.contentWindow) return {__aresFrameMissing:true, selector};
-  frame.scrollIntoView({block:'nearest', inline:'nearest'});
-  const r = frame.getBoundingClientRect();
-  if (r.width <= 0 || r.height <= 0) return {__aresFrameInvisible:true, selector};
-  x += r.left + Number(frame.clientLeft || 0);
-  y += r.top + Number(frame.clientTop || 0);
-  targetWindow = frame.contentWindow;
-}
-return {x, y};
-""",
-            path,
-        )
-        if isinstance(geometry, dict) and geometry.get("__aresFrameMissing"):
-            raise LookupError(f"Frame path no longer resolves at {geometry.get('selector')}")
-        if isinstance(geometry, dict) and geometry.get("__aresFrameInvisible"):
-            raise LookupError(f"Frame is not visible for native click: {geometry.get('selector')}")
-        if isinstance(geometry, dict) and geometry.get("__aresFrameExecutionError"):
-            raise RuntimeError(
-                "Nested frame geometry is not script-accessible; an attached OOPIF CDP session is required: "
-                f"{geometry.get('message') or 'unknown frame geometry error'}"
-            )
-        if not isinstance(geometry, dict):
-            raise RuntimeError("Frame viewport offset could not be resolved")
-        return float(geometry.get("x") or 0.0), float(geometry.get("y") or 0.0)
+        x = 0.0
+        y = 0.0
+        prefix: List[str] = []
+        for selector in path:
+            box = self._execute_script_in_frame_path(prefix, """
+const selector=String(arguments[0]||'');
+const frame=document.querySelector(selector);
+if(!frame) return null;
+frame.scrollIntoView({block:'nearest',inline:'nearest'});
+const r=frame.getBoundingClientRect();
+return {x:r.left+Number(frame.clientLeft||0),y:r.top+Number(frame.clientTop||0),width:r.width,height:r.height};
+""", [selector])
+            if not isinstance(box, dict) or float(box.get("width") or 0) <= 0 or float(box.get("height") or 0) <= 0:
+                raise LookupError(f"Frame is not visible for native click: {selector}")
+            x += float(box.get("x") or 0.0)
+            y += float(box.get("y") or 0.0)
+            prefix.append(selector)
+        return x, y
 
-    @staticmethod
-    def _assert_native_click_probe(probe: Any, selector: str) -> Dict[str, Any]:
-        if isinstance(probe, dict) and probe.get("__aresMissing"):
-            raise LookupError(f"No element matched locator: {selector}")
-        if not isinstance(probe, dict) or not bool(probe.get("nativeClick")):
-            raise RuntimeError(f"Native click geometry could not be resolved for {selector}")
-        if not bool(probe.get("visible")):
-            raise RuntimeError(f"Native click target is not visible: {selector}")
-        if not bool(probe.get("enabled")):
-            raise RuntimeError(f"Native click target is disabled: {selector}")
-        if not bool(probe.get("hit")):
-            raise RuntimeError(f"Native click hit-test failed: {selector}")
-        if float(probe.get("width") or 0.0) <= 0 or float(probe.get("height") or 0.0) <= 0:
-            raise RuntimeError(f"Native click target has no stable box: {selector}")
-        return probe
+    def _in_frames(self, frame_path: Iterable[str], callback: Any) -> Any:
+        path = [str(value) for value in frame_path if str(value)]
+        if not path:
+            return callback()
+        switched = False
+        try:
+            for selector in path:
+                self.sb.switch_to_frame(selector)
+                switched = True
+            return callback()
+        finally:
+            if switched:
+                try:
+                    self.sb.switch_to_default_content()
+                except Exception:
+                    pass
 
-    @staticmethod
-    def _native_probe_stable(previous: Dict[str, Any], current: Dict[str, Any], tolerance: float = 1.5) -> bool:
-        return all(
-            abs(float(previous.get(key) or 0.0) - float(current.get(key) or 0.0)) <= tolerance
-            for key in ("x", "y", "width", "height")
-        )
+    def rpc(self, command: Dict[str, Any]) -> Dict[str, Any]:
+        method = str(command.get("method") or "").strip()
+        params = command.get("params") if isinstance(command.get("params"), dict) else {}
+        if method == "browser.newPage":
+            url = str(params.get("url") or "about:blank")
+            self.sb.open_new_tab(url)
+            self._sync_newest_target()
+            return {"result": True, "url": str(self.sb.get_current_url() or url)}
+        if method == "browser.pages":
+            return {"result": self._page_descriptors()}
+        if method == "page.state":
+            return {"result": self.page_state()}
+        if method == "page.evaluate":
+            frame_path = [str(value) for value in params.get("framePath") or []]
+            script = str(params.get("script") or "")
+            args = list(params.get("args") or [])
+            return {"result": self._execute_script_in_frame_path(frame_path, script, args)}
+        if method == "locator.count":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="count")}
+        if method == "locator.isVisible":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="is-visible")}
+        if method == "locator.isEnabled":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="is-enabled")}
+        if method == "locator.inputValue":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="input-value")}
+        if method == "locator.innerText":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="inner-text")}
+        if method == "locator.allTextContents":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="all-text-contents")}
+        if method == "locator.boundingBox":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="bounding-box")}
+        if method == "locator.scrollIntoViewIfNeeded":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="scroll-into-view")}
+        if method == "locator.focus":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="focus")}
+        if method == "locator.click":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="click")}
+        if method == "locator.fill":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="fill", payload={"value": params.get("value")})}
+        if method == "locator.selectOption":
+            return {"result": self._locator(frame_path=params.get("framePath"), selector=params.get("selector"), text=params.get("text"), nth=params.get("nth"), action="select-option", payload={"value": params.get("value")})}
+        if method == "page.waitForTimeout":
+            time.sleep(max(0.0, float(params.get("ms") or 0.0)) / 1000.0)
+            return {"result": True}
+        if method == "page.capture":
+            return {"result": self._capture_page(params)}
+        if method == "page.reload":
+            self.sb.refresh()
+            self._sync_newest_target()
+            return {"result": True, "url": str(self.sb.get_current_url() or "")}
+        if method == "page.close":
+            self.sb.close()
+            self._sync_newest_target()
+            return {"result": True}
+        raise ValueError(f"Unsupported RPC method: {method}")
 
-    def _dispatch_mouse_event(
-        self,
-        event_type: str,
-        x: float,
-        y: float,
-        *,
-        button: Any = None,
-        buttons: int | None = None,
-        click_count: int | None = None,
-    ) -> None:
-        input_domain = getattr(mycdp, "input_", None)
-        dispatch = getattr(input_domain, "dispatch_mouse_event", None)
-        if not callable(dispatch):
-            raise RuntimeError("CDP Input.dispatchMouseEvent is unavailable")
-        kwargs: Dict[str, Any] = {
-            "type_": event_type,
-            "x": float(x),
-            "y": float(y),
-            "pointer_type": "mouse",
-        }
-        if button is not None:
-            kwargs["button"] = button
-        if buttons is not None:
-            kwargs["buttons"] = int(buttons)
-        if click_count is not None:
-            kwargs["click_count"] = int(click_count)
-        tab = self.sb.get_active_tab()
-        loop = self.sb.get_event_loop()
-        loop.run_until_complete(tab.send(dispatch(**kwargs)))
-
-    def _dispatch_native_click(self, x: float, y: float) -> None:
-        input_domain = getattr(mycdp, "input_", None)
-        mouse_button = getattr(input_domain, "MouseButton", None)
-        left = getattr(mouse_button, "LEFT", None)
-        if left is None:
-            raise RuntimeError("CDP left mouse button enum is unavailable")
-        self._dispatch_mouse_event("mouseMoved", x, y, buttons=0)
-        self._dispatch_mouse_event("mousePressed", x, y, button=left, buttons=1, click_count=1)
-        self._dispatch_mouse_event("mouseReleased", x, y, button=left, buttons=0, click_count=1)
-
-    def _native_locator_click(
-        self,
-        locator: Dict[str, Any],
-        selector: str,
-        nth: int,
-        text_spec: Dict[str, str] | None,
-    ) -> Dict[str, Any]:
-        frame_path = [str(value) for value in locator.get("framePath") or [] if str(value)]
-        offset_x, offset_y = self._frame_viewport_offset(frame_path)
-        previous: Dict[str, Any] | None = None
-        stable: Dict[str, Any] | None = None
-        deadline = time.monotonic() + 0.45
-        while time.monotonic() < deadline:
-            probe = self._assert_native_click_probe(
-                self._execute_script_retry(locator_script(), selector, nth, text_spec, "click", {}),
-                selector,
-            )
-            if previous is not None and self._native_probe_stable(previous, probe):
-                stable = probe
-                break
-            previous = probe
-            time.sleep(0.05)
-        if stable is None:
-            raise RuntimeError(f"Native click target position did not stabilize: {selector}")
-
-        x = offset_x + float(stable.get("x") or 0.0)
-        y = offset_y + float(stable.get("y") or 0.0)
-        self._dispatch_native_click(x, y)
-        self._sync_newest_target()
-        return {
-            "clicked": True,
-            "native": True,
-            "inputMethod": "Input.dispatchMouseEvent",
-            "x": x,
-            "y": y,
-        }
-
-    def _locator_op(self, action: str, locator: Dict[str, Any], command: Dict[str, Any]) -> Any:
-        selector = str(locator.get("selector") or "")
-        if not selector:
-            raise ValueError("locator selector is empty")
-        nth = int(locator.get("nth")) if isinstance(locator.get("nth"), (int, float)) else -1
-        text_spec = pattern_payload(locator.get("hasText"))
-        if action == "wait-for":
-            deadline = time.monotonic() + max(0.25, float(command.get("timeoutMs") or 15_000) / 1000.0)
-            state = str(command.get("state") or "visible")
-            while time.monotonic() < deadline:
-                probe = "is-visible" if state == "visible" else "count"
-                value = self._execute_script_retry(locator_script(), selector, nth, text_spec, probe, {})
-                if (state == "visible" and value is True) or (state != "visible" and int(value or 0) > 0):
-                    return True
-                time.sleep(0.05)
-            raise TimeoutError(f"Locator wait timed out: {selector}")
-        if action in {"evaluate-one", "evaluate-all"}:
-            return self._locator_evaluate(
-                selector,
-                nth,
-                text_spec,
-                str(command.get("script") or ""),
-                command.get("args") if isinstance(command.get("args"), list) else [],
-                all_items=action == "evaluate-all",
-            )
-        if action == "click":
-            return self._native_locator_click(locator, selector, nth, text_spec)
-        result = self._execute_script_retry(
+    def _locator(self, *, frame_path: Any, selector: Any, text: Any, nth: Any, action: str, payload: Dict[str, Any] | None = None) -> Any:
+        frame_path_list = [str(value) for value in frame_path or []]
+        selector_text = str(selector or "").strip()
+        if not selector_text:
+            raise ValueError(f"{action} requires selector")
+        text_spec = pattern_payload(text)
+        nth_value = -1 if nth is None else int(nth)
+        result = self._execute_script_in_frame_path(
+            frame_path_list,
             locator_script(),
-            selector,
-            nth,
-            text_spec,
-            action,
-            {"value": command.get("value"), "options": command.get("options") or {}},
+            [selector_text, nth_value, text_spec, action, payload or {}],
         )
         if isinstance(result, dict) and result.get("__aresMissing"):
-            if action == "count":
-                return 0
-            if action in {"is-visible", "is-enabled"}:
+            return None
+        if action == "click" and isinstance(result, dict) and result.get("nativeClick"):
+            if not result.get("visible") or not result.get("enabled") or not result.get("hit"):
                 return False
-            if action in {"input-value", "inner-text"}:
-                return ""
-            if action == "bounding-box":
-                return None
-            raise LookupError(f"No element matched locator: {selector}")
-        if action == "fill" and isinstance(result, dict) and not bool(result.get("verified")):
-            raise RuntimeError(f"fill readback verification failed for {selector}")
+            offset_x, offset_y = self._frame_viewport_offset(frame_path_list)
+            x = float(result.get("x") or 0.0) + offset_x
+            y = float(result.get("y") or 0.0) + offset_y
+            return bool(self._native_click(x, y))
         return result
 
-    def _locator_evaluate(
-        self,
-        selector: str,
-        nth: int,
-        text_spec: Dict[str, str] | None,
-        function_source: str,
-        args: List[Any],
-        *,
-        all_items: bool,
-    ) -> Any:
-        script = r"""
-const selector=String(arguments[0]||''), nth=Number(arguments[1]??-1), spec=arguments[2], fnSource=String(arguments[3]||''), extra=Array.isArray(arguments[4])?arguments[4]:[];
-let items=Array.from(document.querySelectorAll(selector));
-if(spec&&spec.source!==undefined){const rx=new RegExp(String(spec.source||''),String(spec.flags||'').replace(/g/g,''));items=items.filter(el=>rx.test(String(el.innerText||el.textContent||el.getAttribute('value')||el.getAttribute('aria-label')||'')));}
-const fn=(0,eval)(`(${fnSource})`); if(arguments[5]) return fn(items,...extra); const el=nth>=0?items[nth]:items[0]; if(!el)return {__aresMissing:true}; return fn(el,...extra);
-"""
-        value = self._execute_script_retry(script, selector, nth, text_spec, function_source, args, all_items)
-        if isinstance(value, dict) and value.get("__aresMissing"):
-            raise LookupError(f"No element matched locator: {selector}")
-        return value
-
-    def _evaluate_function(self, source: str, args: List[Any]) -> Any:
-        if not source:
-            return None
-        if source.lstrip().startswith(("return ", "const ", "let ", "var ")) or ("function" not in source and "=>" not in source):
-            return self._execute_script_retry(source, *args)
-        return self._execute_script_retry(
-            "const fn=(0,eval)(`(${arguments[0]})`); return fn(...arguments[1]);",
-            source,
-            args,
-        )
-
-    def _in_frames(self, frame_path: Iterable[str], action: Any) -> Any:
-        previous_path = self._active_frame_path
-        self._active_frame_path = [str(value) for value in frame_path if str(value)]
+    def _native_click(self, x: float, y: float) -> bool:
         try:
-            return action()
-        finally:
-            self._active_frame_path = previous_path
-
-    def _wait_ready(self, timeout_ms: int) -> None:
-        deadline = time.monotonic() + max(0.25, timeout_ms / 1000.0)
-        while time.monotonic() < deadline:
-            try:
-                if str(self.adapter.execute_script("return document.readyState;") or "") in {"interactive", "complete"}:
-                    return
-            except Exception:
-                pass
-            time.sleep(0.05)
-        raise TimeoutError("document.readyState did not become interactive")
-
-    def _mouse(self, action: str, command: Dict[str, Any]) -> bool:
-        x, y = float(command.get("x") or 0), float(command.get("y") or 0)
-        hit = self._execute_script_retry_for_path(
-            [],
-            "return !!document.elementFromPoint(Number(arguments[0]), Number(arguments[1]));",
-            x,
-            y,
-        )
-        if not hit:
-            return False
-        if action == "mouse-move":
-            self._dispatch_mouse_event("mouseMoved", x, y, buttons=0)
+            self.sb.gui_click_x_y(float(x), float(y), timeframe=0.18)
             return True
-        self._dispatch_native_click(x, y)
-        self._sync_newest_target()
-        return True
+        except Exception:
+            return False
+
+    def _page_descriptors(self) -> List[Dict[str, Any]]:
+        try:
+            tabs = list(self.sb.get_tabs() or [])
+        except Exception:
+            tabs = []
+        result: List[Dict[str, Any]] = []
+        for index, tab in enumerate(tabs):
+            result.append({
+                "id": str(getattr(tab, "target_id", None) or getattr(getattr(tab, "target", None), "target_id", None) or index),
+                "url": str(getattr(tab, "url", "") or ""),
+                "active": index == len(tabs) - 1,
+            })
+        return result
+
+    def _capture_page(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        path = Path(str(params.get("path") or "")).expanduser().resolve()
+        if not str(path):
+            raise ValueError("page.capture requires path")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.sb.save_screenshot(path.name, folder=str(path.parent))
+        return {"path": str(path), "exists": path.exists(), "bytes": path.stat().st_size if path.exists() else 0}
 
 
 def run(start: Dict[str, Any]) -> int:
@@ -733,6 +541,7 @@ def run(start: Dict[str, Any]) -> int:
             try:
                 command = commands.get(timeout=0.25)
             except queue.Empty:
+                adapter.poll_runtime()
                 continue
             request_id = str(command.get("requestId") or "")
             command_type = str(command.get("type") or "")
