@@ -5,6 +5,7 @@ import io
 import os
 import re
 import threading
+import time
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, Iterable, List
@@ -30,6 +31,7 @@ class VisionGridClassifier:
         self._image: Any = None
         self._device = "cpu"
         self._error = ""
+        self._load_retry_at = 0.0
         self._lock = threading.RLock()
 
     @property
@@ -178,11 +180,15 @@ class VisionGridClassifier:
     def _load(self) -> bool:
         if self._model is not None:
             return True
-        if self._error:
+        now = time.monotonic()
+        if self._error and now < self._load_retry_at:
             return False
         with self._lock:
             if self._model is not None:
                 return True
+            now = time.monotonic()
+            if self._error and now < self._load_retry_at:
+                return False
             try:
                 import torch
                 from PIL import Image
@@ -195,9 +201,14 @@ class VisionGridClassifier:
                 self._model = AutoModel.from_pretrained(self.model_name, local_files_only=self.offline)
                 self._model.to(self._device)
                 self._model.eval()
+                self._error = ""
+                self._load_retry_at = 0.0
                 return True
             except Exception as exc:
+                self._model = None
+                self._processor = None
                 self._error = f"Vision model unavailable: {exc}"
+                self._load_retry_at = time.monotonic() + 5.0
                 return False
 
     def _read_image(self, source: str) -> Any:
