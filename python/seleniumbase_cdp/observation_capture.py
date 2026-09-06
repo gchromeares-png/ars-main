@@ -18,7 +18,6 @@ class ObservationCapture:
         self._root.mkdir(parents=True, exist_ok=True)
         self._counter = 0
         self._last: Dict[str, Any] = {"captured": False, "reason": "not-run"}
-        self.capture("session-start", generation=0, force=True)
 
     @property
     def root(self) -> Path:
