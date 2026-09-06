@@ -10,7 +10,9 @@ import {
   SeleniumBaseProfileBrowserController,
   type SeleniumBaseProfileBrowserStatus
 } from "./seleniumbase-profile-browser-controller";
+import { SeleniumBaseProductMonitorBrowserAdapter } from "./seleniumbase-product-monitor-browser-adapter";
 import { SeleniumBaseVisionRuntime } from "./seleniumbase-vision-runtime";
+import { setDefaultBrowserProductFallback } from "../monitor/browser-product-fallback-registry";
 
 export type ProfileBrowserStatus = SeleniumBaseProfileBrowserStatus;
 
@@ -22,6 +24,7 @@ export interface ProfileBrowserOpenOptions {
 
 export class ProfileBrowserController {
   private readonly seleniumBase: SeleniumBaseProfileBrowserController;
+  private readonly productMonitorBrowser: SeleniumBaseProductMonitorBrowserAdapter;
   private readonly visionRuntime = new SeleniumBaseVisionRuntime();
 
   constructor(
@@ -32,6 +35,8 @@ export class ProfileBrowserController {
     registerProfilePaymentIpc(userDataRoot);
     registerProfileCookieSnapshotIpc(userDataRoot, this);
     this.seleniumBase = new SeleniumBaseProfileBrowserController(profileRoot, getProxy);
+    this.productMonitorBrowser = new SeleniumBaseProductMonitorBrowserAdapter(profileRoot, getProxy);
+    setDefaultBrowserProductFallback(this.productMonitorBrowser);
     this.registerSeleniumBaseIpc();
   }
 
@@ -72,8 +77,11 @@ export class ProfileBrowserController {
     return this.seleniumBase.isOpen(profileId);
   }
 
-  closeAll(): Promise<void> {
-    return this.seleniumBase.closeAll();
+  async closeAll(): Promise<void> {
+    await Promise.all([
+      this.seleniumBase.closeAll(),
+      this.productMonitorBrowser.close()
+    ]);
   }
 
   private registerSeleniumBaseIpc(): void {
