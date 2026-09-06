@@ -229,6 +229,7 @@ def _start(command: Dict[str, Any]) -> int:
             try:
                 next_command = commands.get(timeout=0.4)
             except queue.Empty:
+                adapter.poll_runtime()
                 continue
 
             command_type = str(next_command.get("type") or "")

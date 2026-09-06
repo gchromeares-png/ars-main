@@ -278,6 +278,10 @@ class SeleniumBaseCdpAdapter:
     def get_snapshot_cookies(self) -> List[Dict[str, Any]]:
         return [self._cookie_to_snapshot(cookie) for cookie in self._sb.get_all_cookies()]
 
+    def poll_runtime(self) -> None:
+        if not self._closed:
+            self._poll_observation_watchdog()
+
     def is_running(self) -> bool:
         if self._closed:
             return False
