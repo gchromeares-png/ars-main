@@ -88,11 +88,13 @@ def _shared_logits(
     torch = classifier._torch
     device = classifier._device
 
+    # Start before decoding so this latency is directly comparable to the
+    # current production classify() path, which includes tile decoding too.
+    started = time.perf_counter()
     images = [classifier._read_image(source) for source in sources]
     if any(image is None for image in images):
         raise AssertionError("Shared SigLIP path could not decode every grid tile")
 
-    started = time.perf_counter()
     inputs = processor(images=images, return_tensors="pt")
     inputs = _to_device(inputs, device)
     image_kwargs = {
