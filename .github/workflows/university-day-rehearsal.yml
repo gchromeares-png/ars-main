@@ -1,0 +1,63 @@
+name: University Day Rehearsal
+
+on:
+  push:
+    branches:
+      - tmp/university-day-rehearsal-20260907
+
+jobs:
+  runtime-rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ARES_RUN_BROWSER_INTEGRATION: "1"
+      ARES_BROWSER_WORKER_PROCESSES: "4"
+      ARES_SHARED_VISION_DISABLED: "1"
+    steps:
+      - name: Checkout exact rehearsal head
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install SeleniumBase task runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build production backend
+        run: npm run build:backend
+
+      - name: Prove four real production worker processes and watchdog recovery
+        run: npx jest --runInBand tests/browser-worker-watchdog.integration.test.ts
+
+      - name: Prove real SeleniumBase browser context lifecycle
+        run: npx jest --runInBand tests/browser-runtime.integration.test.ts
+
+      - name: Prove isolated monitor to auto-checkout handoff
+        run: npx jest --runInBand tests/auto-checkout-parallel.integration.test.ts
+
+      - name: Prove task-seeded interaction variation and replay
+        run: npx jest --runInBand tests/interaction-engine-variation.test.ts
+
+      - name: Prove payment preparation and vault boundaries
+        run: >-
+          npx jest --runInBand
+          tests/payment-preparation.test.ts
+          tests/payment-fixture.integration.test.ts
+          tests/profile-payment-vault.test.ts
+          tests/payment-persistence-safety.test.ts
+
+      - name: Prove browser runtime wiring remains centralized
+        run: >-
+          npx jest --runInBand
+          tests/browser-worker-architecture.test.ts
+          tests/browser-core-migration.test.ts
