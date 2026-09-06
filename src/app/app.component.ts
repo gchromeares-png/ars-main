@@ -250,7 +250,9 @@ export class AppComponent implements OnInit, OnDestroy {
     const result = await this.electron.getProfiles();
     if (!result.success) return;
     this.profiles = (result.profiles as AresProfile[]).map(profile => toProfileV2Draft(profile));
-    if (!this.selectedProfileId && this.profiles.length > 0) this.selectedProfileId = this.profiles[0].id;
+    if (!this.selectedProfileId && this.profiles.length > 0 && this.taskNeedsCheckoutSession) {
+      this.selectedProfileId = this.profiles[0].id;
+    }
   }
 
   async loadProxies(): Promise<void> {
@@ -534,10 +536,12 @@ export class AppComponent implements OnInit, OnDestroy {
           : "Für diesen Shop ist kein Browser-Checkout-Executor verfügbar.";
         return;
       }
-      if (this.taskProxyMode === "proxy" && !this.selectedTaskProxyId) {
-        this.error = "Bitte einen Proxy für die Checkout-Session auswählen.";
-        return;
-      }
+    }
+    if (this.taskProxyMode === "proxy" && !this.selectedTaskProxyId) {
+      this.error = needsCheckout
+        ? "Bitte einen Proxy für die Checkout-Session auswählen."
+        : "Bitte einen Proxy für die Monitor-Runtime auswählen.";
+      return;
     }
 
     const prefix = earlyGate ? "gate" : this.taskMode === "auto-checkout" ? "auto" : "monitor";
@@ -547,6 +551,14 @@ export class AppComponent implements OnInit, OnDestroy {
       mode: this.taskProxyMode,
       ...(this.taskProxyMode === "proxy" ? { proxyId: this.selectedTaskProxyId } : {})
     };
+    const runtimeProfile = this.selectedProfileId
+      ? this.profiles.find(profile => profile.id === this.selectedProfileId)
+      : undefined;
+    const runtimeBrowser = {
+      ...(runtimeProfile?.id ? { runtimeProfileId: runtimeProfile.id } : {}),
+      ...(runtimeProfile?.browser?.userAgent ? { runtimeUserAgent: runtimeProfile.browser.userAgent } : {}),
+      ...(runtimeProfile?.preferredProxyId ? { runtimePreferredProxyId: runtimeProfile.preferredProxyId } : {})
+    };
 
     const monitorAction = needsCheckout
       ? {
@@ -554,9 +566,15 @@ export class AppComponent implements OnInit, OnDestroy {
           profileId: this.selectedProfileId,
           proxySelection,
           headless: this.headless,
-          paymentEnabled: this.taskPaymentEnabled
+          paymentEnabled: this.taskPaymentEnabled,
+          ...runtimeBrowser
         }
-      : { mode: "monitor-only" };
+      : {
+          mode: "monitor-only",
+          proxySelection,
+          headless: this.headless,
+          ...runtimeBrowser
+        };
 
     const data: Record<string, unknown> = {
       monitorIntervalMs: intervalSeconds * 1_000,
@@ -595,7 +613,7 @@ export class AppComponent implements OnInit, OnDestroy {
       ? `Early-Gate-Task ${result.taskId} erstellt. ARES startet den Browser erst beim passiven Gate-Signal.`
       : this.taskMode === "auto-checkout"
         ? `Auto-Checkout-Task ${result.taskId} erstellt. Bei Verfügbarkeit startet ARES genau eine isolierte Checkout-Session.`
-        : `Monitoring-Task ${result.taskId} erstellt.`;
+        : `Monitoring-Task ${result.taskId} erstellt. Chromium wird nur bei leerem/unklarem Fast-Path zugeschaltet.`;
     this.taskName = "";
     this.searchTerm = "";
     this.earlyGateProductName = "";
@@ -690,23 +708,21 @@ export class AppComponent implements OnInit, OnDestroy {
 
   getTaskProfileName(task: TaskView): string {
     let profileId = "";
-    if (this.isAutoCheckoutTask(task)) {
+    if (this.isMonitorTask(task)) {
       const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
-      profileId = String(action?.["profileId"] ?? "");
-    } else if (!this.isMonitorTask(task)) {
+      profileId = String(action?.[this.isAutoCheckoutTask(task) ? "profileId" : "runtimeProfileId"] ?? "");
+    } else {
       profileId = String(task.config.data?.["profileId"] ?? "");
     }
-    if (!profileId) return this.isMonitorOnlyTask(task) ? "nicht benötigt" : "kein Profil";
+    if (!profileId) return this.isMonitorOnlyTask(task) ? "Runtime-Profil optional" : "kein Profil";
     return this.profiles.find(profile => profile.id === profileId)?.name ?? profileId;
   }
 
   getTaskProxyStatus(task: TaskView): string {
-    if (this.isMonitorOnlyTask(task)) return "nicht benötigt";
-
-    if (this.isAutoCheckoutTask(task)) {
+    if (this.isMonitorTask(task)) {
       const action = task.config.data?.["monitorAction"] as Record<string, unknown> | undefined;
       const selection = action?.["proxySelection"] as ProxySelection | undefined;
-      const profileId = String(action?.["profileId"] ?? "");
+      const profileId = String(action?.[this.isAutoCheckoutTask(task) ? "profileId" : "runtimeProfileId"] ?? "");
       return this.proxySelectionLabel(selection, profileId);
     }
 
@@ -804,6 +820,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   getTaskCaptchaStatus(task: TaskView): string {
+    if (this.isMonitorOnlyTask(task)) return "HTTP fast path · SeleniumBase fallback bei Bedarf";
     if (this.isMonitorTask(task)) return "Browser startet erst beim Checkout-Trigger";
     const data = task.config.data ?? {};
     const value = data["liveChallengeStatus"] ?? data["captchaStatus"] ?? data["challengeStatus"];
