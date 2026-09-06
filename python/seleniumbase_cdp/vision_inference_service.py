@@ -175,7 +175,7 @@ def main() -> int:
         "url": f"http://{host}:{port}",
         "model": service.classifier.model_name,
         "preloading": bool(args.preload),
-        "selectionPolicy": "huggingface-siglip2-sigmoid",
+        "selectionPolicy": "prompt-ensemble-raw-logit",
     }), flush=True)
     if args.preload:
         service.preload_async()
