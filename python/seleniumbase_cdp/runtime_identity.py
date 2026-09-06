@@ -182,6 +182,14 @@ class BrowserRuntimeIdentity:
         self._write(metadata)
         return metadata
 
+    def publish_metadata(self, metadata: Dict[str, Any]) -> None:
+        payload = dict(metadata)
+        payload["runtimeSessionId"] = self.session_id
+        payload.setdefault("workerPid", self.worker_pid)
+        payload.setdefault("profileDir", str(self.profile_dir))
+        payload.setdefault("startedAtEpochMs", self.started_at_epoch_ms)
+        self._write(payload)
+
     def clear(self) -> None:
         target = self.profile_dir / RUNTIME_FILENAME
         try:

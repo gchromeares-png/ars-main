@@ -94,6 +94,7 @@ class SeleniumBaseCdpAdapter:
         }
         self._last_semantic_outcome: Dict[str, Any] = from_semantic_result({"results": []})
         self._closed = False
+        self._initialize_debug_capture()
 
     @property
     def chrome_pid(self) -> int | None:
@@ -140,6 +141,84 @@ class SeleniumBaseCdpAdapter:
                     break
         return matches
 
+    def _initialize_debug_capture(self) -> None:
+        """Create one reliable session-ready screenshot after CDP is fully usable."""
+        deadline = time.monotonic() + 3.0
+        attempts = 0
+        result: Dict[str, Any] = {
+            "captured": False,
+            "reason": "capture-not-attempted",
+            "event": "session-ready",
+            "generation": 0,
+        }
+        while attempts < 8 and time.monotonic() < deadline:
+            attempts += 1
+            try:
+                active_tab = self._sb.get_active_tab()
+            except Exception as exc:
+                result = {
+                    "captured": False,
+                    "reason": "active-tab-unavailable",
+                    "error": str(exc),
+                    "event": "session-ready",
+                    "generation": 0,
+                }
+                active_tab = None
+            if active_tab is not None:
+                result = self._capture.capture("session-ready", generation=0, force=True)
+                if bool(result.get("captured")):
+                    break
+            time.sleep(min(0.1 * attempts, 0.4))
+
+        self._record_debug_capture("session-ready", result, attempts=attempts)
+        try:
+            baseline = self._watchdog.poll()
+            self._last_watchdog_state = baseline
+        except Exception as exc:
+            self._record_debug_error("watchdog-baseline", exc)
+
+    def _record_debug_capture(self, phase: str, result: Dict[str, Any], *, attempts: int | None = None) -> None:
+        status: Dict[str, Any] = {
+            "phase": str(phase),
+            "captured": bool(result.get("captured")),
+            "reason": str(result.get("reason") or ""),
+            "event": str(result.get("event") or phase),
+            "generation": int(result.get("generation") or 0),
+        }
+        if attempts is not None:
+            status["attempts"] = max(0, int(attempts))
+        path = str(result.get("path") or "").strip()
+        if path:
+            status["path"] = path
+        error = str(result.get("error") or "").strip()
+        if error:
+            status["error"] = error[:1000]
+        self._runtime_metadata["debugCapture"] = status
+        self._runtime_identity.publish_metadata(self._runtime_metadata)
+
+    def _record_debug_error(self, phase: str, error: Exception) -> None:
+        self._runtime_metadata["debugCapture"] = {
+            "phase": str(phase),
+            "captured": False,
+            "reason": "runtime-error",
+            "error": str(error)[:1000],
+        }
+        self._runtime_identity.publish_metadata(self._runtime_metadata)
+
+    def _capture_debug(self, event: str, *, generation: int = 0, force: bool = False) -> Dict[str, Any]:
+        try:
+            result = self._capture.capture(event, generation=generation, force=force)
+        except Exception as exc:
+            result = {
+                "captured": False,
+                "reason": "capture-runtime-error",
+                "error": str(exc),
+                "event": event,
+                "generation": generation,
+            }
+        self._record_debug_capture(event, result)
+        return result
+
     def goto(self, url: str) -> None:
         self._sb.goto(url)
         self._challenge_tracker.wait_for_stable_challenge()
@@ -147,7 +226,7 @@ class SeleniumBaseCdpAdapter:
         self._watchdog.reset()
         initial = self._watchdog.poll()
         self._last_watchdog_state = initial
-        self._capture.capture("page-load", generation=int(initial.get("generation") or 0))
+        self._capture_debug("page-load", generation=int(initial.get("generation") or 0), force=True)
         self._poll_observation_watchdog(force=True)
 
     def challenge_state(self) -> Dict[str, Any]:
@@ -303,15 +382,21 @@ class SeleniumBaseCdpAdapter:
         self._next_watchdog_poll = now + self._policy.watchdog_interval_seconds
         try:
             state = self._watchdog.poll()
-        except Exception:
+        except Exception as exc:
+            self._record_debug_error("watchdog-poll", exc)
             return
         self._last_watchdog_state = state
-        if not force and not bool(state.get("changed")):
+        events = {str(event) for event in state.get("events") or []}
+        action_changed = bool(state.get("changed"))
+        visual_changed = bool(events)
+        if not force and not action_changed and not visual_changed:
             return
         try:
             self._capture_for_events(state)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._record_debug_error("capture-for-events", exc)
+        if not force and not action_changed:
+            return
         try:
             self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
         except Exception:
@@ -322,6 +407,7 @@ class SeleniumBaseCdpAdapter:
         events = [str(event) for event in state.get("events") or []]
         priority = (
             "navigation",
+            "page-load",
             "iframe-added",
             "modal-opened",
             "grid-candidate",
@@ -329,9 +415,13 @@ class SeleniumBaseCdpAdapter:
             "canvas-candidate",
             "layout-generation-changed",
         )
+        forced_events = {"navigation", "page-load", "layout-generation-changed"}
         for event in priority:
-            if event in events and self._policy.capture_enabled(event):
-                self._capture.capture(event, generation=generation)
+            if event not in events:
+                continue
+            force_capture = event in forced_events
+            if force_capture or self._policy.capture_enabled(event):
+                self._capture_debug(event, generation=generation, force=force_capture)
                 return
 
     def _run_visual_auto(self) -> Dict[str, Any]:
@@ -340,7 +430,7 @@ class SeleniumBaseCdpAdapter:
             self._last_auto_result = {**result, "outcome": from_visual_result(result)}
             if bool(result.get("acted")) and result.get("verified") is False:
                 generation = int(self._last_watchdog_state.get("generation") or 0)
-                self._capture.capture("verification-failure", generation=generation)
+                self._capture_debug("verification-failure", generation=generation)
         except Exception as exc:
             result = {"acted": False, "kind": "error", "error": str(exc)}
             self._last_auto_result = {**result, "outcome": from_visual_result(result)}
