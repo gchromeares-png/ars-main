@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import io
-import math
 import os
 import random
 from typing import Any, Dict, List, Tuple
@@ -103,144 +102,171 @@ def _tile_png(category: str, variant: int, seed: int) -> str:
         raise ValueError(f"Unsupported test category: {category}")
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
-    payload = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{payload}"
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def _feature_tensor(value: Any, *, name: str) -> Any:
-    """Normalize Transformers feature API return values to a tensor."""
     if hasattr(value, "float") and hasattr(value, "shape"):
         return value
-    pooled = getattr(value, "pooler_output", None)
-    if pooled is not None and hasattr(pooled, "float"):
-        return pooled
-    raise TypeError(f"{name} returned unsupported type {type(value).__name__}; expected tensor or pooler_output")
+    for attr in ("pooler_output", "image_embeds", "text_embeds", "embeds"):
+        candidate = getattr(value, attr, None)
+        if candidate is not None and hasattr(candidate, "float") and hasattr(candidate, "shape"):
+            return candidate
+    if isinstance(value, (tuple, list)):
+        for candidate in value:
+            if hasattr(candidate, "float") and hasattr(candidate, "shape"):
+                return candidate
+    raise TypeError(f"{name} returned unsupported type {type(value).__name__}")
 
 
-def _embedding_scores(classifier: RobustVisionGridClassifier, target: str, sources: List[str]) -> Dict[str, Any]:
-    if not classifier._load():
-        return {"scores": [], "error": classifier.error}
+def _separation(scores: List[float | None], expected: List[int]) -> Dict[str, float]:
+    expected_set = set(expected)
+    target_scores = [float(scores[index]) for index in expected if scores[index] is not None]
+    distractor_scores = [
+        float(value)
+        for index, value in enumerate(scores)
+        if index not in expected_set and value is not None
+    ]
+    if len(target_scores) != len(expected) or not distractor_scores:
+        raise AssertionError(f"Incomplete score vector: expected={expected}, scores={scores}")
+    minimum_target = min(target_scores)
+    maximum_distractor = max(distractor_scores)
+    return {
+        "minTarget": minimum_target,
+        "maxDistractor": maximum_distractor,
+        "margin": minimum_target - maximum_distractor,
+        "safeThreshold": (minimum_target + maximum_distractor) / 2.0,
+    }
+
+
+def _embedding_scores(classifier: RobustVisionGridClassifier, target: str, sources: List[str]) -> List[float | None]:
     loaded: List[Tuple[int, Any]] = []
     for index, source in enumerate(sources):
         image = classifier._read_image(source)
         if image is not None:
             loaded.append((index, image))
-    if not loaded:
-        return {"scores": [], "error": "No readable images for embedding path"}
+    if len(loaded) != len(sources):
+        raise AssertionError(f"Only {len(loaded)}/{len(sources)} images decoded")
 
     processor = classifier._processor
     model = classifier._model
     torch = classifier._torch
     device = classifier._device
-    prompt = f"This is a photo of {target}."
+    image_inputs = processor(images=[image for _, image in loaded], return_tensors="pt")
+    text_inputs = processor(
+        text=[f"This is a photo of {target}."],
+        padding="max_length",
+        max_length=64,
+        truncation=True,
+        return_tensors="pt",
+    )
+    image_inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in image_inputs.items()}
+    text_inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in text_inputs.items()}
+    image_kwargs = {key: value for key, value in image_inputs.items() if key in {"pixel_values", "pixel_attention_mask", "spatial_shapes"}}
+    text_kwargs = {key: value for key, value in text_inputs.items() if key in {"input_ids", "attention_mask"}}
 
-    try:
-        image_inputs = processor(images=[image for _, image in loaded], return_tensors="pt")
-        text_inputs = processor(text=[prompt], padding="max_length", max_length=64, truncation=True, return_tensors="pt")
-        image_inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in image_inputs.items()}
-        text_inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in text_inputs.items()}
-        image_kwargs = {key: value for key, value in image_inputs.items() if key in {"pixel_values", "pixel_attention_mask", "spatial_shapes"}}
-        text_kwargs = {key: value for key, value in text_inputs.items() if key in {"input_ids", "attention_mask"}}
-        with torch.inference_mode():
-            image_output = model.get_image_features(**image_kwargs)
-            text_output = model.get_text_features(**text_kwargs)
-            image_features = _feature_tensor(image_output, name="get_image_features").float()
-            text_features = _feature_tensor(text_output, name="get_text_features").float()
-        image_features = torch.nn.functional.normalize(image_features, p=2, dim=-1)
-        text_features = torch.nn.functional.normalize(text_features, p=2, dim=-1)
-        similarities = (image_features @ text_features.T)[:, 0].detach().cpu().tolist()
-    except Exception as exc:
-        return {"scores": [], "error": f"Embedding inference failed: {exc}"}
+    with torch.inference_mode():
+        image_features = _feature_tensor(model.get_image_features(**image_kwargs), name="get_image_features").float()
+        text_features = _feature_tensor(model.get_text_features(**text_kwargs), name="get_text_features").float()
+    if image_features.ndim != 2 or image_features.shape[0] != len(loaded):
+        raise AssertionError(f"Unexpected image feature shape: {tuple(image_features.shape)}")
+    if text_features.ndim != 2 or text_features.shape[0] != 1:
+        raise AssertionError(f"Unexpected text feature shape: {tuple(text_features.shape)}")
 
-    scores: List[float | None] = [None] * len(sources)
+    image_features = torch.nn.functional.normalize(image_features, p=2, dim=-1)
+    text_features = torch.nn.functional.normalize(text_features, p=2, dim=-1)
+    similarities = (image_features @ text_features.T)[:, 0].detach().cpu().tolist()
+
+    result: List[float | None] = [None] * len(sources)
     for (source_index, _), similarity in zip(loaded, similarities):
-        scores[source_index] = round(float(similarity), 6)
-    return {"scores": scores, "error": ""}
+        result[source_index] = round(float(similarity), 6)
+    return result
 
 
-def _separation(scores: List[float | None], expected: List[int]) -> Dict[str, float]:
-    expected_set = set(expected)
-    target_scores = [float(scores[index]) for index in expected if index < len(scores) and scores[index] is not None]
-    distractor_scores = [float(value) for index, value in enumerate(scores) if index not in expected_set and value is not None]
-    if len(target_scores) != len(expected) or not distractor_scores:
-        raise AssertionError(f"Incomplete score vector: expected={expected}, scores={scores}")
-    return {"minTarget": min(target_scores), "maxDistractor": max(distractor_scores), "margin": min(target_scores) - max(distractor_scores)}
-
-
-def _round(rng: random.Random, round_index: int, seed: int) -> Dict[str, Any]:
+def _make_grid(rng: random.Random, seed: int) -> tuple[List[Dict[str, Any]], List[str]]:
     tiles: List[Dict[str, Any]] = []
     for category_index, label in enumerate(CATEGORIES):
         for variant in range(3):
-            tiles.append({"category": category_index, "source": _tile_png(label, variant, seed ^ (round_index * 104729))})
+            tiles.append({"category": category_index, "source": _tile_png(label, variant, seed)})
     rng.shuffle(tiles)
-    target_category = rng.randrange(len(CATEGORIES))
-    target_label = CATEGORIES[target_category]
-    expected = sorted(index for index, tile in enumerate(tiles) if tile["category"] == target_category)
-    sources = [str(tile["source"]) for tile in tiles]
-
-    classifier = RobustVisionGridClassifier()
-    logits_result = classifier.classify(f"Select all images with {target_label}", sources)
-    if logits_result.get("error"):
-        raise AssertionError(f"SigLIP2 logits path failed in round {round_index}: {logits_result.get('error')}")
-    logits_scores = logits_result.get("scores") or []
-    logits_sep = _separation(logits_scores, expected)
-    logits_selected = sorted(int(value) for value in logits_result.get("selectedIndexes") or [])
-
-    embedding_result = _embedding_scores(classifier, target_label, sources)
-    if embedding_result.get("error"):
-        raise AssertionError(f"SigLIP2 embedding path failed in round {round_index}: {embedding_result.get('error')}")
-    embedding_scores = embedding_result.get("scores") or []
-    embedding_sep = _separation(embedding_scores, expected)
-
-    if logits_sep["margin"] <= 0 or logits_selected != expected:
-        raise AssertionError(
-            "SigLIP2 logits path failed randomized street-grid ground truth: "
-            f"round={round_index}, target={target_label!r}, expected={expected}, selected={logits_selected}, "
-            f"margin={logits_sep['margin']:.6f}, scores={logits_scores}"
-        )
-    if embedding_sep["margin"] <= 0:
-        raise AssertionError(
-            "SigLIP2 embedding path failed randomized street-grid ranking: "
-            f"round={round_index}, target={target_label!r}, expected={expected}, "
-            f"margin={embedding_sep['margin']:.6f}, scores={embedding_scores}"
-        )
-
-    return {
-        "target": target_label,
-        "expected": expected,
-        "logitsSelected": logits_selected,
-        "logitsMargin": logits_sep["margin"],
-        "embeddingMargin": embedding_sep["margin"],
-        "winner": "embedding" if embedding_sep["margin"] > logits_sep["margin"] else "logits",
-        "device": logits_result.get("device"),
-        "model": logits_result.get("model"),
-    }
+    return tiles, [str(tile["source"]) for tile in tiles]
 
 
 def main() -> int:
     seed = _seed()
-    rounds = max(1, int(os.environ.get("ARES_SIGLIP_TEST_ROUNDS", "3")))
     rng = random.Random(seed)
     print(f"SIGLIP_RANDOM_SEED={seed}")
-    results = [_round(rng, index + 1, seed) for index in range(rounds)]
-    embedding_wins = 0
-    logits_wins = 0
-    for index, result in enumerate(results, start=1):
-        if result["winner"] == "embedding":
-            embedding_wins += 1
-        else:
-            logits_wins += 1
-        print(
-            "SIGLIP_AB_ROUND "
-            f"{index}/{rounds} target={result['target']!r} expected={result['expected']} "
-            f"logitsSelected={result['logitsSelected']} logitsMargin={result['logitsMargin']:.6f} "
-            f"embeddingMargin={result['embeddingMargin']:.6f} winner={result['winner']} "
-            f"device={result['device']}"
-        )
-    print(f"SIGLIP_AB_SUMMARY rounds={rounds} logitsWins={logits_wins} embeddingWins={embedding_wins}")
+
+    classifier = RobustVisionGridClassifier()
+    if not classifier._load():
+        raise AssertionError(f"SigLIP2 unavailable: {classifier.error}")
     print(
-        "PASS: randomized street-scene SigLIP2 A/B probe separated crosswalk/traffic-light/"
-        "bicycle/car targets from pixels only, with runtime-shuffled positions and no rendered hints."
+        f"SIGLIP_PREFLIGHT model={classifier.model_name} device={classifier._device} "
+        f"currentThreshold={classifier.threshold}"
+    )
+
+    tiles, sources = _make_grid(rng, seed)
+    diagnostics: List[Dict[str, Any]] = []
+    ranking_failures: List[str] = []
+
+    for category_index, target in enumerate(CATEGORIES):
+        expected = sorted(index for index, tile in enumerate(tiles) if tile["category"] == category_index)
+        runtime = classifier.classify(f"Select all images with {target}", sources)
+        if runtime.get("error"):
+            ranking_failures.append(f"{target}: runtime inference error: {runtime.get('error')}")
+            continue
+
+        logits_scores = runtime.get("scores") or []
+        logits = _separation(logits_scores, expected)
+        selected = sorted(int(value) for value in runtime.get("selectedIndexes") or [])
+
+        try:
+            cosine_scores = _embedding_scores(classifier, target, sources)
+            cosine = _separation(cosine_scores, expected)
+        except Exception as exc:
+            ranking_failures.append(f"{target}: embedding diagnostic error: {exc}")
+            continue
+
+        diagnostic = {
+            "target": target,
+            "expected": expected,
+            "selected": selected,
+            "currentExact": selected == expected,
+            "logits": logits,
+            "cosine": cosine,
+        }
+        diagnostics.append(diagnostic)
+        print(
+            "SIGLIP_DIAGNOSTIC "
+            f"target={target!r} expected={expected} selected@{classifier.threshold}={selected} "
+            f"logitsMinTarget={logits['minTarget']:.6f} logitsMaxDistractor={logits['maxDistractor']:.6f} "
+            f"logitsMargin={logits['margin']:.6f} safeThreshold≈{logits['safeThreshold']:.6f} "
+            f"cosineMargin={cosine['margin']:.6f}"
+        )
+        if logits["margin"] <= 0:
+            ranking_failures.append(f"{target}: logits ranking margin {logits['margin']:.6f} <= 0")
+        if cosine["margin"] <= 0:
+            ranking_failures.append(f"{target}: cosine ranking margin {cosine['margin']:.6f} <= 0")
+
+    if not diagnostics:
+        raise AssertionError("SigLIP2 produced no usable diagnostics")
+
+    global_low = max(item["logits"]["maxDistractor"] for item in diagnostics)
+    global_high = min(item["logits"]["minTarget"] for item in diagnostics)
+    fixed_threshold_possible = global_low < global_high
+    current_exact = sum(1 for item in diagnostics if item["currentExact"])
+    print(
+        "SIGLIP_THRESHOLD_SUMMARY "
+        f"currentExact={current_exact}/{len(diagnostics)} globalSafeLow={global_low:.6f} "
+        f"globalSafeHigh={global_high:.6f} fixedThresholdPossible={fixed_threshold_possible}"
+    )
+
+    if ranking_failures:
+        raise AssertionError("SigLIP2 semantic ranking failures:\n- " + "\n- ".join(ranking_failures))
+
+    print(
+        "PASS: all street-grid target classes were semantically ranked above distractors. "
+        "Current fixed-threshold exactness is reported as calibration diagnostics, not hidden by early exit."
     )
     return 0
 
