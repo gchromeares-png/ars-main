@@ -3,3 +3,4 @@ torch>=2.4,<3
 transformers>=4.50,<6
 Pillow>=10,<13
 safetensors>=0.4,<1
+ddddocr==1.6.1

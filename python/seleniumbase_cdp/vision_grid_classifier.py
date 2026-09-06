@@ -48,9 +48,8 @@ class VisionGridClassifier:
 
         source_list = [str(source or "") for source in sources]
         target = self._target_text(instruction)
-        positives = [f"an image matching this request: {target}", f"a photo of {target}"]
-        negatives = ["an image that does not match the requested object", "an unrelated image"]
-        labels = positives + negatives
+        # Match the official SigLIP2 zero-shot prompt template.
+        labels = [f"This is a photo of {target}."]
 
         loaded: List[Tuple[int, Any]] = []
         scores: List[float | None] = [None] * len(source_list)
@@ -76,6 +75,8 @@ class VisionGridClassifier:
                 text=labels,
                 images=[image for _, image in loaded],
                 padding="max_length",
+                max_length=64,
+                truncation=True,
                 return_tensors="pt",
             )
             inputs = {
@@ -85,9 +86,7 @@ class VisionGridClassifier:
             with self._torch.inference_mode():
                 outputs = self._model(**inputs)
             logits = outputs.logits_per_image.float()
-            positive = self._torch.logsumexp(logits[:, : len(positives)], dim=1)
-            negative = self._torch.logsumexp(logits[:, len(positives) :], dim=1)
-            probabilities = self._torch.sigmoid(positive - negative).detach().cpu().tolist()
+            probabilities = self._torch.sigmoid(logits[:, 0]).detach().cpu().tolist()
 
             for (source_index, _), probability in zip(loaded, probabilities):
                 score = float(probability)

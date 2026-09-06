@@ -56,7 +56,10 @@ class GridSiteAdapter:
             return r.width >= 24 && r.height >= 24 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
           }};
           const text = el => (el?.innerText || el?.textContent || el?.getAttribute?.('aria-label') || '').trim().replace(/\\s+/g, ' ');
-          const rectOf = el => {{ const r=el.getBoundingClientRect(); return {{x:r.x,y:r.y,width:r.width,height:r.height}}; }};
+          const rectOf = (el, offset) => {{
+            const r = el.getBoundingClientRect();
+            return {{x:r.x + (offset?.x || 0), y:r.y + (offset?.y || 0), width:r.width, height:r.height}};
+          }};
           const selectorFor = el => {{
             if (!el || el.getRootNode?.() !== document) return '';
             if (el.id) return '#' + CSS.escape(el.id);
@@ -106,12 +109,17 @@ class GridSiteAdapter:
             return [...new Set([...items, ...bgCandidates])];
           }};
           const roots = [], seen = new Set();
-          const walkRoot = (root, label) => {{
+          const walkRoot = (root, label, offset = {{x:0, y:0}}) => {{
             if (!root || seen.has(root)) return;
-            seen.add(root); roots.push([root, label]);
-            for (const el of root.querySelectorAll?.('*') || []) if (el.shadowRoot) walkRoot(el.shadowRoot, label + '/shadow');
+            seen.add(root); roots.push([root, label, offset]);
+            for (const el of root.querySelectorAll?.('*') || []) if (el.shadowRoot) walkRoot(el.shadowRoot, label + '/shadow', offset);
             for (const frame of root.querySelectorAll?.('iframe') || []) {{
-              try {{ if (frame.contentDocument) walkRoot(frame.contentDocument, label + '/iframe'); }} catch (_) {{}}
+              try {{
+                if (frame.contentDocument) {{
+                  const r = frame.getBoundingClientRect();
+                  walkRoot(frame.contentDocument, label + '/iframe', {{x:(offset?.x || 0) + r.x, y:(offset?.y || 0) + r.y}});
+                }}
+              }} catch (_) {{}}
             }}
           }};
           const instructionNear = (root, groupRoot) => {{
@@ -125,7 +133,7 @@ class GridSiteAdapter:
           walkRoot(document, 'document');
 
           const candidates = [];
-          for (const [root, scope] of roots) {{
+          for (const [root, scope, offset] of roots) {{
             const groups = [];
             if (overrides.tiles) {{
               const tiles = [...root.querySelectorAll(overrides.tiles)].filter(visible);
@@ -159,7 +167,7 @@ class GridSiteAdapter:
               const sourceCount = sources.filter(Boolean).length;
               const rawMarks = group.tiles.map((tile,index) => ({{
                 role:'grid-tile',
-                visualBounds:rectOf(tile),
+                visualBounds:rectOf(tile, offset),
                 confidence:Math.max(0.58,Math.min(0.98,0.68 + (sources[index] ? 0.18 : 0) + (clickableFlags[index] ? 0.10 : 0))),
                 selector:selectorFor(tile),
                 structuralKey:structuralKey(tile,index),

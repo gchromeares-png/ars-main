@@ -10,7 +10,7 @@ on:
 jobs:
   seleniumbase-cdp-persistence:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,12 +23,17 @@ jobs:
       - name: Install SeleniumBase CDP PoC dependency
         run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
 
+      - name: Install local puzzle-slider matcher
+        run: python -m pip install --disable-pip-version-check ddddocr==1.6.1
+
       - name: Compile-check ARES vision and grounding runtime
         run: >-
           python -m py_compile
           python/seleniumbase_cdp/vision_grid_classifier.py
           python/seleniumbase_cdp/robust_vision_grid_classifier.py
           python/seleniumbase_cdp/vision_runtime_bootstrap.py
+          python/seleniumbase_cdp/siglip_randomized_grid_probe.py
+          python/seleniumbase_cdp/slider_browser_e2e_probe.py
           python/seleniumbase_cdp/stable_marks.py
           python/seleniumbase_cdp/cursor_path_provider.py
           python/seleniumbase_cdp/slider_target_grounder.py
@@ -51,6 +56,17 @@ jobs:
           python/seleniumbase_cdp/site_slider_adapter.py
           python/seleniumbase_cdp/slider_action_executor.py
           python/seleniumbase_cdp/seleniumbase_adapter.py
+
+      - name: Run real puzzle-slider-to-CDP E2E
+        run: python python/seleniumbase_cdp/slider_browser_e2e_probe.py
+
+      - name: Prepare real SigLIP2 vision runtime
+        run: python python/seleniumbase_cdp/vision_runtime_bootstrap.py --prepare
+
+      - name: Run randomized SigLIP2 ranking diagnostics
+        env:
+          ARES_SIGLIP_TEST_ROUNDS: "3"
+        run: python python/seleniumbase_cdp/siglip_randomized_grid_probe.py
 
       - name: Verify stable visual marks contract
         run: python python/seleniumbase_cdp/stable_marks_probe.py
