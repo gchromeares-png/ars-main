@@ -5,10 +5,19 @@ import type { JsonHttpClient, JsonHttpResponse } from "./types";
 export class NodeJsonHttpClient implements JsonHttpClient {
   constructor(
     private readonly timeoutMs = 12_000,
-    private readonly userAgent = "ARES-Product-Monitor/1.0"
+    private readonly userAgent = "ARES-Product-Monitor/1.0",
+    private readonly maxRedirects = 5
   ) {}
 
   get<T>(url: string, headers: Record<string, string> = {}): Promise<JsonHttpResponse<T>> {
+    return this.getWithRedirects<T>(url, headers, 0);
+  }
+
+  private getWithRedirects<T>(
+    url: string,
+    headers: Record<string, string>,
+    redirectCount: number
+  ): Promise<JsonHttpResponse<T>> {
     return new Promise((resolve, reject) => {
       const target = new URL(url);
       const transport = target.protocol === "http:" ? http : https;
@@ -20,6 +29,29 @@ export class NodeJsonHttpClient implements JsonHttpClient {
           ...headers
         }
       }, response => {
+        const status = response.statusCode ?? 0;
+        const location = response.headers.location;
+        const isRedirect = status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+
+        if (isRedirect && location) {
+          response.resume();
+          if (redirectCount >= this.maxRedirects) {
+            reject(new Error(`Too many HTTP redirects while requesting ${url}`));
+            return;
+          }
+
+          let nextUrl: string;
+          try {
+            nextUrl = new URL(location, target).toString();
+          } catch {
+            reject(new Error(`Invalid HTTP redirect location from ${url}: ${location}`));
+            return;
+          }
+
+          resolve(this.getWithRedirects<T>(nextUrl, headers, redirectCount + 1));
+          return;
+        }
+
         const chunks: Buffer[] = [];
         response.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         response.on("end", () => {
@@ -40,7 +72,7 @@ export class NodeJsonHttpClient implements JsonHttpClient {
           }
 
           resolve({
-            status: response.statusCode ?? 0,
+            status,
             headers: responseHeaders,
             data,
             text: data === undefined ? text.slice(0, 1_000) : undefined
