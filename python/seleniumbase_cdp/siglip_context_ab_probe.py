@@ -6,7 +6,7 @@ import os
 import random
 import statistics
 import time
-from typing import Any, Dict, List
+from typing import List
 
 from PIL import Image
 
@@ -64,7 +64,9 @@ def main() -> int:
     )
 
     tile_only_ms: List[float] = []
-    context_batch_ms: List[float] = []
+    whole_context_ms: List[float] = []
+    context_tile_ms: List[float] = []
+    context_total_ms: List[float] = []
     tile_exact = 0
     context_exact = 0
     comparisons = 0
@@ -79,6 +81,7 @@ def main() -> int:
             expected = sorted(index for index, tile in enumerate(tiles) if tile["category"] == category_index)
             instruction = f"Select all images with {target}"
 
+            # A: current production-style tile batch only.
             started = time.perf_counter()
             tile_result = classifier.classify(instruction, sources)
             elapsed_tile = (time.perf_counter() - started) * 1000.0
@@ -87,26 +90,39 @@ def main() -> int:
                 failures.append(f"round={round_index} target={target}: tile-only error={tile_result.get('error')}")
                 continue
 
-            started = time.perf_counter()
-            context_result = classifier.classify(instruction, [whole_source, *sources])
-            elapsed_context = (time.perf_counter() - started) * 1000.0
-            context_batch_ms.append(elapsed_context)
-            if context_result.get("error"):
-                failures.append(f"round={round_index} target={target}: context-batch error={context_result.get('error')}")
+            # B: whole screenshot for global context first, then a separate tile
+            # batch for localization. The context result is diagnostic only here:
+            # this probe must not silently change production selection policy.
+            context_started = time.perf_counter()
+            whole_result = classifier.classify(instruction, [whole_source])
+            elapsed_whole = (time.perf_counter() - context_started) * 1000.0
+            whole_context_ms.append(elapsed_whole)
+            if whole_result.get("error"):
+                failures.append(f"round={round_index} target={target}: whole-context error={whole_result.get('error')}")
+                continue
+
+            tile_stage_started = time.perf_counter()
+            context_tile_result = classifier.classify(instruction, sources)
+            elapsed_context_tiles = (time.perf_counter() - tile_stage_started) * 1000.0
+            elapsed_context_total = (time.perf_counter() - context_started) * 1000.0
+            context_tile_ms.append(elapsed_context_tiles)
+            context_total_ms.append(elapsed_context_total)
+            if context_tile_result.get("error"):
+                failures.append(f"round={round_index} target={target}: context tile-batch error={context_tile_result.get('error')}")
                 continue
 
             tile_scores = list(tile_result.get("scores") or [])
-            combined_scores = list(context_result.get("scores") or [])
-            if len(tile_scores) != len(sources) or len(combined_scores) != len(sources) + 1:
+            context_tile_scores = list(context_tile_result.get("scores") or [])
+            whole_scores = list(whole_result.get("scores") or [])
+            if len(tile_scores) != len(sources) or len(context_tile_scores) != len(sources) or len(whole_scores) != 1:
                 failures.append(
                     f"round={round_index} target={target}: score vector sizes "
-                    f"tile={len(tile_scores)} combined={len(combined_scores)}"
+                    f"tile={len(tile_scores)} whole={len(whole_scores)} contextTiles={len(context_tile_scores)}"
                 )
                 continue
 
-            context_score = combined_scores[0]
+            context_score = whole_scores[0]
             context_scores.append(float(context_score) if context_score is not None else 0.0)
-            context_tile_scores = combined_scores[1:]
             tile_selection = _selected(tile_scores, classifier.threshold)
             context_selection = _selected(context_tile_scores, classifier.threshold)
             tile_sep = _separation(tile_scores, expected)
@@ -121,34 +137,37 @@ def main() -> int:
                 )
             if context_sep["margin"] <= 0:
                 failures.append(
-                    f"round={round_index} target={target}: context-batch ranking margin {context_sep['margin']:.6f} <= 0"
+                    f"round={round_index} target={target}: context tile ranking margin {context_sep['margin']:.6f} <= 0"
                 )
 
             print(
                 "SIGLIP_AB_CASE "
                 f"round={round_index} target={target!r} expected={expected} "
                 f"tileSelected={tile_selection} contextSelected={context_selection} "
-                f"contextScore={float(context_score or 0.0):.6f} "
+                f"wholeContextScore={float(context_score or 0.0):.6f} "
                 f"tileMargin={tile_sep['margin']:.6f} contextMargin={context_sep['margin']:.6f} "
-                f"tileMs={elapsed_tile:.2f} contextBatchMs={elapsed_context:.2f}"
+                f"tileOnlyMs={elapsed_tile:.2f} wholeContextMs={elapsed_whole:.2f} "
+                f"contextTileBatchMs={elapsed_context_tiles:.2f} contextTotalMs={elapsed_context_total:.2f}"
             )
 
     if comparisons <= 0:
         raise AssertionError("SigLIP A/B produced no comparable cases")
 
+    tile_mean = _mean(tile_only_ms)
+    context_mean = _mean(context_total_ms)
     print(
         "SIGLIP_AB_SUMMARY "
         f"cases={comparisons} tileExact={tile_exact}/{comparisons} contextExact={context_exact}/{comparisons} "
-        f"tileMeanMs={_mean(tile_only_ms):.2f} contextBatchMeanMs={_mean(context_batch_ms):.2f} "
-        f"contextOverheadMs={_mean(context_batch_ms) - _mean(tile_only_ms):.2f} "
-        f"meanContextScore={_mean(context_scores):.6f}"
+        f"tileOnlyMeanMs={tile_mean:.2f} wholeContextMeanMs={_mean(whole_context_ms):.2f} "
+        f"contextTileBatchMeanMs={_mean(context_tile_ms):.2f} contextTotalMeanMs={context_mean:.2f} "
+        f"contextOverheadMs={context_mean - tile_mean:.2f} meanWholeContextScore={_mean(context_scores):.6f}"
     )
 
     if failures:
         raise AssertionError("SigLIP A/B ranking/runtime failures:\n- " + "\n- ".join(failures))
 
     print(
-        "PASS: tile-only and whole-grid-context + tile-batch were measured on identical randomized grids. "
+        "PASS: tile-only and whole-grid-context -> tile-batch were measured on identical randomized grids. "
         "No production threshold or selection policy was changed."
     )
     return 0
