@@ -28,5 +28,13 @@ jobs:
       - name: Compile smoke probe
         run: python -m py_compile python/seleniumbase_cdp/grid_runtime_smoke_probe.py
 
+      - name: Diagnostic delay fixture beyond worker startup
+        shell: pwsh
+        run: |
+          $path = 'python/seleniumbase_cdp/grid_runtime_smoke_probe.py'
+          $content = Get-Content $path -Raw
+          $content = $content.Replace('}}, 2800);', '}}, 15000);')
+          Set-Content -Path $path -Value $content -Encoding utf8
+
       - name: Run delayed iframe grid smoke variants through real SigLIP2
         run: python python/seleniumbase_cdp/grid_runtime_smoke_probe.py
