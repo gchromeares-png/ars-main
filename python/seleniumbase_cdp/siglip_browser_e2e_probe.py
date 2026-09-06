@@ -17,57 +17,119 @@ from seleniumbase_adapter import SeleniumBaseCdpAdapter
 from siglip_randomized_grid_probe import CATEGORIES, _seed, _tile_png
 
 
-class AdaptiveGapVisionClassifier(RobustVisionGridClassifier):
-    """Test-only adaptive selector over real SigLIP2 scores.
+class RelativeSignalVisionClassifier(RobustVisionGridClassifier):
+    """Test-only threshold-free SigLIP2 selector.
 
-    It deliberately receives no hidden labels or expected target count. The selected
-    upper score cluster is derived only from the instruction and screenshot pixels.
-    Production calibration remains unchanged until this policy is validated on real
-    photo fixtures too.
+    Hugging Face's SigLIP2 zero-shot path accepts multiple text candidates for an
+    image and exposes sigmoid(logits_per_image). For this validation probe each
+    screenshot crop is therefore compared against a positive and negative text
+    candidate and the stronger signal wins. No hidden target count or ground truth
+    is passed to this classifier.
     """
 
     def classify(self, instruction: str, sources: Iterable[str]) -> Dict[str, Any]:
-        result = super().classify(instruction, sources)
-        if result.get("error"):
-            return result
+        if not self._load():
+            return {
+                "selectedIndexes": [],
+                "scores": [],
+                "negativeScores": [],
+                "model": self.model_name,
+                "error": self._error,
+            }
 
-        numeric: List[Tuple[float, int]] = []
-        for index, value in enumerate(result.get("scores") or []):
-            if value is None:
-                continue
-            try:
-                numeric.append((float(value), index))
-            except (TypeError, ValueError):
-                continue
-        if len(numeric) < 2:
-            return {**result, "selectedIndexes": [], "adaptiveError": "insufficient-score-vector"}
+        source_list = [str(source or "") for source in sources]
+        target = self._target_text(instruction)
+        texts = [
+            f"This is a photo of {target}.",
+            f"This is a photo without {target}.",
+        ]
 
-        numeric.sort(key=lambda item: (-item[0], item[1]))
-        max_upper = max(1, len(numeric) // 2)
-        candidates: List[Tuple[float, int]] = []
-        for split in range(1, min(max_upper, len(numeric) - 1) + 1):
-            gap = numeric[split - 1][0] - numeric[split][0]
-            candidates.append((gap, split))
-        best_gap, split = max(candidates, key=lambda item: (item[0], -item[1]))
+        loaded: List[Tuple[int, Any]] = []
+        positive_scores: List[float | None] = [None] * len(source_list)
+        negative_scores: List[float | None] = [None] * len(source_list)
+        relative_margins: List[float | None] = [None] * len(source_list)
+        for index, source in enumerate(source_list):
+            image = self._read_image(source)
+            if image is not None:
+                loaded.append((index, image))
 
-        spread = numeric[0][0] - numeric[-1][0]
-        relative_gap = best_gap / spread if spread > 0 else 0.0
-        minimum_gap = max(0.001, spread * 0.12)
-        if best_gap <= minimum_gap or relative_gap < 0.12:
-            selected: List[int] = []
-        else:
-            selected = sorted(index for _, index in numeric[:split])
+        if not loaded:
+            return {
+                "selectedIndexes": [],
+                "scores": positive_scores,
+                "negativeScores": negative_scores,
+                "relativeMargins": relative_margins,
+                "model": self.model_name,
+                "target": target,
+                "device": self._device,
+                "error": "No readable grid images",
+            }
 
-        upper = numeric[split - 1][0]
-        lower = numeric[split][0]
+        selected: List[int] = []
+        try:
+            inputs = self._processor(
+                text=texts,
+                images=[image for _, image in loaded],
+                padding="max_length",
+                max_length=64,
+                truncation=True,
+                return_tensors="pt",
+            )
+            inputs = {
+                key: value.to(self._device) if hasattr(value, "to") else value
+                for key, value in inputs.items()
+            }
+            with self._torch.inference_mode():
+                outputs = self._model(**inputs)
+            probabilities = self._torch.sigmoid(outputs.logits_per_image.float()).detach().cpu().tolist()
+
+            if len(probabilities) != len(loaded):
+                raise RuntimeError(
+                    f"unexpected SigLIP2 image row count: {len(probabilities)} != {len(loaded)}"
+                )
+
+            for (source_index, _), row in zip(loaded, probabilities):
+                if not isinstance(row, (list, tuple)) or len(row) < 2:
+                    raise RuntimeError(f"unexpected SigLIP2 candidate score row: {row!r}")
+                positive = float(row[0])
+                negative = float(row[1])
+                margin = positive - negative
+                positive_scores[source_index] = round(positive, 4)
+                negative_scores[source_index] = round(negative, 4)
+                relative_margins[source_index] = round(margin, 4)
+                if positive > negative:
+                    selected.append(source_index)
+        except Exception as exc:
+            return {
+                "selectedIndexes": [],
+                "scores": positive_scores,
+                "negativeScores": negative_scores,
+                "relativeMargins": relative_margins,
+                "model": self.model_name,
+                "target": target,
+                "device": self._device,
+                "error": f"Relative SigLIP2 inference failed: {exc}",
+            }
+
+        ranking = sorted(
+            (
+                (float(score), index)
+                for index, score in enumerate(positive_scores)
+                if score is not None
+            ),
+            key=lambda item: (-item[0], item[1]),
+        )
         return {
-            **result,
             "selectedIndexes": selected,
-            "selectionPolicy": "adaptive-largest-gap-test-only",
-            "adaptiveGap": round(best_gap, 6),
-            "adaptiveRelativeGap": round(relative_gap, 6),
-            "adaptiveCutoff": round((upper + lower) / 2.0, 6),
-            "fixedThresholdSelection": list(result.get("selectedIndexes") or []),
+            "scores": positive_scores,
+            "negativeScores": negative_scores,
+            "relativeMargins": relative_margins,
+            "positiveRanking": [index for _, index in ranking],
+            "model": self.model_name,
+            "target": target,
+            "device": self._device,
+            "selectionPolicy": "per-tile-strongest-positive-vs-negative-signal-test-only",
+            "textCandidates": texts,
         }
 
 
@@ -109,7 +171,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
         return
 
 
-def _fixture(seed: int) -> Tuple[bytes, List[int], str]:
+def _fixture(seed: int, target_category: int) -> Tuple[bytes, List[int], str]:
     rng = random.Random(seed)
     tiles: List[Dict[str, Any]] = []
     for category_index, label in enumerate(CATEGORIES):
@@ -119,7 +181,6 @@ def _fixture(seed: int) -> Tuple[bytes, List[int], str]:
                 "source": _tile_png(label, variant, seed ^ 0x5A17),
             })
     rng.shuffle(tiles)
-    target_category = rng.randrange(len(CATEGORIES))
     target = CATEGORIES[target_category]
     expected = sorted(index for index, tile in enumerate(tiles) if tile["category"] == target_category)
 
@@ -176,24 +237,26 @@ def _start_server(page: bytes) -> Tuple[socketserver.TCPServer, Recorder, str]:
     return server, recorder, f"http://{host}:{port}/"
 
 
-def _collect(recorder: Recorder, expected_count: int, timeout: float = 20.0) -> List[Dict[str, str]]:
+def _collect(recorder: Recorder, timeout: float = 10.0) -> List[Dict[str, str]]:
     hits: List[Dict[str, str]] = []
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline and len(hits) < expected_count:
+    while time.monotonic() < deadline:
         try:
-            hits.append(recorder.hits.get(timeout=0.4))
+            hits.append(recorder.hits.get(timeout=0.3))
         except queue.Empty:
+            if hits and any(hit.get("type") == "submit" for hit in hits):
+                break
             continue
     return hits
 
 
 def main() -> int:
     seed = _seed()
-    page, expected, target = _fixture(seed)
-    server, recorder, url = _start_server(page)
     root = Path(tempfile.mkdtemp(prefix="ares-siglip-e2e-"))
     adapter: SeleniumBaseCdpAdapter | None = None
-    print(f"SIGLIP_E2E_SEED={seed} target={target!r} expected={expected}")
+    servers: List[socketserver.TCPServer] = []
+    failures: List[str] = []
+    print(f"SIGLIP_E2E_SEED={seed}")
 
     try:
         adapter = SeleniumBaseCdpAdapter(
@@ -207,52 +270,79 @@ def main() -> int:
             },
         )
 
-        # Inject only the selection policy used by this validation probe. The rest
-        # of the path is the real production VisualInteractionRuntime, screenshot
-        # crop provider, controller, grid executor, cursor planning and CDP input.
-        vision = AdaptiveGapVisionClassifier()
+        # One model instance is reused for every target category. Only the
+        # selection policy is test-specific; screenshot capture, tile cropping,
+        # grid execution, cursor planning and CDP input stay on the real ARES path.
+        vision = RelativeSignalVisionClassifier()
         runtime = adapter._visual_interactions
         runtime._vision = vision
         runtime._controller._vision = vision
 
-        adapter.goto(url)
+        for target_category, _ in enumerate(CATEGORIES):
+            scenario_seed = seed ^ ((target_category + 1) * 0x9E3779B1)
+            page, expected, target = _fixture(scenario_seed, target_category)
+            server, recorder, url = _start_server(page)
+            servers.append(server)
 
-        hits = _collect(recorder, len(expected) + 1)
-        tile_hits = [int(hit["index"]) for hit in hits if hit.get("type") == "tile" and str(hit.get("index") or "").isdigit()]
-        submit_hits = [hit for hit in hits if hit.get("type") == "submit"]
-        state = adapter.auto_interaction_state()
-        result = state.get("lastResult") if isinstance(state.get("lastResult"), dict) else {}
-        decision = result.get("decision") if isinstance(result.get("decision"), dict) else {}
-        action = result.get("result") if isinstance(result.get("result"), dict) else {}
-        screenshot = result.get("screenshot") if isinstance(result.get("screenshot"), dict) else {}
+            # Ensure a previous scenario cannot be treated as already handled.
+            runtime._controller._last_grid_signature = ""
+            adapter.goto(url)
 
-        selected = sorted(int(value) for value in decision.get("selectedIndexes") or [])
-        clicked = [int(value) for value in action.get("clickedIndexes") or []]
+            hits = _collect(recorder)
+            tile_hits = [
+                int(hit["index"])
+                for hit in hits
+                if hit.get("type") == "tile" and str(hit.get("index") or "").isdigit()
+            ]
+            submit_hits = [hit for hit in hits if hit.get("type") == "submit"]
+            state = adapter.auto_interaction_state()
+            result = state.get("lastResult") if isinstance(state.get("lastResult"), dict) else {}
+            decision = result.get("decision") if isinstance(result.get("decision"), dict) else {}
+            action = result.get("result") if isinstance(result.get("result"), dict) else {}
+            screenshot = result.get("screenshot") if isinstance(result.get("screenshot"), dict) else {}
 
-        assert result.get("kind") == "image-grid", result
-        assert result.get("decisionSource") == "screenshot-crops", result
-        assert result.get("screenshotFirst") is True, result
-        assert int(screenshot.get("readable") or 0) == 12, screenshot
-        assert selected == expected, (decision, expected)
-        assert sorted(clicked) == expected, (action, expected)
-        assert sorted(tile_hits) == expected, (hits, expected)
-        assert len(tile_hits) == len(expected), hits
-        assert len(submit_hits) == 1, hits
-        assert action.get("submitted") is True, action
-        assert result.get("acted") is True, result
-        assert result.get("verified") is True, result
+            selected = sorted(int(value) for value in decision.get("selectedIndexes") or [])
+            clicked = [int(value) for value in action.get("clickedIndexes") or []]
+
+            print(
+                "SIGLIP_E2E_DIAGNOSTIC "
+                f"target={target!r} expected={expected} selected={selected} "
+                f"ranking={decision.get('positiveRanking')} "
+                f"positive={decision.get('scores')} negative={decision.get('negativeScores')} "
+                f"margins={decision.get('relativeMargins')} clicked={clicked} "
+                f"serverTiles={tile_hits} submitted={len(submit_hits)}"
+            )
+
+            checks = {
+                "kind": result.get("kind") == "image-grid",
+                "decision-source": result.get("decisionSource") == "screenshot-crops",
+                "screenshot-first": result.get("screenshotFirst") is True,
+                "all-crops-readable": int(screenshot.get("readable") or 0) == 12,
+                "selection": selected == expected,
+                "clicked": sorted(clicked) == expected,
+                "server-clicks": sorted(tile_hits) == expected and len(tile_hits) == len(expected),
+                "submit": len(submit_hits) == 1 and action.get("submitted") is True,
+                "acted": result.get("acted") is True,
+                "verified": result.get("verified") is True,
+            }
+            failed = [name for name, passed in checks.items() if not passed]
+            if failed:
+                failures.append(
+                    f"target={target!r} failed={failed} expected={expected} selected={selected} "
+                    f"ranking={decision.get('positiveRanking')} margins={decision.get('relativeMargins')} "
+                    f"clicked={clicked} serverTiles={tile_hits} error={decision.get('error')!r}"
+                )
+
+            server.shutdown()
+            server.server_close()
+            servers.remove(server)
+
+        if failures:
+            raise AssertionError("SIGLIP_E2E_FAILURES\n" + "\n".join(failures))
 
         print(
-            "SIGLIP_E2E_RESULT "
-            f"target={target!r} selected={selected} clicked={clicked} "
-            f"serverTiles={tile_hits} submitted={len(submit_hits)} "
-            f"adaptiveGap={decision.get('adaptiveGap')} "
-            f"adaptiveCutoff={decision.get('adaptiveCutoff')} "
-            f"fixedThresholdSelection={decision.get('fixedThresholdSelection')}"
-        )
-        print(
-            "PASS: real Chromium screenshot -> tile crops -> SigLIP2 pixels-only decision -> "
-            "ARES CDP grid clicks -> HTTP server verification completed end to end."
+            "PASS: all target classes completed real Chromium screenshot -> tile crops -> "
+            "per-tile strongest SigLIP2 signal -> ARES CDP clicks -> HTTP server verification."
         )
         return 0
     finally:
@@ -261,8 +351,12 @@ def main() -> int:
                 adapter.quit()
             except Exception:
                 pass
-        server.shutdown()
-        server.server_close()
+        for server in servers:
+            try:
+                server.shutdown()
+                server.server_close()
+            except Exception:
+                pass
         shutil.rmtree(root, ignore_errors=True)
 
 
