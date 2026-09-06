@@ -30,19 +30,12 @@ def _seed() -> int:
 def _scene_base(rng: random.Random, variant: int) -> tuple[Image.Image, ImageDraw.ImageDraw]:
     image = Image.new("RGB", (224, 224), (176, 205, 226))
     draw = ImageDraw.Draw(image)
-
-    # Sky / horizon / road. Slightly vary every tile so no category is represented
-    # by byte-identical images and SigLIP2 has to use the visible object itself.
     horizon = 70 + ((variant * 7) % 15)
     draw.rectangle((0, horizon, 224, 224), fill=(92, 97, 101))
     draw.rectangle((0, horizon - 12, 224, horizon), fill=(94, 143, 79))
-
-    # Road perspective and lane markings.
     draw.polygon(((32, 224), (88, horizon), (136, horizon), (196, 224)), fill=(68, 71, 74))
     lane_shift = (-6, 0, 5)[variant % 3]
     draw.polygon(((109 + lane_shift, 224), (111, horizon + 8), (114, horizon + 8), (117 + lane_shift, 224)), fill=(226, 216, 132))
-
-    # Add harmless visual clutter so simple colour matching is insufficient.
     for _ in range(5):
         x = rng.randint(4, 210)
         y = rng.randint(8, max(12, horizon - 18))
@@ -98,7 +91,6 @@ def _draw_car(draw: ImageDraw.ImageDraw, variant: int) -> None:
 def _tile_png(category: str, variant: int, seed: int) -> str:
     rng = random.Random((seed << 8) ^ (variant * 7919) ^ sum(ord(ch) for ch in category))
     image, draw = _scene_base(rng, variant)
-
     if category == "crosswalk":
         _draw_crosswalk(draw, variant)
     elif category == "traffic light":
@@ -109,17 +101,25 @@ def _tile_png(category: str, variant: int, seed: int) -> str:
         _draw_car(draw, variant)
     else:
         raise ValueError(f"Unsupported test category: {category}")
-
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     payload = base64.b64encode(buffer.getvalue()).decode("ascii")
     return f"data:image/png;base64,{payload}"
 
 
+def _feature_tensor(value: Any, *, name: str) -> Any:
+    """Normalize Transformers feature API return values to a tensor."""
+    if hasattr(value, "float") and hasattr(value, "shape"):
+        return value
+    pooled = getattr(value, "pooler_output", None)
+    if pooled is not None and hasattr(pooled, "float"):
+        return pooled
+    raise TypeError(f"{name} returned unsupported type {type(value).__name__}; expected tensor or pooler_output")
+
+
 def _embedding_scores(classifier: RobustVisionGridClassifier, target: str, sources: List[str]) -> Dict[str, Any]:
     if not classifier._load():
         return {"scores": [], "error": classifier.error}
-
     loaded: List[Tuple[int, Any]] = []
     for index, source in enumerate(sources):
         image = classifier._read_image(source)
@@ -139,12 +139,13 @@ def _embedding_scores(classifier: RobustVisionGridClassifier, target: str, sourc
         text_inputs = processor(text=[prompt], padding="max_length", max_length=64, truncation=True, return_tensors="pt")
         image_inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in image_inputs.items()}
         text_inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in text_inputs.items()}
-
         image_kwargs = {key: value for key, value in image_inputs.items() if key in {"pixel_values", "pixel_attention_mask", "spatial_shapes"}}
         text_kwargs = {key: value for key, value in text_inputs.items() if key in {"input_ids", "attention_mask"}}
         with torch.inference_mode():
-            image_features = model.get_image_features(**image_kwargs).float()
-            text_features = model.get_text_features(**text_kwargs).float()
+            image_output = model.get_image_features(**image_kwargs)
+            text_output = model.get_text_features(**text_kwargs)
+            image_features = _feature_tensor(image_output, name="get_image_features").float()
+            text_features = _feature_tensor(text_output, name="get_text_features").float()
         image_features = torch.nn.functional.normalize(image_features, p=2, dim=-1)
         text_features = torch.nn.functional.normalize(text_features, p=2, dim=-1)
         similarities = (image_features @ text_features.T)[:, 0].detach().cpu().tolist()
@@ -163,22 +164,14 @@ def _separation(scores: List[float | None], expected: List[int]) -> Dict[str, fl
     distractor_scores = [float(value) for index, value in enumerate(scores) if index not in expected_set and value is not None]
     if len(target_scores) != len(expected) or not distractor_scores:
         raise AssertionError(f"Incomplete score vector: expected={expected}, scores={scores}")
-    return {
-        "minTarget": min(target_scores),
-        "maxDistractor": max(distractor_scores),
-        "margin": min(target_scores) - max(distractor_scores),
-    }
+    return {"minTarget": min(target_scores), "maxDistractor": max(distractor_scores), "margin": min(target_scores) - max(distractor_scores)}
 
 
 def _round(rng: random.Random, round_index: int, seed: int) -> Dict[str, Any]:
     tiles: List[Dict[str, Any]] = []
     for category_index, label in enumerate(CATEGORIES):
         for variant in range(3):
-            tiles.append({
-                "category": category_index,
-                "source": _tile_png(label, variant, seed ^ (round_index * 104729)),
-            })
-
+            tiles.append({"category": category_index, "source": _tile_png(label, variant, seed ^ (round_index * 104729))})
     rng.shuffle(tiles)
     target_category = rng.randrange(len(CATEGORIES))
     target_label = CATEGORIES[target_category]
@@ -186,8 +179,6 @@ def _round(rng: random.Random, round_index: int, seed: int) -> Dict[str, Any]:
     sources = [str(tile["source"]) for tile in tiles]
 
     classifier = RobustVisionGridClassifier()
-
-    # A: current production path: full SigLIP2 forward + logits_per_image + sigmoid.
     logits_result = classifier.classify(f"Select all images with {target_label}", sources)
     if logits_result.get("error"):
         raise AssertionError(f"SigLIP2 logits path failed in round {round_index}: {logits_result.get('error')}")
@@ -195,16 +186,12 @@ def _round(rng: random.Random, round_index: int, seed: int) -> Dict[str, Any]:
     logits_sep = _separation(logits_scores, expected)
     logits_selected = sorted(int(value) for value in logits_result.get("selectedIndexes") or [])
 
-    # B: official feature APIs: image/text embeddings, L2-normalized, cosine similarity.
     embedding_result = _embedding_scores(classifier, target_label, sources)
     if embedding_result.get("error"):
         raise AssertionError(f"SigLIP2 embedding path failed in round {round_index}: {embedding_result.get('error')}")
     embedding_scores = embedding_result.get("scores") or []
     embedding_sep = _separation(embedding_scores, expected)
 
-    # Both paths must at minimum rank every true target above every distractor.
-    # The current production path is additionally required to satisfy its actual
-    # runtime threshold and return exactly the ground-truth indexes.
     if logits_sep["margin"] <= 0 or logits_selected != expected:
         raise AssertionError(
             "SigLIP2 logits path failed randomized street-grid ground truth: "
@@ -235,7 +222,6 @@ def main() -> int:
     rounds = max(1, int(os.environ.get("ARES_SIGLIP_TEST_ROUNDS", "3")))
     rng = random.Random(seed)
     print(f"SIGLIP_RANDOM_SEED={seed}")
-
     results = [_round(rng, index + 1, seed) for index in range(rounds)]
     embedding_wins = 0
     logits_wins = 0
@@ -251,11 +237,7 @@ def main() -> int:
             f"embeddingMargin={result['embeddingMargin']:.6f} winner={result['winner']} "
             f"device={result['device']}"
         )
-
-    print(
-        "SIGLIP_AB_SUMMARY "
-        f"rounds={rounds} logitsWins={logits_wins} embeddingWins={embedding_wins}"
-    )
+    print(f"SIGLIP_AB_SUMMARY rounds={rounds} logitsWins={logits_wins} embeddingWins={embedding_wins}")
     print(
         "PASS: randomized street-scene SigLIP2 A/B probe separated crosswalk/traffic-light/"
         "bicycle/car targets from pixels only, with runtime-shuffled positions and no rendered hints."
