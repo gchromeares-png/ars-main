@@ -1,0 +1,27 @@
+name: SigLIP Randomized Smoke
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  randomized-siglip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Prepare real SigLIP2 vision runtime
+        run: python python/seleniumbase_cdp/vision_runtime_bootstrap.py --prepare
+
+      - name: Run randomized SigLIP2 grid probe
+        env:
+          ARES_SIGLIP_TEST_ROUNDS: "3"
+        run: python python/seleniumbase_cdp/siglip_randomized_grid_probe.py
