@@ -238,9 +238,9 @@ def main() -> int:
         diagnostics.append(diagnostic)
         print(
             "SIGLIP_DIAGNOSTIC "
-            f"target={target!r} expected={expected} selected@{classifier.threshold}={selected} "
+            f"target={target!r} expected={expected} selectedAt{classifier.threshold}={selected} "
             f"logitsMinTarget={logits['minTarget']:.6f} logitsMaxDistractor={logits['maxDistractor']:.6f} "
-            f"logitsMargin={logits['margin']:.6f} safeThreshold≈{logits['safeThreshold']:.6f} "
+            f"logitsMargin={logits['margin']:.6f} safeThreshold={logits['safeThreshold']:.6f} "
             f"cosineMargin={cosine['margin']:.6f}"
         )
         if logits["margin"] <= 0:
