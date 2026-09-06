@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from typing import Any, Dict, List, Tuple
@@ -240,10 +241,10 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
             if best is None or rank > best_rank:
                 best = snapshot
                 best_rank = rank
-        if best is not None:
-            return self._with_generation(best)
         if outcome is not None:
             return self._with_generation(outcome)
+        if best is not None:
+            return self._with_generation(best)
         scope = str((rejected or {}).get("scope") or "document")
         return self._with_generation(self._empty(scope))
 
@@ -334,7 +335,7 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
         return rank
 
     def _snapshot_extended_document(self) -> Dict[str, Any]:
-        overrides = __import__("json").dumps(self._overrides)
+        overrides = json.dumps(self._overrides)
         script = f"""
         (() => {{
           const overrides = {overrides};
