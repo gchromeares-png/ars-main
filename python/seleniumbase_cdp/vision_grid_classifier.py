@@ -79,7 +79,10 @@ class VisionGridClassifier:
         if not loaded:
             return self._result([], scores, target, "No readable grid images")
 
-        prompt = f"This is a photo of {target}."
+        # SigLIP2 training/reference preprocessing lowercases text. Normalize the
+        # complete prompt explicitly before tokenization so behavior is stable
+        # across processor/transformers versions.
+        prompt = f"This is a photo of {target}.".lower()
         selected: List[int] = []
         try:
             with self._lock:
