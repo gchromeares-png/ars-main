@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import os
+import random
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -14,19 +15,65 @@ Point = Tuple[float, float]
 
 
 class CursorPathProvider:
-    """Plan and play smooth cursor paths through the existing CDP session."""
+    """Plan and play smooth cursor paths through the existing CDP session.
+
+    Each runtime instance owns an in-memory random stream. Because a
+    VisualInteractionRuntime creates exactly one provider for its browser/task
+    session, parallel tasks get independent motion streams automatically. The
+    stream is never persisted, derived from a proxy, or exposed through the UI;
+    a fresh provider therefore starts with fresh motion on every task restart.
+    """
 
     def __init__(self, *, helper_path: str | Path | None = None) -> None:
         self._helper = Path(helper_path).expanduser().resolve() if helper_path else Path(__file__).with_name("cursor_path_helper.cjs")
         self._node = os.environ.get("ARES_NODE_EXECUTABLE", "node").strip() or "node"
+        # Session-local only: no profile/config/database persistence. 256 bits of
+        # fresh entropy makes independently-created task runtimes practically
+        # certain to have different path variations.
+        self._rng = random.Random(int.from_bytes(os.urandom(32), "big"))
+        self._movement_index = 0
 
     def plan(self, start: Point, end: Point, *, preferred: str = "ghost-cursor") -> Dict[str, Any]:
         start = (float(start[0]), float(start[1]))
         end = (float(end[0]), float(end[1]))
         external = self._external(start, end, preferred=preferred)
         if external:
+            external["points"] = self._sessionize_points(external.get("points") or [], start, end)
             return external
-        return {"provider": "python-bezier", "points": self._python_bezier(start, end)}
+        points = self._sessionize_points(self._python_bezier(start, end), start, end)
+        return {"provider": "python-bezier", "points": points}
+
+    def _sessionize_points(self, values: Iterable[Any], start: Point, end: Point) -> List[Point]:
+        """Apply tiny bounded per-movement variation while preserving endpoints.
+
+        The variation is deliberately small (sub-pixel to ~1.5px) so it changes
+        the shape without changing the requested target or reducing reliability.
+        Endpoints are copied exactly, which keeps slider/grid hit geometry intact.
+        """
+        points = self._clean_points(values)
+        if len(points) < 3:
+            return points
+
+        self._movement_index += 1
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        distance = max(1.0, math.hypot(dx, dy))
+        nx, ny = -dy / distance, dx / distance
+        amplitude = self._rng.uniform(0.45, 1.45)
+        phase = self._rng.uniform(-0.45, 0.45)
+        result: List[Point] = [start]
+        denominator = max(1, len(points) - 1)
+
+        for index, (x, y) in enumerate(points[1:-1], start=1):
+            t = index / denominator
+            # Zero at both ends; strongest only in the middle of the path.
+            envelope = 4.0 * t * (1.0 - t)
+            wave = math.sin(math.pi * t + phase)
+            micro = self._rng.uniform(-0.20, 0.20)
+            offset = envelope * (amplitude * wave + micro)
+            result.append((x + nx * offset, y + ny * offset))
+
+        result.append(end)
+        return self._clean_points(result)
 
     def play_click(self, seleniumbase_cdp: Any, start: Point, end: Point, *, preferred: str = "ghost-cursor") -> Dict[str, Any]:
         plan = self.plan(start, end, preferred=preferred)
@@ -54,7 +101,7 @@ class CursorPathProvider:
         provider = str(plan.get("provider") or "path")
         if len(points) < 2:
             return {"moved": False, "provider": provider, "pointCount": len(points)}
-        profile = int.from_bytes(os.urandom(1), "big") % 4
+        profile = self._rng.randrange(4)
         if self._play_cdp_drag(
             seleniumbase_cdp,
             points,
@@ -136,6 +183,7 @@ class CursorPathProvider:
             await asyncio.sleep(0.035 + profile * 0.008)
             await tab.send(cdp_input.dispatch_mouse_event("mousePressed", x=sx, y=sy, button=button, buttons=1, click_count=1))
             await asyncio.sleep((0.045, 0.065, 0.055, 0.075)[profile])
+            ex, ey = points[-1]
             try:
                 count = max(1, len(points) - 1)
                 for index, (x, y) in enumerate(points[1:], start=1):
