@@ -1,4 +1,5 @@
 import type { Frame, Locator, Page } from "./types";
+import { GhostCursorUiInteractionHelper } from "./ui-interaction-helper";
 import type {
   CheckoutPaymentSession,
   PaymentMethod,
@@ -105,6 +106,7 @@ export class CheckoutPaymentPreparer {
     const patterns = preferredLabel?.trim()
       ? [new RegExp(this.escapeRegex(preferredLabel.trim()), "i"), ...descriptors]
       : descriptors;
+    const interactions = new GhostCursorUiInteractionHelper(page);
 
     for (const frame of this.frames(page)) {
       for (const pattern of patterns) {
@@ -116,7 +118,7 @@ export class CheckoutPaymentPreparer {
         for (const locator of candidates) {
           if (!await this.isVisible(locator)) continue;
           try {
-            await locator.click({ timeout: 1_000 });
+            await interactions.click(locator);
             return true;
           } catch {}
         }

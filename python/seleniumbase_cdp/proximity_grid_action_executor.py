@@ -30,10 +30,16 @@ _CONFIRM_TEXT = (
 class ProximityGridActionExecutor(AuthorizedGridActionExecutor):
     """Execute grid selections through the existing CDP cursor path only."""
 
-    def __init__(self, seleniumbase_cdp: Any, site_adapter: Any, policy: InteractionPolicy | None = None) -> None:
+    def __init__(
+        self,
+        seleniumbase_cdp: Any,
+        site_adapter: Any,
+        policy: InteractionPolicy | None = None,
+        cursor: CursorPathProvider | None = None,
+    ) -> None:
         super().__init__(seleniumbase_cdp, site_adapter)
         self._policy = policy or InteractionPolicy()
-        self._cursor = CursorPathProvider()
+        self._cursor = cursor or CursorPathProvider()
         self._cursor_point: Tuple[float, float] | None = None
 
     def apply(self, indexes: Iterable[int], *, submit: bool = True) -> Dict[str, Any]:

@@ -48,6 +48,7 @@ export interface UiInteractionHelper {
  */
 export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   private readonly engine: InteractionEngine;
+  private readonly seedNamespace: string;
 
   constructor(private readonly page: Page) {
     // Do not inject the direct pointer driver here: doing so bypasses
@@ -55,6 +56,8 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
     // Bezier path is generated. Keeping the engine on its native Page.mouse
     // path makes every supplied seed affect both target variation and movement.
     this.engine = new InteractionEngine(page);
+    const runtimeSeed = String(page["interactionSeed"] ?? "").trim();
+    this.seedNamespace = runtimeSeed || "ares-interaction";
   }
 
   async moveTo(target: Locator, options: UiMoveOptions = {}): Promise<void> {
@@ -66,12 +69,12 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   }
 
   async moveToPoint(target: UiPoint, options: UiMoveOptions = {}): Promise<void> {
-    await this.engine.moveToPoint(target, options.seed ?? "ui-move");
+    await this.engine.moveToPoint(target, options.seed ?? `${this.seedNamespace}:move`);
   }
 
   async click(target: Locator, options: UiClickOptions = {}): Promise<void> {
     const result = await this.engine.click(target, {
-      seed: options.seed,
+      seed: options.seed ?? `${this.seedNamespace}:click`,
       attempts: options.attempts,
       expected: options.expected,
       button: options.button,
@@ -83,7 +86,7 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   async fill(target: Locator, value: string, options: UiFillOptions = {}): Promise<void> {
     const result = await this.engine.fill(target, value, {
       attempts: options.attempts,
-      seed: options.seed,
+      seed: options.seed ?? `${this.seedNamespace}:fill`,
       expected: options.expected
     });
     this.assertSuccess("fill", result.success, result.failureReason);
@@ -92,7 +95,7 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   async select(target: Locator, value: string, options: UiSelectOptions = {}): Promise<void> {
     const result = await this.engine.select(target, value, {
       attempts: options.attempts,
-      seed: options.seed,
+      seed: options.seed ?? `${this.seedNamespace}:select`,
       expected: options.expected
     });
     this.assertSuccess("select", result.success, result.failureReason);
@@ -101,7 +104,7 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   async focus(target: Locator, options: UiFocusOptions = {}): Promise<void> {
     const result = await this.engine.focus(target, {
       attempts: options.attempts,
-      seed: options.seed,
+      seed: options.seed ?? `${this.seedNamespace}:focus`,
       expected: options.expected
     });
     this.assertSuccess("focus", result.success, result.failureReason);
@@ -110,7 +113,7 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   async hover(target: Locator, options: UiHoverOptions = {}): Promise<void> {
     const result = await this.engine.hover(target, {
       attempts: options.attempts,
-      seed: options.seed,
+      seed: options.seed ?? `${this.seedNamespace}:hover`,
       expected: options.expected
     });
     this.assertSuccess("hover", result.success, result.failureReason);
@@ -119,7 +122,7 @@ export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   async scrollIntoView(target: Locator, options: UiScrollOptions = {}): Promise<void> {
     const result = await this.engine.scrollIntoView(target, {
       attempts: options.attempts,
-      seed: options.seed,
+      seed: options.seed ?? `${this.seedNamespace}:scroll`,
       expected: options.expected
     });
     this.assertSuccess("scroll", result.success, result.failureReason);
