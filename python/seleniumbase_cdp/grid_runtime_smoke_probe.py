@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import queue
 import shutil
 import socketserver
@@ -14,6 +13,12 @@ from typing import Any, Dict, List
 from urllib.parse import parse_qs, urlparse
 
 from manual_profile_probe import WorkerClient
+
+
+TARGETS = {
+    "A": {0, 2, 4, 6, 8},
+    "B": {1, 3, 5, 7},
+}
 
 
 class Recorder:
@@ -32,8 +37,7 @@ class SmokeHandler(BaseHTTPRequestHandler):
                 "variant": (params.get("variant") or [""])[0],
                 "index": (params.get("index") or [""])[0],
             })
-            body = b"ok"
-            self._send(body, "text/plain; charset=utf-8")
+            self._send(b"ok", "text/plain; charset=utf-8")
             return
 
         if parsed.path.startswith("/frame/"):
@@ -44,9 +48,9 @@ class SmokeHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/case/"):
             variant = parsed.path.rsplit("/", 1)[-1]
             body = f"""<!doctype html>
-<html><head><meta charset='utf-8'><title>ARES Grid Smoke {variant}</title></head>
+<html><head><meta charset='utf-8'><title>ARES SigLIP Grid Smoke {variant}</title></head>
 <body style='margin:0;background:#111;color:#fff;font-family:Arial'>
-  <iframe id='challenge-frame' title='Select all matching images' src='/frame/{variant}'
+  <iframe id='challenge-frame' title='Visual selection task' src='/frame/{variant}'
     style='border:0;width:760px;height:720px;display:block;margin:20px auto'></iframe>
 </body></html>""".encode("utf-8")
             self._send(body, "text/html; charset=utf-8")
@@ -65,16 +69,28 @@ class SmokeHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _svg_data(index: int, variant: str) -> str:
-        palette_a = ["#db4437", "#4285f4", "#f4b400", "#0f9d58", "#8e44ad", "#e67e22", "#16a085", "#2c3e50", "#c0392b"]
-        palette_b = ["#1f2937", "#334155", "#475569", "#64748b", "#0f172a", "#374151", "#4b5563", "#52525b", "#27272a"]
-        palette = palette_a if variant == "A" else palette_b
-        label = ("SIGN" if index in {0, 2, 4, 6, 8} else "ROAD") if variant == "B" else f"T{index+1}"
-        svg = f"""<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'>
-<rect width='180' height='180' fill='{palette[index]}'/>
-<circle cx='{40 + (index % 3) * 45}' cy='{50 + (index // 3) * 35}' r='24' fill='white' opacity='.82'/>
-<text x='90' y='155' text-anchor='middle' font-family='Arial' font-size='24' fill='white'>{label}</text>
-</svg>"""
         import base64
+
+        is_target = index in TARGETS[variant]
+        if variant == "A":
+            if is_target:
+                shape = "<rect x='34' y='34' width='112' height='112' rx='8' fill='#e11d48'/>"
+                label = "RED SQUARE"
+            else:
+                shape = "<circle cx='90' cy='90' r='56' fill='#2563eb'/>"
+                label = "BLUE CIRCLE"
+        else:
+            if is_target:
+                shape = "<circle cx='90' cy='90' r='56' fill='#facc15'/>"
+                label = "YELLOW CIRCLE"
+            else:
+                shape = "<polygon points='90,25 155,145 25,145' fill='#475569'/>"
+                label = "GRAY TRIANGLE"
+
+        svg = f"""<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'>
+<rect width='180' height='180' fill='white'/>{shape}
+<text x='90' y='170' text-anchor='middle' font-family='Arial' font-size='13' fill='black'>{label}</text>
+</svg>"""
         return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
 
     @classmethod
@@ -85,10 +101,9 @@ class SmokeHandler(BaseHTTPRequestHandler):
             tiles.append(
                 f"<button class='tile' data-index='{index}' onclick=\"fetch('/clicked?variant={variant}&index={index}')\" "
                 "style='padding:0;border:2px solid #fff;background:#000;width:180px;height:180px'>"
-                f"<img src='{src}' alt='tile-{index}' onclick=\"fetch('/clicked?variant={variant}&index={index}')\" "
-                "style='display:block;width:176px;height:176px;object-fit:cover'></button>"
+                f"<img src='{src}' alt='tile-{index}' style='display:block;width:176px;height:176px;object-fit:cover'></button>"
             )
-        prompt = "Select all images with the requested object" if variant == "A" else "Klicke alle Felder mit dem passenden Verkehrszeichen"
+        prompt = "Select all images with red squares" if variant == "A" else "Klicke alle Felder mit gelben Kreisen"
         grid = "".join(tiles)
         return f"""<!doctype html>
 <html><head><meta charset='utf-8'><style>
@@ -120,14 +135,14 @@ def _start_server() -> tuple[socketserver.TCPServer, Recorder, str]:
     return server, recorder, f"http://{host}:{port}"
 
 
-def _wait_for_grid(client: WorkerClient, variant: str, timeout: float = 20.0) -> Dict[str, Any]:
+def _wait_for_grid(client: WorkerClient, variant: str, timeout: float = 25.0) -> Dict[str, Any]:
     deadline = time.time() + timeout
     attempt = 0
     while time.time() < deadline:
         attempt += 1
         request_id = f"grid-{variant}-{attempt}"
         client.send({"type": "site-grid-state", "requestId": request_id})
-        message = client.wait("site-grid-state", request_id, 5)
+        message = client.wait("site-grid-state", request_id, 6)
         state = message.get("state") or {}
         if state.get("kind") == "image-grid" and int(state.get("tileCount") or 0) == 9:
             return state
@@ -135,30 +150,61 @@ def _wait_for_grid(client: WorkerClient, variant: str, timeout: float = 20.0) ->
     raise AssertionError(f"Variant {variant}: delayed 3x3 grid was not detected")
 
 
-def _wait_for_visual_artifacts(profile_dir: Path, timeout: float = 15.0) -> tuple[Path, Path]:
+def _wait_for_siglip_action(profile_dir: Path, recorder: Recorder, variant: str, timeout: float = 35.0) -> None:
     trace = profile_dir / ".ares-visual-trace.jsonl"
     observations = profile_dir / ".ares-observations"
+    clicked: set[int] = set()
+    decision: Dict[str, Any] | None = None
     deadline = time.time() + timeout
-    while time.time() < deadline:
-        screenshots = list(observations.glob("*.png")) if observations.exists() else []
-        if trace.exists() and trace.stat().st_size > 0 and any(path.stat().st_size > 0 for path in screenshots):
-            return trace, screenshots[-1]
-        time.sleep(0.25)
-    raise AssertionError("Visual runtime did not produce trace + grid screenshot")
 
-
-def _wait_for_click(recorder: Recorder, variant: str, timeout: float = 10.0) -> Dict[str, str]:
-    deadline = time.time() + timeout
-    seen: List[Dict[str, str]] = []
     while time.time() < deadline:
         try:
-            hit = recorder.hits.get(timeout=0.4)
+            while True:
+                hit = recorder.hits.get_nowait()
+                if hit.get("variant") == variant:
+                    clicked.add(int(hit.get("index") or -1))
         except queue.Empty:
-            continue
-        seen.append(hit)
-        if hit.get("variant") == variant:
-            return hit
-    raise AssertionError(f"Variant {variant}: grid click was not observed; seen={seen}")
+            pass
+
+        if trace.exists() and trace.stat().st_size > 0:
+            for raw in trace.read_text(encoding="utf-8").splitlines():
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("phase") != "decision":
+                    continue
+                payload = entry.get("payload") or {}
+                candidate = payload.get("decision") or {}
+                if candidate.get("model") == "google/siglip2-base-patch16-224":
+                    decision = candidate
+
+        screenshots = list(observations.glob("*.png")) if observations.exists() else []
+        screenshot_ok = any(path.stat().st_size > 0 for path in screenshots)
+        if decision is not None and clicked and screenshot_ok:
+            selected = {int(value) for value in decision.get("selectedIndexes") or []}
+            expected = TARGETS[variant]
+            if not selected:
+                raise AssertionError(f"Variant {variant}: SigLIP2 returned no selected indexes: {decision}")
+            wrong = selected - expected
+            correct = selected & expected
+            if wrong:
+                raise AssertionError(f"Variant {variant}: SigLIP2 selected non-target tiles {sorted(wrong)}; decision={decision}")
+            if len(correct) < 2:
+                raise AssertionError(f"Variant {variant}: SigLIP2 selected too few correct target tiles: {decision}")
+            if not clicked.issubset(expected):
+                raise AssertionError(f"Variant {variant}: browser clicked non-target tiles {sorted(clicked - expected)}")
+            if not clicked.intersection(correct):
+                raise AssertionError(f"Variant {variant}: browser clicks do not match SigLIP2 decision; clicked={clicked}, decision={decision}")
+            return
+
+        time.sleep(0.35)
+
+    trace_tail = trace.read_text(encoding="utf-8")[-6000:] if trace.exists() else "<missing trace>"
+    raise AssertionError(
+        f"Variant {variant}: no complete Screenshot -> SigLIP2 -> click result within timeout. "
+        f"clicked={sorted(clicked)} trace_tail={trace_tail}"
+    )
 
 
 def _run_variant(base_url: str, recorder: Recorder, root: Path, variant: str) -> None:
@@ -167,21 +213,7 @@ def _run_variant(base_url: str, recorder: Recorder, root: Path, variant: str) ->
     try:
         state = _wait_for_grid(client, variant)
         assert int(state.get("rows") or 0) == 3 and int(state.get("columns") or 0) == 3, state
-
-        trace, screenshot = _wait_for_visual_artifacts(profile_dir)
-        trace_text = trace.read_text(encoding="utf-8")
-        if "grid-screenshot-captured" not in trace_text:
-            raise AssertionError(f"Variant {variant}: trace did not record grid screenshot capture")
-        if screenshot.stat().st_size <= 0:
-            raise AssertionError(f"Variant {variant}: screenshot is empty")
-
-        request_id = f"click-{variant}"
-        client.send({"type": "apply-grid-selection", "requestId": request_id, "indexes": [0], "submit": False})
-        result = client.wait("grid-selection-applied", request_id, 10)
-        clicked = result.get("clickedIndexes") or result.get("clicked") or []
-        if 0 not in [int(value) for value in clicked]:
-            raise AssertionError(f"Variant {variant}: executor did not report tile 0 click: {result}")
-        _wait_for_click(recorder, variant)
+        _wait_for_siglip_action(profile_dir, recorder, variant)
     finally:
         client.close()
 
@@ -192,7 +224,7 @@ def main() -> int:
     try:
         _run_variant(base_url, recorder, temporary, "A")
         _run_variant(base_url, recorder, temporary, "B")
-        print("SeleniumBase delayed iframe grid smoke passed for variants A and B.")
+        print("SeleniumBase delayed iframe grid smoke passed end-to-end with real SigLIP2 for variants A and B.")
         return 0
     finally:
         server.shutdown()
