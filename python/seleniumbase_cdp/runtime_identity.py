@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -60,16 +62,10 @@ class BrowserRuntimeIdentity:
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
                 continue
 
-            # The top-level Chromium process carries the explicit ARES switch.
-            # Keep those direct matches first so shutdown waits on the browser
-            # owner before renderer/network-service descendants.
             if self.marker_arg in command_line:
                 direct_matches.append(int(process.pid))
                 continue
 
-            # Chromium child processes inherit the worker environment even when
-            # they do not repeat every browser switch. This lets ARES recover the
-            # exact process family after parent/child relationships change.
             try:
                 environment = process.environ()
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error, NotImplementedError):
@@ -121,8 +117,55 @@ class BrowserRuntimeIdentity:
                     return value
         return None
 
+    def browser_websocket_url(self, adapter: Any) -> str:
+        sb = getattr(adapter, "_sb", None)
+        endpoint_getter = getattr(sb, "get_endpoint_url", None)
+        endpoint = ""
+        if callable(endpoint_getter):
+            try:
+                endpoint = str(endpoint_getter() or "").strip().rstrip("/")
+            except Exception:
+                endpoint = ""
+        if not endpoint:
+            port = self.cdp_port(adapter)
+            if port:
+                endpoint = f"http://127.0.0.1:{port}"
+        if not endpoint:
+            return ""
+
+        request = urllib.request.Request(
+            f"{endpoint}/json/version",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=2.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, UnicodeDecodeError):
+            return ""
+        websocket_url = str(payload.get("webSocketDebuggerUrl") or "").strip()
+        if not websocket_url.startswith(("ws://", "wss://")):
+            return ""
+        return websocket_url
+
+    def _publish_browser_websocket(self, adapter: Any, websocket_url: str) -> None:
+        if not websocket_url:
+            return
+        sb = getattr(adapter, "_sb", None)
+        driver = getattr(sb, "driver", None)
+        if driver is not None and hasattr(driver, "cdp_base"):
+            driver = driver.cdp_base
+        if driver is None:
+            return
+        try:
+            setattr(driver, "websocket_url", websocket_url)
+        except Exception:
+            pass
+
     def ready_metadata(self, adapter: Any, startup_ms: int | float | None = None) -> Dict[str, Any]:
         browser_pid = getattr(adapter, "chrome_pid", None)
+        websocket_url = self.browser_websocket_url(adapter)
+        self._publish_browser_websocket(adapter, websocket_url)
         metadata: Dict[str, Any] = {
             "state": "ready",
             "runtimeSessionId": self.session_id,
@@ -130,6 +173,7 @@ class BrowserRuntimeIdentity:
             "browserPid": int(browser_pid) if isinstance(browser_pid, int) and browser_pid > 0 else None,
             "cdpHost": "127.0.0.1",
             "cdpPort": self.cdp_port(adapter),
+            "browserWebSocketReady": bool(websocket_url),
             "profileDir": str(self.profile_dir),
             "startedAtEpochMs": self.started_at_epoch_ms,
         }
