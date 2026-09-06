@@ -53,10 +53,9 @@ describe("ARES unified task control UX", () => {
     expect(styles).not.toContain("#ff6fa5");
   });
 
-  it("keeps task payment profile-backed without manual card inputs", () => {
-    expect(html).toContain('[(ngModel)]="taskPaymentEnabled"');
-    expect(html).toContain("Use profile payment");
+  it("keeps task payment profile-backed without manual card inputs or a task payment disable switch", () => {
     expect(html).toContain("Profile vault + runtime isolation");
+    expect(html).not.toContain('[(ngModel)]="taskPaymentEnabled"');
     expect(html).not.toContain('[(ngModel)]="sessionCardNumber"');
     expect(html).not.toContain('[(ngModel)]="sessionCardSecurityCode"');
   });
