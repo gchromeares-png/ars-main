@@ -67,18 +67,19 @@ class SeleniumBaseCdpAdapter:
             self,
             startup_ms=(time.monotonic() - runtime_started) * 1000.0,
         )
+        self._policy = InteractionPolicy.from_profile(self.profile_dir)
+        self._capture = ObservationCapture(self._sb, profile_dir=self.profile_dir, policy=self._policy)
         self._challenge_tracker = ChallengeStateTracker(self._sb)
         self._visual_interactions = VisualInteractionRuntime(
             self._sb,
             profile_dir=self.profile_dir,
             overrides=site_adapter_overrides or {},
+            capture=self._capture,
         )
         self._semantic_interactions = SemanticInteractionRuntime(self._sb)
         self._instruction_inputs = InstructionInputRuntime(self._sb)
         self._orchestrator = InteractionOrchestrator()
-        self._policy = InteractionPolicy.from_profile(self.profile_dir)
         self._watchdog = PageObservationWatchdog(self._sb, self._policy)
-        self._capture = ObservationCapture(self._sb, profile_dir=self.profile_dir, policy=self._policy)
         self._next_watchdog_poll = 0.0
         self._last_watchdog_state: Dict[str, Any] = {}
         self._last_auto_result: Dict[str, Any] = {
@@ -256,7 +257,7 @@ class SeleniumBaseCdpAdapter:
     def interaction_outcome_state(self) -> Dict[str, Any]:
         return {
             "enabled": True,
-            "mode": "event-driven-default",
+            "mode": "event-or-frame-heartbeat",
             "semantic": self._last_semantic_outcome,
             "visual": self._last_auto_result.get("outcome", from_visual_result(self._last_auto_result)),
             "instructionInput": self._last_instruction_result,
@@ -389,16 +390,36 @@ class SeleniumBaseCdpAdapter:
         events = {str(event) for event in state.get("events") or []}
         action_changed = bool(state.get("changed"))
         visual_changed = bool(events)
-        if not force and not action_changed and not visual_changed:
+        frame_heartbeat = int(state.get("iframes") or 0) > 0
+
+        last = self._last_auto_result if isinstance(self._last_auto_result, dict) else {}
+        last_reason = str(last.get("reason") or "")
+        last_attempt = int(last.get("attempt") or 0)
+        last_max_attempts = int(last.get("maxAttempts") or 3)
+        retry_pending = (
+            str(last.get("kind") or "") == "image-grid"
+            and last.get("verified") is not True
+            and last_reason not in {"max-attempts-reached", "explicit-failure"}
+            and last_attempt < last_max_attempts
+        )
+
+        if not force and not action_changed and not visual_changed and not frame_heartbeat and not retry_pending:
             return
+        if visual_changed:
+            try:
+                self._capture_for_events(state)
+            except Exception as exc:
+                self._record_debug_error("capture-for-events", exc)
+
         try:
-            self._capture_for_events(state)
-        except Exception as exc:
-            self._record_debug_error("capture-for-events", exc)
-        if not force and not action_changed:
-            return
-        try:
-            self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+            if force or action_changed:
+                self._orchestrator.run_cycle(self._run_visual_auto, self._run_instruction_auto)
+            else:
+                # Existing iframes need a bounded visual heartbeat because their
+                # content can change without mutating the top-level document.
+                # Retryable visual results use the same path, so a scheduled retry
+                # cannot be lost behind an unchanged main-document fingerprint.
+                self._orchestrator.run_action("visual-heartbeat", self._run_visual_auto)
         except Exception:
             pass
 
