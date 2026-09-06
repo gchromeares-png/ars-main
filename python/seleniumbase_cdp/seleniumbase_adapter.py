@@ -67,18 +67,19 @@ class SeleniumBaseCdpAdapter:
             self,
             startup_ms=(time.monotonic() - runtime_started) * 1000.0,
         )
+        self._policy = InteractionPolicy.from_profile(self.profile_dir)
+        self._capture = ObservationCapture(self._sb, profile_dir=self.profile_dir, policy=self._policy)
         self._challenge_tracker = ChallengeStateTracker(self._sb)
         self._visual_interactions = VisualInteractionRuntime(
             self._sb,
             profile_dir=self.profile_dir,
             overrides=site_adapter_overrides or {},
+            capture=self._capture,
         )
         self._semantic_interactions = SemanticInteractionRuntime(self._sb)
         self._instruction_inputs = InstructionInputRuntime(self._sb)
         self._orchestrator = InteractionOrchestrator()
-        self._policy = InteractionPolicy.from_profile(self.profile_dir)
         self._watchdog = PageObservationWatchdog(self._sb, self._policy)
-        self._capture = ObservationCapture(self._sb, profile_dir=self.profile_dir, policy=self._policy)
         self._next_watchdog_poll = 0.0
         self._last_watchdog_state: Dict[str, Any] = {}
         self._last_auto_result: Dict[str, Any] = {
