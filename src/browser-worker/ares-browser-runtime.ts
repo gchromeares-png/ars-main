@@ -66,7 +66,7 @@ export class AresBrowserRuntime extends SeleniumBaseBrowserWorker {
     if (process.env["ARES_VISION_SERVICE_URL"]?.trim() && !this.sharedVision) return undefined;
 
     const existing = this.sharedVision;
-    if (existing?.child.exitCode == null) {
+    if (existing && existing.child.exitCode == null) {
       this.publishSharedVisionEnvironment(existing);
       return existing;
     }
@@ -113,7 +113,7 @@ export class AresBrowserRuntime extends SeleniumBaseBrowserWorker {
       this.publishSharedVisionEnvironment(service);
       child.once("exit", () => {
         const current = this.sharedVision;
-        if (current?.child !== child) return;
+        if (!current || current.child !== child) return;
         this.clearSharedVisionEnvironment(current);
         this.sharedVision = undefined;
       });
