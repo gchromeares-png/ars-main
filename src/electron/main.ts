@@ -226,6 +226,7 @@ async function createBackend(): Promise<void> {
     proxyId => proxyRepository.get(proxyId)
   );
 
+  // Hard runtime default: final purchase is never enabled by persisted/UI state.
   allowFinalPurchase = false;
   browserWorker = new BrowserWorkerPoolClient(
     shopId => shops.get(shopId),
@@ -681,6 +682,7 @@ ipcMain.handle("set-final-purchase-allowed", async (_event, input: unknown) => {
     await commerceExecutor.setFinalPurchaseAllowed(requested);
     return { success: true, allowFinalPurchase };
   } catch (error) {
+    // Fail closed if any worker cannot confirm the global setting.
     allowFinalPurchase = false;
     await commerceExecutor.setFinalPurchaseAllowed(false).catch(() => undefined);
     return {
