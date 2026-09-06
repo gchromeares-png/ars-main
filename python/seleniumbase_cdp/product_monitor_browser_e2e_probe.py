@@ -91,13 +91,9 @@ def _send(process: subprocess.Popen[str], payload: Dict[str, Any]) -> None:
     process.stdin.flush()
 
 
-def main() -> int:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    base_url = f"http://127.0.0.1:{server.server_port}/"
-
-    with tempfile.TemporaryDirectory(prefix="ares-monitor-e2e-") as profile_dir:
+def _run_mode(base_url: str, *, headless: bool) -> None:
+    mode = "headless" if headless else "visible"
+    with tempfile.TemporaryDirectory(prefix=f"ares-monitor-{mode}-e2e-") as profile_dir:
         env = {**os.environ}
         python_path = str(WORKER.parent)
         env["PYTHONPATH"] = python_path + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
@@ -119,15 +115,16 @@ def main() -> int:
             _send(process, {
                 "type": "start",
                 "requestId": start_id,
-                "taskId": "monitor-e2e",
+                "taskId": f"monitor-e2e-{mode}",
                 "profileDir": profile_dir,
                 "startUrl": base_url,
-                "headless": True,
+                "headless": headless,
             })
             ready = _wait(messages, start_id, "ready", timeout=45.0)
             assert ready.get("challengeRuntimeEnabled") is True
             assert ready.get("visualRuntimeEnabled") is True
             assert ready.get("semanticRuntimeEnabled") is True
+            assert ready.get("pid"), ready
 
             catalog_id = uuid.uuid4().hex
             _send(process, {
@@ -163,16 +160,31 @@ def main() -> int:
             if process.returncode not in {0, None}:
                 stderr = process.stderr.read() if process.stderr else ""
                 raise AssertionError(f"Monitor worker exited with {process.returncode}: {stderr[-3000:]}")
+            print(f"MONITOR_BROWSER_MODE_PASS mode={mode} pid={ready.get('pid')}")
         finally:
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=5.0)
-            server.shutdown()
-            server.server_close()
+
+
+def main() -> int:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}/"
+
+    try:
+        # The same real JavaScript fixture must work in both task contracts:
+        # visible monitor (headless=false) and background monitor (headless=true).
+        _run_mode(base_url, headless=False)
+        _run_mode(base_url, headless=True)
+    finally:
+        server.shutdown()
+        server.server_close()
 
     print(
-        "PASS: real SeleniumBase Chromium rendered a JavaScript catalog and product page, "
-        "while the existing challenge/visual/semantic runtime stayed enabled."
+        "PASS: real SeleniumBase Chromium rendered the JavaScript storefront in visible and headless modes, "
+        "with the existing challenge/visual/semantic runtime enabled and no profile requirement."
     )
     return 0
 
