@@ -55,7 +55,12 @@ class AutoInteractionController:
     ) -> Dict[str, Any]:
         if state.get("kind") != "image-grid":
             return {"acted": False, "kind": "none", "state": state, "reason": "not-image-grid"}
-        result = self._handle_grid(state, source_override=list(sources), decision_source=source)
+        result = self._handle_grid(
+            state,
+            source_override=list(sources),
+            decision_source=source,
+            force_actionable=True,
+        )
         return {**result, "decisionSource": source}
 
     def status(self) -> Dict[str, Any]:
@@ -76,10 +81,19 @@ class AutoInteractionController:
         *,
         source_override: list[str] | None = None,
         decision_source: str = "structural-source",
+        force_actionable: bool = False,
     ) -> Dict[str, Any]:
         signature = str(state.get("signature") or "")
-        if not self._actionable(state) or not signature or signature == self._last_grid_signature:
-            return {"acted": False, "kind": "image-grid", "state": state, "decisionSource": decision_source}
+        actionable = self._actionable(state) or force_actionable
+        if not actionable or not signature or signature == self._last_grid_signature:
+            reason = "already-handled" if signature and signature == self._last_grid_signature else "not-actionable"
+            return {
+                "acted": False,
+                "kind": "image-grid",
+                "state": state,
+                "decisionSource": decision_source,
+                "reason": reason,
+            }
 
         sources = source_override if source_override is not None else list(state.get("sources") or [])
         decision = self._vision.classify(str(state.get("instruction") or ""), sources)
@@ -107,6 +121,7 @@ class AutoInteractionController:
                 "state": state,
                 "decision": decision,
                 "decisionSource": decision_source,
+                "reason": "no-selection",
             }
 
         self._last_action_at = time.monotonic()
@@ -123,10 +138,12 @@ class AutoInteractionController:
                 "acted": False,
                 "verified": False,
                 "kind": "image-grid",
+                "state": state,
                 "decision": decision,
                 "decisionSource": decision_source,
                 "result": result,
                 "verification": {"verified": False, "reason": "no-click-resolved"},
+                "reason": "no-click-resolved",
             }
 
         self._last_grid_signature = signature
@@ -136,6 +153,7 @@ class AutoInteractionController:
             "acted": True,
             "verified": bool(verification.get("verified")),
             "kind": "image-grid",
+            "state": state,
             "decision": decision,
             "decisionSource": decision_source,
             "result": result,
