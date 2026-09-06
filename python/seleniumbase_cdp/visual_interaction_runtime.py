@@ -83,10 +83,13 @@ class VisualInteractionRuntime:
                     },
                 )
                 if bool(captured.get("captured")):
-                    screenshot_result = self.poll_and_act_from_screenshot(str(captured.get("path") or ""))
-                    if screenshot_result.get("kind") == "image-grid" and screenshot_result.get("reason") != "screenshot-grid-unavailable":
-                        self._last_grid_debug_signature = signature
+                    screenshot_result = self.poll_and_act_from_screenshot(
+                        str(captured.get("path") or ""),
+                        state=grid_state,
+                    )
                     screenshot_result = self._finalize_interaction(screenshot_result)
+                    if screenshot_result.get("verified") is True:
+                        self._last_grid_debug_signature = signature
                     self._trace.append(
                         "grid-screenshot-result",
                         {
@@ -125,17 +128,40 @@ class VisualInteractionRuntime:
             },
         }
 
-    def poll_and_act_from_screenshot(self, screenshot_path: str | Path) -> Dict[str, Any]:
-        state = self._grid.poll()
-        if state.get("kind") != "image-grid":
-            return {"acted": False, "kind": "none", "reason": "no-image-grid", "state": state}
+    def poll_and_act_from_screenshot(
+        self,
+        screenshot_path: str | Path,
+        *,
+        state: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        observed = dict(state) if isinstance(state, dict) else self._grid.poll()
+        if observed.get("kind") != "image-grid":
+            return {"acted": False, "kind": "none", "reason": "no-image-grid", "state": observed}
 
-        tile_count = int(state.get("tileCount") or 0)
+        current = self._grid.poll()
+        observed_signature = str(observed.get("signature") or "")
+        current_signature = str(current.get("signature") or "")
+        if not observed_signature or current_signature != observed_signature:
+            return {
+                "acted": False,
+                "verified": False,
+                "kind": "image-grid",
+                "reason": "screenshot-state-stale",
+                "state": observed,
+                "currentState": current,
+                "invariants": {
+                    "observedSignature": observed_signature,
+                    "currentSignature": current_signature,
+                    "sameVisualState": False,
+                },
+            }
+
+        tile_count = int(observed.get("tileCount") or 0)
         marks = [
-            mark for mark in state.get("marks") or []
+            mark for mark in observed.get("marks") or []
             if isinstance(mark, dict) and mark.get("role") == "grid-tile"
         ]
-        provided = self._screenshot_tiles.sources(screenshot_path, state)
+        provided = self._screenshot_tiles.sources(screenshot_path, observed)
         sources = list(provided.get("sources") or [])
         readable = int(provided.get("readable") or 0)
         crop_count = int(provided.get("cropCount") or 0)
@@ -144,9 +170,10 @@ class VisualInteractionRuntime:
         if not geometry_ready or not crops_ready:
             return {
                 "acted": False,
+                "verified": False,
                 "kind": "image-grid",
                 "reason": "screenshot-grid-unavailable",
-                "state": state,
+                "state": observed,
                 "screenshot": provided,
                 "invariants": {
                     "tileCount": tile_count,
@@ -155,10 +182,13 @@ class VisualInteractionRuntime:
                     "readable": readable,
                     "geometryReady": geometry_ready,
                     "cropsReady": crops_ready,
+                    "observedSignature": observed_signature,
+                    "currentSignature": current_signature,
+                    "sameVisualState": True,
                 },
             }
 
-        result = self._controller.act_grid_from_sources(state, sources, source="screenshot-crops")
+        result = self._controller.act_grid_from_sources(observed, sources, source="screenshot-crops")
         return {
             **result,
             "screenshot": provided,
@@ -169,6 +199,9 @@ class VisualInteractionRuntime:
                 "readable": readable,
                 "geometryReady": True,
                 "cropsReady": True,
+                "observedSignature": observed_signature,
+                "currentSignature": current_signature,
+                "sameVisualState": True,
             },
         }
 
@@ -177,9 +210,11 @@ class VisualInteractionRuntime:
         verified = bool(result.get("verified"))
 
         if kind == "image-grid" and not verified:
+            reason = str(result.get("reason") or "")
             attempt = int(result.get("attempt") or 0)
             max_attempts = int(result.get("maxAttempts") or 3)
-            if result.get("reason") == "screenshot-grid-unavailable" or 0 < attempt < max_attempts:
+            retryable = reason not in {"max-attempts-reached", "explicit-failure"} and attempt < max_attempts
+            if retryable:
                 self._last_grid_debug_signature = ""
                 self._trace.append(
                     "grid-retry-scheduled",
@@ -187,7 +222,7 @@ class VisualInteractionRuntime:
                         "attempt": attempt,
                         "nextAttempt": attempt + 1 if attempt else 1,
                         "maxAttempts": max_attempts,
-                        "reason": result.get("reason"),
+                        "reason": reason,
                     },
                 )
 
@@ -233,6 +268,7 @@ class VisualInteractionRuntime:
             "gridGeometry": "dynamic-2x2-through-8x8",
             "gridClickOrder": "nearest-neighbour",
             "gridCropInvariant": "one-mark-one-readable-crop",
+            "gridStateInvariant": "capture-classify-click-same-visual-state",
             "gridTiming": {
                 "clickDelaySeconds": self._policy.grid_click_delay_seconds,
                 "submitDelaySeconds": self._policy.grid_submit_delay_seconds,
