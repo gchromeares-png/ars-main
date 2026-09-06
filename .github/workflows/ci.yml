@@ -30,6 +30,7 @@ jobs:
           python/seleniumbase_cdp/robust_vision_grid_classifier.py
           python/seleniumbase_cdp/vision_runtime_bootstrap.py
           python/seleniumbase_cdp/siglip_randomized_grid_probe.py
+          python/seleniumbase_cdp/siglip_browser_e2e_probe.py
           python/seleniumbase_cdp/stable_marks.py
           python/seleniumbase_cdp/cursor_path_provider.py
           python/seleniumbase_cdp/slider_target_grounder.py
@@ -60,6 +61,9 @@ jobs:
         env:
           ARES_SIGLIP_TEST_ROUNDS: "3"
         run: python python/seleniumbase_cdp/siglip_randomized_grid_probe.py
+
+      - name: Run real screenshot-to-SigLIP2-to-CDP E2E
+        run: python python/seleniumbase_cdp/siglip_browser_e2e_probe.py
 
       - name: Verify stable visual marks contract
         run: python python/seleniumbase_cdp/stable_marks_probe.py
