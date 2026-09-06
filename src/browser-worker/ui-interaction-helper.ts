@@ -1,7 +1,6 @@
 import type { Locator, Page } from "./types";
 import { InteractionEngine } from "./interaction-engine";
 import type { InteractionOutcomeExpectation } from "./interaction-policies";
-import { GhostCursorPointerDriver } from "./pointer-driver";
 
 export interface UiPoint {
   x: number;
@@ -44,19 +43,18 @@ export interface UiInteractionHelper {
 
 /**
  * Backwards-compatible facade for normal UI automation.
- * InteractionEngine owns readiness/outcome/retries; GhostCursorPointerDriver
- * owns only normal pointer movement. Challenge handling stays separate.
+ * InteractionEngine owns readiness/outcome/retries and the seeded Bezier cursor
+ * path. Challenge handling stays separate.
  */
 export class GhostCursorUiInteractionHelper implements UiInteractionHelper {
   private readonly engine: InteractionEngine;
 
   constructor(private readonly page: Page) {
-    this.engine = new InteractionEngine(
-      page,
-      undefined,
-      undefined,
-      new GhostCursorPointerDriver(page)
-    );
+    // Do not inject the direct pointer driver here: doing so bypasses
+    // InteractionEngine.movePointer(), which is where the deterministic seeded
+    // Bezier path is generated. Keeping the engine on its native Page.mouse
+    // path makes every supplied seed affect both target variation and movement.
+    this.engine = new InteractionEngine(page);
   }
 
   async moveTo(target: Locator, options: UiMoveOptions = {}): Promise<void> {
