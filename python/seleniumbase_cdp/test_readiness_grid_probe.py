@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import queue
 import shutil
@@ -42,6 +43,17 @@ def _marks(rows: int, columns: int):
     ]
 
 
+def _tile_svg(index: int) -> str:
+    shade = 48 + (index % 8) * 20
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'>"
+        f"<rect width='40' height='40' fill='rgb({shade},120,180)'/>"
+        f"<text x='20' y='25' text-anchor='middle' font-family='Arial' font-size='12' fill='white'>{index}</text>"
+        "</svg>"
+    )
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+
+
 class Recorder:
     def __init__(self) -> None:
         self.hits: queue.Queue[Dict[str, str]] = queue.Queue()
@@ -63,16 +75,21 @@ class ProbeHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/":
             tiles = "".join(
-                f"<button class='tile' data-index='{index}' onclick=\"fetch('/clicked?index={index}')\">{index}</button>"
+                f"<button class='tile' data-index='{index}' aria-label='tile {index}' onclick=\"fetch('/clicked?index={index}')\">"
+                f"<img src='{_tile_svg(index)}' alt='tile-{index}' draggable='false'>"
+                "</button>"
                 for index in range(64)
             )
             body = f"""<!doctype html>
 <html><head><meta charset='utf-8'><style>
 body{{font-family:Arial;margin:20px}}
+.instruction{{margin:0 0 12px 0}}
 #grid{{display:grid;grid-template-columns:repeat(8,40px);gap:8px;width:max-content}}
-.tile{{width:40px;height:40px}}
+.tile{{width:40px;height:40px;padding:0;border:0;background:transparent}}
+.tile img{{display:block;width:40px;height:40px}}
 .submit{{margin-top:16px;padding:10px 18px}}
 </style></head><body>
+<h2 class='instruction'>Select the requested visual tiles</h2>
 <div id='grid'>{tiles}</div>
 <button class='submit' onclick=\"fetch('/submitted')\">OK</button>
 </body></html>""".encode("utf-8")
@@ -130,14 +147,24 @@ def _run_real_browser_probe(root: Path) -> None:
     try:
         client = WorkerClient(profile_dir, url)
 
-        request_id = "grid-state"
-        client.send({"type": "site-grid-state", "requestId": request_id})
-        state_message = client.wait("site-grid-state", request_id, 15)
-        state = state_message.get("state") or {}
+        state: Dict[str, Any] = {}
+        deadline = time.time() + 15.0
+        attempt = 0
+        while time.time() < deadline:
+            attempt += 1
+            request_id = f"grid-state-{attempt}"
+            client.send({"type": "site-grid-state", "requestId": request_id})
+            state_message = client.wait("site-grid-state", request_id, 6)
+            state = state_message.get("state") or {}
+            if state.get("kind") == "image-grid" and int(state.get("tileCount") or 0) == 64:
+                break
+            time.sleep(0.25)
+
         assert state.get("kind") == "image-grid", state
         assert int(state.get("rows") or 0) == 8, state
         assert int(state.get("columns") or 0) == 8, state
         assert int(state.get("tileCount") or 0) == 64, state
+        assert len([source for source in state.get("sources") or [] if source]) == 64, state
 
         request_id = "apply-selection"
         client.send({
@@ -187,7 +214,7 @@ def main() -> int:
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
 
-    print("PASS: real SeleniumBase CDP 8x8 grid clicks and submit verified by the browser test server.")
+    print("PASS: real SeleniumBase CDP visual 8x8 grid clicks and submit verified by the browser test server.")
     return 0
 
 
