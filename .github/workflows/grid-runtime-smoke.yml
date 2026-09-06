@@ -71,8 +71,10 @@ jobs:
             $path = 'python/seleniumbase_cdp/grid_runtime_smoke_probe.py'
             $content = Get-Content $path -Raw
             $content = $content.Replace('_diagnostic(diagnostics_root, "probe-start", root=str(temporary), keepArtifacts=keep_artifacts)', '_diagnostic(diagnostics_root, "probe-start", probeRoot=str(temporary), keepArtifacts=keep_artifacts)')
+            $content = $content.Replace('payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}', 'payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else entry')
             $content = $content.Replace('}}, 2800);', '}}, 15000);')
             Set-Content -Path $path -Value $content -Encoding utf8
+            python -m py_compile $path
 
             python python/seleniumbase_cdp/grid_runtime_smoke_probe.py 2>&1 | Tee-Object -FilePath $runLog
             $exitCode = $LASTEXITCODE
