@@ -281,6 +281,7 @@ class SeleniumBaseCdpAdapter:
     def is_running(self) -> bool:
         if self._closed:
             return False
+        self._poll_observation_watchdog()
         pid = self.chrome_pid
         if not pid:
             return True
