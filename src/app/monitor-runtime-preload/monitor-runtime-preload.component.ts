@@ -1,4 +1,4 @@
-import { Component, Input } from "@angular/core";
+import { Component } from "@angular/core";
 import { ElectronService } from "../services/electron.service";
 
 @Component({
@@ -8,11 +8,11 @@ import { ElectronService } from "../services/electron.service";
       <button
         type="button"
         class="runtime-preload__button"
-        [disabled]="busy || !shopId"
+        [disabled]="busy"
         [title]="buttonTitle"
         (click)="prepare()"
       >{{ busy ? '…' : ready ? '✓' : '⚡' }}</button>
-      <span *ngIf="ready" class="runtime-preload__state">Runtime ready</span>
+      <span *ngIf="ready" class="runtime-preload__state">Vision ready</span>
       <span *ngIf="error" class="runtime-preload__error">{{ error }}</span>
     </div>
   `,
@@ -39,9 +39,6 @@ import { ElectronService } from "../services/electron.service";
   `]
 })
 export class MonitorRuntimePreloadComponent {
-  @Input() shopId = "";
-  @Input() profileId = "";
-
   busy = false;
   ready = false;
   error = "";
@@ -49,46 +46,21 @@ export class MonitorRuntimePreloadComponent {
   constructor(private readonly electron: ElectronService) {}
 
   get buttonTitle(): string {
-    if (this.busy) return "Monitor-Runtime wird vorbereitet";
-    if (this.ready) return "SeleniumBase + Vision Runtime ist vorgeladen";
-    return "SeleniumBase + Vision Runtime für den Monitor vorladen";
+    if (this.busy) return "Vision Runtime wird vorbereitet";
+    if (this.ready) return "SigLIP/Vision für den Monitor ist vorgeladen";
+    return "SigLIP/Vision für Browser-Fallback vorladen";
   }
 
   async prepare(): Promise<void> {
     if (this.busy) return;
     this.error = "";
     this.ready = false;
-
-    const profileId = String(this.profileId ?? "").trim();
-    const shopId = String(this.shopId ?? "").trim();
-    if (!profileId) {
-      this.error = "Profil wählen";
-      return;
-    }
-    if (!shopId) {
-      this.error = "Shop wählen";
-      return;
-    }
-
     this.busy = true;
     try {
-      const shopsResult = await this.electron.getShops();
-      const shop = Array.isArray(shopsResult?.shops)
-        ? shopsResult.shops.find((item: any) => String(item?.id ?? "") === shopId)
-        : undefined;
-      const startUrl = String(shop?.baseUrl ?? "").trim();
-      if (!startUrl) throw new Error(`Shop ${shopId} wurde nicht gefunden.`);
-
       const vision = await this.electron.prepareSeleniumBaseVision();
       if (!vision?.success || !vision?.status?.ready) {
         throw new Error(vision?.error || vision?.status?.error || "Vision Runtime konnte nicht vorbereitet werden.");
       }
-
-      const browser = await this.electron.openProfileBrowser(profileId, startUrl);
-      if (!browser?.success || !browser?.status?.open) {
-        throw new Error(browser?.error || "SeleniumBase Monitor-Runtime konnte nicht gestartet werden.");
-      }
-
       this.ready = true;
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
