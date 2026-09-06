@@ -65,13 +65,30 @@ class FakeSb:
 
 
 class FakePaths:
-    def play_drag(self, sb, start, end, *, preferred="ghost-cursor", gui_start=None, gui_end=None):
+    def play_drag(
+        self,
+        sb,
+        start,
+        end,
+        *,
+        preferred="ghost-cursor",
+        gui_start=None,
+        gui_end=None,
+        end_hold_backtrack=False,
+    ):
         assert preferred == "ghost-cursor"
         assert abs(start[0] - 65.0) < 0.01 and abs(start[1] - 32.0) < 0.01
         assert abs(end[0] - 308.0) < 0.01 and abs(end[1] - 32.0) < 0.01
         assert gui_start is not None and gui_end is not None
+        assert end_hold_backtrack is True
         sb.gui_drag_drop_points(gui_start[0], gui_start[1], gui_end[0], gui_end[1], timeframe=0.55)
-        return {"moved": True, "provider": "ghost-cursor:cdp", "pointCount": 33}
+        return {
+            "moved": True,
+            "provider": "ghost-cursor:cdp",
+            "pointCount": 33,
+            "dragProfile": 1,
+            "endHoldBacktrack": True,
+        }
 
 
 class FakeGridAdapter:
@@ -151,6 +168,7 @@ def main() -> int:
 
     moved = SliderActionExecutor(sb, slider, FakePaths()).apply(0.96)
     assert moved["moved"] is True and moved["mode"] == "path:ghost-cursor:cdp"
+    assert moved["dragProfile"] == 1 and moved["endHoldBacktrack"] is True
     assert moved["state"]["fraction"] == 0.96 and len(sb.drags) == 1
 
     grid = FakeGridAdapter()
