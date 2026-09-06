@@ -12,6 +12,7 @@ from mycdp import input_ as cdp_input
 
 Point = Tuple[float, float]
 
+
 class CursorPathProvider:
     """Plan and play smooth cursor paths through the existing CDP session."""
 
@@ -37,14 +38,36 @@ class CursorPathProvider:
             return {"clicked": True, "provider": f"{provider}:cdp", "pointCount": len(points)}
         return {"clicked": False, "provider": provider, "pointCount": len(points)}
 
-    def play_drag(self, seleniumbase_cdp: Any, start: Point, end: Point, *, preferred: str = "ghost-cursor", gui_start: Point | None = None, gui_end: Point | None = None) -> Dict[str, Any]:
+    def play_drag(
+        self,
+        seleniumbase_cdp: Any,
+        start: Point,
+        end: Point,
+        *,
+        preferred: str = "ghost-cursor",
+        gui_start: Point | None = None,
+        gui_end: Point | None = None,
+        end_hold_backtrack: bool = False,
+    ) -> Dict[str, Any]:
         plan = self.plan(start, end, preferred=preferred)
         points = self._clean_points(plan.get("points") or [])
         provider = str(plan.get("provider") or "path")
         if len(points) < 2:
             return {"moved": False, "provider": provider, "pointCount": len(points)}
-        if self._play_cdp_drag(seleniumbase_cdp, points):
-            return {"moved": True, "provider": f"{provider}:cdp", "pointCount": len(points)}
+        profile = int.from_bytes(os.urandom(1), "big") % 4
+        if self._play_cdp_drag(
+            seleniumbase_cdp,
+            points,
+            profile=profile,
+            end_hold_backtrack=end_hold_backtrack,
+        ):
+            return {
+                "moved": True,
+                "provider": f"{provider}:cdp",
+                "pointCount": len(points),
+                "dragProfile": profile + 1,
+                "endHoldBacktrack": bool(end_hold_backtrack),
+            }
         if gui_start is not None and gui_end is not None:
             gui_plan = self.plan(gui_start, gui_end, preferred=preferred)
             gui_points = self._clean_points(gui_plan.get("points") or [])
@@ -76,6 +99,7 @@ class CursorPathProvider:
         if context is None:
             return False
         tab, loop = context
+
         async def click() -> None:
             button = cdp_input.MouseButton("left")
             for x, y in points:
@@ -84,6 +108,7 @@ class CursorPathProvider:
             x, y = points[-1]
             await tab.send(cdp_input.dispatch_mouse_event("mousePressed", x=x, y=y, button=button, buttons=1, click_count=1))
             await tab.send(cdp_input.dispatch_mouse_event("mouseReleased", x=x, y=y, button=button, buttons=0, click_count=1))
+
         try:
             loop.run_until_complete(click())
             return True
@@ -91,23 +116,56 @@ class CursorPathProvider:
             return False
 
     @classmethod
-    def _play_cdp_drag(cls, seleniumbase_cdp: Any, points: List[Point]) -> bool:
+    def _play_cdp_drag(
+        cls,
+        seleniumbase_cdp: Any,
+        points: List[Point],
+        *,
+        profile: int = 0,
+        end_hold_backtrack: bool = False,
+    ) -> bool:
         context = cls._cdp_context(seleniumbase_cdp)
         if context is None:
             return False
         tab, loop = context
+
         async def drag() -> None:
             button = cdp_input.MouseButton("left")
             sx, sy = points[0]
             await tab.send(cdp_input.dispatch_mouse_event("mouseMoved", x=sx, y=sy, button=button, buttons=0))
+            await asyncio.sleep(0.035 + profile * 0.008)
             await tab.send(cdp_input.dispatch_mouse_event("mousePressed", x=sx, y=sy, button=button, buttons=1, click_count=1))
+            await asyncio.sleep((0.045, 0.065, 0.055, 0.075)[profile])
             try:
-                for x, y in points[1:]:
+                count = max(1, len(points) - 1)
+                for index, (x, y) in enumerate(points[1:], start=1):
+                    t = index / count
+                    if profile == 0:
+                        delay = 0.010 + 0.010 * t
+                    elif profile == 1:
+                        delay = 0.008 + 0.018 * (t * t)
+                    elif profile == 2:
+                        delay = 0.012 + 0.006 * abs(math.sin(t * math.pi * 2.0))
+                    else:
+                        delay = 0.009 + (0.020 if t > 0.72 else 0.006 * t)
                     await tab.send(cdp_input.dispatch_mouse_event("mouseMoved", x=x, y=y, button=button, buttons=1))
-                    await asyncio.sleep(0)
-            finally:
+                    await asyncio.sleep(delay)
+
                 ex, ey = points[-1]
+                if end_hold_backtrack:
+                    await asyncio.sleep((0.10, 0.14, 0.12, 0.16)[profile])
+                    px, py = points[-2]
+                    dx, dy = ex - px, ey - py
+                    length = max(1e-6, math.hypot(dx, dy))
+                    back = 1.0 if profile in (0, 2) else 2.0
+                    bx = ex - dx / length * back
+                    by = ey - dy / length * back
+                    await tab.send(cdp_input.dispatch_mouse_event("mouseMoved", x=bx, y=by, button=button, buttons=1))
+                    await asyncio.sleep((0.045, 0.060, 0.050, 0.070)[profile])
+                    ex, ey = bx, by
+            finally:
                 await tab.send(cdp_input.dispatch_mouse_event("mouseReleased", x=ex, y=ey, button=button, buttons=0, click_count=1))
+
         try:
             loop.run_until_complete(drag())
             return True
