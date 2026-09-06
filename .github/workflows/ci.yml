@@ -32,6 +32,7 @@ jobs:
           python/seleniumbase_cdp/vision_grid_classifier.py
           python/seleniumbase_cdp/robust_vision_grid_classifier.py
           python/seleniumbase_cdp/vision_runtime_bootstrap.py
+          python/seleniumbase_cdp/vision_inference_service.py
           python/seleniumbase_cdp/siglip_randomized_grid_probe.py
           python/seleniumbase_cdp/siglip_context_ab_probe.py
           python/seleniumbase_cdp/siglip_calibration_latency_probe.py

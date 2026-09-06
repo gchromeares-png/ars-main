@@ -18,15 +18,33 @@ class VisionService:
         self.classifier = RobustVisionGridClassifier(allow_remote=False)
         self._requests = 0
         self._lock = threading.Lock()
+        self._preload_started = False
 
     def authorize(self, header: str) -> bool:
         return bool(self.token) and header == f"Bearer {self.token}"
+
+    def preload_async(self) -> None:
+        with self._lock:
+            if self._preload_started:
+                return
+            self._preload_started = True
+
+        def run() -> None:
+            _ = self.classifier.ready
+
+        threading.Thread(target=run, name="ares-vision-preload", daemon=True).start()
 
     def health(self) -> Dict[str, Any]:
         value = self.classifier.status()
         with self._lock:
             requests = self._requests
-        return {**value, "service": "ares-shared-vision", "requests": requests}
+            preload_started = self._preload_started
+        return {
+            **value,
+            "service": "ares-shared-vision",
+            "requests": requests,
+            "preloadStarted": preload_started,
+        }
 
     def classify(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         instruction = str(payload.get("instruction") or "")
@@ -104,19 +122,22 @@ def main() -> int:
         raise ValueError("shared vision service must bind to loopback")
 
     service = VisionService(str(args.token))
-    if args.preload and not service.classifier.ready:
-        print(json.dumps({"ready": False, "error": service.classifier.error}), flush=True)
-        return 1
-
     server = ThreadingHTTPServer((args.host, args.port), handler_for(service))
     host, port = server.server_address[:2]
+
+    # Publish the listener before model load. The owning Node worker can hand
+    # URL/token to session processes immediately while preload overlaps browser
+    # startup and navigation. First inference is serialized by the classifier.
     print(json.dumps({
         "ready": True,
         "url": f"http://{host}:{port}",
         "model": service.classifier.model_name,
-        "device": service.classifier.status().get("device"),
+        "preloading": bool(args.preload),
         "selectionPolicy": "prompt-ensemble-raw-logit",
     }), flush=True)
+    if args.preload:
+        service.preload_async()
+
     try:
         server.serve_forever(poll_interval=0.25)
     finally:

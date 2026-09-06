@@ -6,17 +6,34 @@ const read = (relative: string) => fs.readFileSync(path.resolve(__dirname, "..",
 describe("SeleniumBase vision runtime E2E wiring", () => {
   const classifier = read("python/seleniumbase_cdp/vision_grid_classifier.py");
   const bootstrap = read("python/seleniumbase_cdp/vision_runtime_bootstrap.py");
+  const sharedService = read("python/seleniumbase_cdp/vision_inference_service.py");
+  const browserRuntime = read("src/browser-worker/ares-browser-runtime.ts");
   const electronRuntime = read("src/electron/seleniumbase-vision-runtime.ts");
   const profileController = read("src/electron/profile-browser-controller.ts");
   const preload = read("src/electron/preload.ts");
   const pkg = JSON.parse(read("package.json"));
 
-  it("batches grid inference and uses CUDA when available", () => {
+  it("batches image encoding, caches prompt ensembles and uses CUDA when available", () => {
     expect(classifier).toContain('self._device = "cuda" if torch.cuda.is_available() else "cpu"');
     expect(classifier).toContain("images=[image for _, image in loaded]");
     expect(classifier).toContain("torch.inference_mode");
-    expect(classifier).toContain("outputs.logits_per_image.float()");
+    expect(classifier).toContain("get_image_features");
+    expect(classifier).toContain("get_text_features");
+    expect(classifier).toContain("PROMPT_TEMPLATES");
+    expect(classifier).toContain("DEFAULT_RAW_LOGIT_THRESHOLD");
     expect(classifier).toContain('"device": self._device');
+  });
+
+  it("shares one loopback inference service across worker-owned session processes", () => {
+    expect(browserRuntime).toContain("ensureSharedVisionService");
+    expect(browserRuntime).toContain('ARES_VISION_SERVICE_URL');
+    expect(browserRuntime).toContain('ARES_VISION_SERVICE_TOKEN');
+    expect(browserRuntime).toContain('vision_inference_service.py');
+    expect(browserRuntime).toContain('args.push("--preload")');
+    expect(sharedService).toContain('ThreadingHTTPServer');
+    expect(sharedService).toContain('service.preload_async()');
+    expect(sharedService).toContain('"127.0.0.1"');
+    expect(sharedService).toContain('Bearer');
   });
 
   it("prepares dependencies and caches the configured vision model", () => {
