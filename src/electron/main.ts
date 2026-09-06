@@ -28,7 +28,7 @@ import { CommerceProductApiRouter } from "../commerce/product-api/router";
 import { CommerceMonitorService, isCommerceMonitorTask } from "../monitor/commerce-monitor-service";
 import { MonitorAutoCheckoutCoordinator } from "../monitor/auto-checkout-coordinator";
 import { PassiveHttpPreCheckoutGate } from "../monitor/pre-checkout-gate";
-import { isEarlyGateChildTask, normalizeDiscoveryKeywords } from "../monitor/early-gate";
+import { getMonitorStrategy, isEarlyGateChildTask, normalizeDiscoveryKeywords } from "../monitor/early-gate";
 import {
   isCapMonsterApiKeyConfigured,
   loadCapMonsterApiKeyFromEnvFiles,
@@ -80,6 +80,7 @@ const profileRepository = new ProfileRepository();
 const proxyRepository = new ProxyRepository();
 const proxyHealthService = new ProxyHealthService();
 const paymentSessions = new Map<string, CheckoutPaymentSession>();
+const visibleMonitorBrowserProfiles = new Map<string, string>();
 
 function normalizeStoredShop(input: any): CommerceShop | undefined {
   if (!input?.id || !input?.baseUrl) return undefined;
@@ -163,6 +164,55 @@ function readSystemNodeStatus(): SystemNodeStatus {
   }
 }
 
+function monitorAction(task: any): {
+  mode?: string;
+  profileId?: string;
+  headless?: boolean;
+  cookieSnapshotId?: string;
+} | undefined {
+  const value = task?.config?.data?.["monitorAction"];
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+
+async function openVisibleProductMonitorBrowser(task: any): Promise<void> {
+  if (!task || getMonitorStrategy(task).mode === "early-gate") return;
+  const action = monitorAction(task);
+  if (action?.mode !== "auto-checkout" || action.headless === true) return;
+  if (visibleMonitorBrowserProfiles.has(String(task.id))) return;
+
+  const profileId = String(task.config?.data?.["profileId"] ?? action.profileId ?? "").trim();
+  if (!profileId) throw new Error("Sichtbarer Monitor-Browser benötigt ein Profil.");
+  const profile = profileRepository.get(profileId);
+  if (!profile) throw new Error(`Monitor-Profil ${profileId} wurde nicht gefunden.`);
+  if (profileBrowserController.isOpen(profileId)) {
+    throw new Error(`Profil ${profile.name || profileId} ist bereits in einem Browser geöffnet.`);
+  }
+
+  const shopId = String(task.config?.shopId ?? "").trim();
+  const shop = shops.get(shopId);
+  if (!shop) throw new Error(`Shop ${shopId || "(ohne ID)"} wurde nicht gefunden.`);
+  const cookieSnapshotId = String(task.config?.data?.["cookieSnapshotId"] ?? action.cookieSnapshotId ?? "").trim();
+
+  await profileBrowserController.open(profile, {
+    startUrl: shop.baseUrl,
+    ...(cookieSnapshotId ? { cookieSnapshotId } : {})
+  });
+  visibleMonitorBrowserProfiles.set(String(task.id), profileId);
+  broadcastMonitorUpdate({
+    taskId: String(task.id),
+    browserMonitor: { status: "visible", profileId, url: shop.baseUrl }
+  });
+}
+
+async function closeVisibleProductMonitorBrowser(taskId: string): Promise<void> {
+  const id = String(taskId ?? "").trim();
+  const profileId = visibleMonitorBrowserProfiles.get(id);
+  if (!profileId) return;
+  visibleMonitorBrowserProfiles.delete(id);
+  await profileBrowserController.close(profileId).catch(() => undefined);
+  broadcastMonitorUpdate({ taskId: id, browserMonitor: { status: "closed", profileId } });
+}
+
 async function createBackend(): Promise<void> {
   const userData = app.getPath("userData");
   profileRepository.setStoragePath(path.join(userData, "profiles.json"));
@@ -176,7 +226,6 @@ async function createBackend(): Promise<void> {
     proxyId => proxyRepository.get(proxyId)
   );
 
-  // Hard runtime default: final purchase is never enabled by persisted/UI state.
   allowFinalPurchase = false;
   browserWorker = new BrowserWorkerPoolClient(
     shopId => shops.get(shopId),
@@ -198,7 +247,10 @@ async function createBackend(): Promise<void> {
       preCheckoutGate: new PassiveHttpPreCheckoutGate(),
       onEvent: (taskId, event) => {
         broadcastMonitorUpdate({ taskId, event });
-        void autoCheckoutCoordinator?.handleProductEvent(taskId, event).catch(error => {
+        void (async () => {
+          if (event.current.available) await closeVisibleProductMonitorBrowser(taskId);
+          await autoCheckoutCoordinator?.handleProductEvent(taskId, event);
+        })().catch(error => {
           const task = orchestrator?.getTask(taskId);
           if (task) {
             task.lastError = error instanceof Error ? error.message : String(error);
@@ -268,6 +320,7 @@ async function createBackend(): Promise<void> {
   const forwardTask = (task: any) => {
     if (task?.id && [TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED].includes(task.state)) {
       paymentSessions.delete(String(task.id));
+      void closeVisibleProductMonitorBrowser(String(task.id));
     }
     mainWindow?.webContents.send("task-status-update", task);
   };
@@ -526,7 +579,9 @@ ipcMain.handle("start-task", async (_event, taskId: string) => {
     if (!existing) return { success: false, error: `Task ${taskId} not found.` };
 
     if (isCommerceMonitorTask(existing)) {
-      void orchestrator.startTask(taskId).catch(error => {
+      await openVisibleProductMonitorBrowser(existing);
+      void orchestrator.startTask(taskId).catch(async error => {
+        await closeVisibleProductMonitorBrowser(taskId);
         existing.lastError = error instanceof Error ? error.message : String(error);
         broadcastTaskUpdate(existing);
       });
@@ -574,6 +629,7 @@ ipcMain.handle("resume-task", async (_event, taskId: string) => {
 ipcMain.handle("stop-task", async (_event, taskId: string) => {
   try {
     paymentSessions.delete(taskId);
+    await closeVisibleProductMonitorBrowser(taskId);
     orchestrator.cancelTask(taskId);
     const task = orchestrator.getTask(taskId);
     commerceMonitor.resetTask(taskId);
@@ -625,7 +681,6 @@ ipcMain.handle("set-final-purchase-allowed", async (_event, input: unknown) => {
     await commerceExecutor.setFinalPurchaseAllowed(requested);
     return { success: true, allowFinalPurchase };
   } catch (error) {
-    // Fail closed if any worker cannot confirm the global setting.
     allowFinalPurchase = false;
     await commerceExecutor.setFinalPurchaseAllowed(false).catch(() => undefined);
     return {
@@ -721,6 +776,7 @@ app.on("before-quit", event => {
     allowFinalPurchase = false;
     await commerceExecutor?.setFinalPurchaseAllowed(false).catch(() => undefined);
     paymentSessions.clear();
+    visibleMonitorBrowserProfiles.clear();
     await profileBrowserController?.closeAll().catch(() => undefined);
     await commerceExecutor?.close().catch(() => undefined);
     orchestrator?.cleanup();
