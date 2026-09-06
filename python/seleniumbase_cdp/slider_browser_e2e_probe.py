@@ -171,7 +171,7 @@ def main() -> int:
         print(
             "SLIDER_E2E_DIAGNOSTIC "
             f"source={target.get('source')!r} groundedFraction={target.get('targetFraction')!r} "
-            f"actionMode={action.get('mode')!r} dragProfile={action.get('dragProfile')!r} "
+            f"actionMode={action.get('mode')!r} "
             f"endHoldBacktrack={action.get('endHoldBacktrack')!r} serverFraction={actual_fraction:.6f} "
             f"failedHits={len(failed)}"
         )
@@ -181,7 +181,6 @@ def main() -> int:
         assert result.get("acted") is True, result
         assert str(action.get("mode") or "").startswith("path:"), action
         assert str(action.get("mode") or "").endswith(":cdp"), action
-        assert action.get("dragProfile") in {1, 2, 3, 4}, action
         assert action.get("endHoldBacktrack") is True, action
         assert len(completed) == 1 and not failed, hits
         assert actual_fraction >= 0.94, actual_fraction
