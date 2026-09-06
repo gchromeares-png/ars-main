@@ -5,6 +5,7 @@ describe("ARES unified task control UX", () => {
   const component = fs.readFileSync(path.resolve(__dirname, "../src/app/app.component.ts"), "utf8");
   const html = fs.readFileSync(path.resolve(__dirname, "../src/app/app.component.html"), "utf8");
   const styles = fs.readFileSync(path.resolve(__dirname, "../src/app/app.component.scss"), "utf8");
+  const runtimeHtml = fs.readFileSync(path.resolve(__dirname, "../src/app/runtime-control/runtime-control.component.html"), "utf8");
 
   it("creates one monitor-backed task with optional auto-checkout behavior", () => {
     const createStart = component.indexOf("async createTask()");
@@ -20,50 +21,49 @@ describe("ARES unified task control UX", () => {
     expect(component).not.toContain("async createMonitorTask()");
   });
 
-  it("uses the left sidebar and keeps profiles, proxies and shops separate", () => {
-    expect(html).toContain("side-nav");
-    expect(html).toContain("<span>Overview</span>");
-    expect(html).toContain("<span>Watch</span>");
-    expect(html).toContain("<span>Profiles</span>");
-    expect(html).toContain("<span>Proxys</span>");
-    expect(html).toContain("<span>Shops</span>");
+  it("uses the command-center sidebar and keeps core modules separate", () => {
+    expect(html).toContain('class="nav"');
+    expect(html).toContain("<b>Overview</b>");
+    expect(html).toContain("<b>Tasks</b>");
+    expect(html).toContain("<b>Profiles</b>");
+    expect(html).toContain("<b>Proxies</b>");
+    expect(html).toContain("<b>Shops</b>");
     expect(html).not.toContain("setTab('monitor')");
-    expect(html).toContain(">Persönlich</button>");
-    expect(html).toContain(">Adressen</button>");
+    expect(html).toContain(">Identity</button>");
+    expect(html).toContain(">Address</button>");
     expect(html).toContain(">Browser</button>");
-    expect(html).toContain(">Zahlung</button>");
+    expect(html).toContain(">Payment</button>");
   });
 
-  it("exposes monitor-only, auto-checkout and Early Gate with global purchase control", () => {
-    expect(html).toContain("Nur beobachten");
-    expect(html).toContain("Checkout vorbereiten");
-    expect(html).toContain("Early Gate");
-    expect(html).toContain("GLOBAL AUS");
-    expect(html).toContain("Finaler Kauf");
+  it("exposes monitor-only, auto-checkout and Early Gate while preserving the global purchase guard", () => {
+    expect(html).toContain(">Monitor only</button>");
+    expect(html).toContain(">Auto checkout</button>");
+    expect(html).toContain(">Early gate</button>");
+    expect(runtimeHtml).toContain("GLOBAL PURCHASE GUARD");
+    expect(runtimeHtml).toContain("FINALER KAUF");
   });
 
-  it("uses the compact graphite/lime control theme with minimal responsive behavior", () => {
-    expect(styles).toContain("#090a09");
-    expect(styles).toContain("#b7df5c");
+  it("uses the compact dark command-center theme with minimal responsive behavior", () => {
+    expect(styles).toContain("#0a0b0d");
+    expect(styles).toContain("#4f46e5");
     expect(styles).toContain(".sidebar");
-    expect(styles).toContain("@media (max-width: 1180px)");
-    expect(styles).not.toContain("@media (max-width: 820px)");
+    expect(styles).toContain(".nav");
+    expect(styles).toContain("@media (max-width: 1050px)");
     expect(styles).not.toContain("#fff7fb");
     expect(styles).not.toContain("#ff6fa5");
   });
 
   it("keeps task payment profile-backed without manual card inputs", () => {
-    expect(html).toContain("Profil-Zahlung ist immer aktiv");
-    expect(html).toContain("PROFILE VAULT");
-    expect(html).toContain("Es gibt keinen Klartext-Fallback im Task");
+    expect(html).toContain('[(ngModel)]="taskPaymentEnabled"');
+    expect(html).toContain("Use profile payment");
+    expect(html).toContain("Profile vault + runtime isolation");
     expect(html).not.toContain('[(ngModel)]="sessionCardNumber"');
     expect(html).not.toContain('[(ngModel)]="sessionCardSecurityCode"');
-    expect(html).not.toContain('[(ngModel)]="taskPaymentEnabled"');
   });
 
   it("shows real proxy health actions and diagnostic metrics", () => {
-    expect(html).toContain("PROXY CONFIG");
-    expect(html).toContain("Alle testen");
+    expect(html).toContain("Proxy config");
+    expect(html).toContain("Test all");
     expect(html).toContain("STATUS");
     expect(html).toContain("LATENCY");
     expect(html).toContain("EXIT IP");

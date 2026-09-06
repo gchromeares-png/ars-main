@@ -3,7 +3,7 @@ import * as path from "path";
 
 const read = (relative: string) => fs.readFileSync(path.resolve(__dirname, "..", relative), "utf8");
 
-describe("grid debug fallback and Watch task visibility", () => {
+describe("grid debug fallback and task visibility", () => {
   const runtime = read("python/seleniumbase_cdp/visual_interaction_runtime.py");
   const controller = read("python/seleniumbase_cdp/auto_interaction_controller.py");
   const ui = read("src/app/app.component.html");
@@ -25,11 +25,14 @@ describe("grid debug fallback and Watch task visibility", () => {
     expect(controller).toContain('"reason": "no-click-resolved"');
   });
 
-  it("keeps Watch tasks visible instead of hiding them in a collapsed disclosure", () => {
-    expect(ui).toContain("Starten & beobachten");
+  it("keeps tasks visible and exposes direct per-task controls", () => {
+    expect(ui).toContain("Product monitor");
+    expect(ui).toContain('class="task-table surface"');
     expect(ui).toContain("tasks.slice().reverse()");
-    expect(ui).toContain("Nach dem Erstellen erscheint der Task direkt unter dem Formular");
+    expect(ui).toContain('(click)="startTask(task.id)"');
+    expect(ui).toContain('(click)="pauseTask(task.id)"');
+    expect(ui).toContain('(click)="resumeTask(task.id)"');
+    expect(ui).toContain('(click)="stopTask(task.id)"');
     expect(ui).not.toContain('<details class="history-disclosure">');
-    expect(ui).not.toContain("standardmäßig geschlossen");
   });
 });
