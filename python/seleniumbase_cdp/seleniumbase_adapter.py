@@ -109,6 +109,8 @@ class SeleniumBaseCdpAdapter:
         return dict(self._runtime_metadata)
 
     def _profile_browser_pids(self) -> List[int]:
+        # Prefer ARES runtime identity over profile-name inference. The UUID is
+        # assigned before Chromium starts and inherited by its process family.
         runtime_matches = self._runtime_identity.browser_pids()
         if runtime_matches:
             return runtime_matches
@@ -251,6 +253,10 @@ class SeleniumBaseCdpAdapter:
         if callable(send):
             loop = self._sb.get_event_loop()
             loop.run_until_complete(send(mycdp.storage.set_cookies(params)))
+            # Startup cookie injection happens before the first target-domain
+            # navigation. Use the browser-scoped Storage domain for readback too,
+            # avoiding the not-yet-stable first tab connection on fresh Windows
+            # CDP sessions while preserving pre-navigation cookie semantics.
             try:
                 loop.run_until_complete(send(mycdp.storage.get_cookies()))
             except Exception:
@@ -262,6 +268,9 @@ class SeleniumBaseCdpAdapter:
             except Exception:
                 pass
 
+        # CDP-injected persistent cookies can become request-visible before
+        # Chromium commits them to the profile cookie database. Give Windows a
+        # short settle window before an immediate clean close/reopen.
         if sys.platform.startswith("win"):
             time.sleep(1.0)
         return len(params)
@@ -379,6 +388,9 @@ class SeleniumBaseCdpAdapter:
                 self._sb.get_all_cookies()
             except Exception:
                 pass
+            # SeleniumBase's underlying Pure-CDP stop path can terminate Chromium
+            # directly. Ask Chromium itself to close first so Windows can commit the
+            # profile cookie database and local storage before any hard fallback.
             time.sleep(1.0 if sys.platform.startswith("win") else 0.2)
             graceful_close = self._request_graceful_browser_close()
             if graceful_close:
