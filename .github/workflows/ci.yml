@@ -35,6 +35,7 @@ jobs:
           python/seleniumbase_cdp/siglip_randomized_grid_probe.py
           python/seleniumbase_cdp/siglip_context_ab_probe.py
           python/seleniumbase_cdp/siglip_calibration_latency_probe.py
+          python/seleniumbase_cdp/siglip_calibration_gate.py
           python/seleniumbase_cdp/product_monitor_browser.py
           python/seleniumbase_cdp/product_monitor_browser_e2e_probe.py
           python/seleniumbase_cdp/slider_browser_e2e_probe.py
@@ -80,11 +81,11 @@ jobs:
           ARES_SIGLIP_AB_ROUNDS: "2"
         run: python python/seleniumbase_cdp/siglip_context_ab_probe.py
 
-      - name: Compare held-out SigLIP calibration and latency
+      - name: Enforce held-out SigLIP calibration quality
         env:
           ARES_SIGLIP_CALIBRATION_ROUNDS: "3"
           ARES_SIGLIP_HELDOUT_ROUNDS: "3"
-        run: python python/seleniumbase_cdp/siglip_calibration_latency_probe.py
+        run: python python/seleniumbase_cdp/siglip_calibration_gate.py
 
       - name: Verify stable visual marks contract
         run: python python/seleniumbase_cdp/stable_marks_probe.py
