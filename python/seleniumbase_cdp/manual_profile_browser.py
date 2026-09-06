@@ -215,6 +215,7 @@ def _start(command: Dict[str, Any]) -> int:
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
         threading.Thread(target=_command_reader, args=(commands,), daemon=True).start()
         next_url_capture = time.monotonic() + 2.0
+        next_forced_visual_poll = time.monotonic() + 1.0
 
         while True:
             if not adapter.is_running():
@@ -229,7 +230,16 @@ def _start(command: Dict[str, Any]) -> int:
             try:
                 next_command = commands.get(timeout=0.4)
             except queue.Empty:
-                adapter.poll_runtime()
+                now = time.monotonic()
+                if now >= next_forced_visual_poll:
+                    # A visual challenge can replace content inside an already-existing
+                    # iframe without changing the top-level DOM fingerprint. Force a
+                    # throttled visual observation so nested-frame grids still get a
+                    # chance to be detected, captured, classified, and acted on.
+                    adapter._poll_observation_watchdog(force=True)
+                    next_forced_visual_poll = now + 1.0
+                else:
+                    adapter.poll_runtime()
                 continue
 
             command_type = str(next_command.get("type") or "")
