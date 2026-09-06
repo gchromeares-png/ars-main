@@ -64,9 +64,6 @@ class VisualInteractionRuntime:
             self._trace.append("checkout-action", checkout)
             return {"acted": True, "kind": "checkout", "result": checkout}
 
-        # Image grids need pixels before vision can make a meaningful decision.
-        # Capture first, then crop/classify/click. Structural sources remain a
-        # fallback only when screenshot capture/cropping is unavailable.
         grid_state = self._grid.poll()
         if grid_state.get("kind") == "image-grid":
             signature = str(grid_state.get("signature") or "")
@@ -83,6 +80,7 @@ class VisualInteractionRuntime:
                 )
                 if bool(captured.get("captured")):
                     screenshot_result = self.poll_and_act_from_screenshot(str(captured.get("path") or ""))
+                    screenshot_result = self._finalize_interaction(screenshot_result)
                     self._trace.append(
                         "grid-screenshot-result",
                         {
@@ -106,7 +104,7 @@ class VisualInteractionRuntime:
                     },
                 )
 
-        primary = self._controller.poll_and_act()
+        primary = self._finalize_interaction(self._controller.poll_and_act())
         if primary.get("kind") != "image-grid" or bool(primary.get("acted")):
             return primary
 
@@ -140,6 +138,60 @@ class VisualInteractionRuntime:
         result = self._controller.act_grid_from_sources(state, sources, source="screenshot-crops")
         return {**result, "screenshot": provided}
 
+    def _finalize_interaction(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        kind = str(result.get("kind") or "")
+        verified = bool(result.get("verified"))
+
+        if kind == "image-grid" and not verified:
+            attempt = int(result.get("attempt") or 0)
+            max_attempts = int(result.get("maxAttempts") or 3)
+            if 0 < attempt < max_attempts:
+                # A retry must be a real new observation, not the same cached crop.
+                self._last_grid_debug_signature = ""
+                self._trace.append(
+                    "grid-retry-scheduled",
+                    {
+                        "attempt": attempt,
+                        "nextAttempt": attempt + 1,
+                        "maxAttempts": max_attempts,
+                        "reason": result.get("reason"),
+                    },
+                )
+
+        if verified and kind in {"image-grid", "slider"}:
+            progress = self._advance_after_success()
+            return {**result, "postSuccess": progress}
+        return result
+
+    def _advance_after_success(self) -> Dict[str, Any]:
+        """Bounded post-success chain for confirm/continue/checkout progression."""
+        deadline = time.monotonic() + 1.6
+        dismissed = []
+        while time.monotonic() < deadline:
+            popup = self._popup_handler.dismiss_once()
+            if popup.get("dismissed"):
+                dismissed.append(popup)
+                self._trace.append("post-success-popup", popup)
+                time.sleep(0.08)
+                continue
+
+            progress = self._popup_handler.advance_progress_once()
+            if progress.get("advanced"):
+                payload = {
+                    **progress,
+                    "verifiedSource": "post-success-explicit-control",
+                    "dismissedPopups": dismissed,
+                }
+                self._trace.append("post-success-progress", payload)
+                return payload
+            time.sleep(0.10)
+
+        return {
+            "advanced": False,
+            "reason": "no-post-success-progress-control",
+            "dismissedPopups": dismissed,
+        }
+
     def status(self) -> Dict[str, Any]:
         return {
             **self._controller.status(),
@@ -153,6 +205,9 @@ class VisualInteractionRuntime:
             },
             "popupAutoProgress": True,
             "checkoutAutoProgress": True,
+            "postSuccessAutoProgress": True,
+            "maxGridAttempts": 3,
+            "freshScreenshotPerRetry": True,
             "screenshotGridFallback": True,
             "screenshotFirstForGrid": True,
             "debugScreenshotRoot": str(self._debug_root),

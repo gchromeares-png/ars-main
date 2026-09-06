@@ -32,6 +32,27 @@ _ACCEPT_TEXT = (
     'weiter',
     'continue',
 )
+_PROGRESS_TEXT = (
+    'bestätigen',
+    'bestätigen und weiter',
+    'weiter',
+    'fortfahren',
+    'continue',
+    'confirm',
+    'ok',
+    'weiter zur kasse',
+    'zur kasse',
+    'checkout',
+    'go to checkout',
+    'continue to checkout',
+    'proceed to checkout',
+    'weiter zum checkout',
+    'zum checkout',
+    'weiter zur lieferung',
+    'continue to shipping',
+    'weiter zur zahlung',
+    'continue to payment',
+)
 _CHECKOUT_TEXT = (
     'weiter zur kasse',
     'zur kasse',
@@ -58,7 +79,7 @@ _CHECKOUT_TEXT = (
 
 
 class ConsentPopupHandler:
-    """Dismiss explicit popups and advance checkout controls with CDP mouse clicks."""
+    """Dismiss explicit popups and advance explicit progress controls with CDP mouse clicks."""
 
     def __init__(self, seleniumbase_cdp: Any) -> None:
         self._sb = seleniumbase_cdp
@@ -78,8 +99,6 @@ class ConsentPopupHandler:
                 if result.get('dismissed'):
                     return result
 
-        # Some consent banners are not marked as dialogs. Restrict this fallback
-        # to unmistakable consent wording so generic page buttons are not used.
         result = self._click_in_root(cdp, fallback=True)
         if result.get('dismissed'):
             return result
@@ -95,8 +114,15 @@ class ConsentPopupHandler:
 
         return {'dismissed': False, 'reason': 'no-explicit-consent-control'}
 
+    def advance_progress_once(self) -> Dict[str, Any]:
+        """Advance only conservative confirm/continue/pre-payment checkout controls."""
+        return self._advance_once(_PROGRESS_TEXT, empty_reason='no-progress-control')
+
     def advance_checkout_once(self) -> Dict[str, Any]:
         """Advance checkout/navigation/final purchase controls by explicit text."""
+        return self._advance_once(_CHECKOUT_TEXT, empty_reason='no-checkout-control')
+
+    def _advance_once(self, values: Iterable[str], *, empty_reason: str) -> Dict[str, Any]:
         cdp = getattr(self._sb, 'cdp', None)
         if cdp is None:
             return {'advanced': False, 'reason': 'cdp-unavailable'}
@@ -105,7 +131,7 @@ class ConsentPopupHandler:
             for selector in _BUTTON_SELECTORS:
                 for element in self._elements(root, selector):
                     text = self._element_text(element)
-                    if not text or not self._matches(text, _CHECKOUT_TEXT):
+                    if not text or not self._matches(text, values):
                         continue
                     click = getattr(element, 'mouse_click', None)
                     if not callable(click):
@@ -121,7 +147,7 @@ class ConsentPopupHandler:
                         }
                     except Exception:
                         continue
-        return {'advanced': False, 'reason': 'no-checkout-control'}
+        return {'advanced': False, 'reason': empty_reason}
 
     def _click_in_root(self, root: Any, *, fallback: bool = False) -> Dict[str, Any]:
         accepted = set(_ACCEPT_TEXT)
@@ -162,7 +188,15 @@ class ConsentPopupHandler:
     @staticmethod
     def _matches(text: str, values: Iterable[str]) -> bool:
         normalized = ' '.join(str(text or '').strip().lower().split())
-        return any(normalized == value or value in normalized for value in values)
+        for value in values:
+            candidate = ' '.join(str(value or '').strip().lower().split())
+            if not candidate:
+                continue
+            if normalized == candidate:
+                return True
+            if len(candidate) > 3 and candidate in normalized:
+                return True
+        return False
 
     @staticmethod
     def _elements(root: Any, selector: str) -> Iterable[Any]:

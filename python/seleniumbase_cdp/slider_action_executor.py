@@ -35,7 +35,8 @@ class SliderActionExecutor:
                     "targetFraction": target,
                     "mode": mode,
                     "pointCount": int(planned.get("pointCount") or 0),
-                    "dragProfile": planned.get("dragProfile"),
+                    "motionId": planned.get("motionId"),
+                    "motionParameters": planned.get("motionParameters") if isinstance(planned.get("motionParameters"), dict) else {},
                     "endHoldBacktrack": bool(planned.get("endHoldBacktrack")),
                     "state": self._slider_adapter.poll(),
                 }
