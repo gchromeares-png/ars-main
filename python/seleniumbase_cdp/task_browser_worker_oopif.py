@@ -198,7 +198,7 @@ def _bump_document_epoch(registry: Any, frame_id: str) -> int:
     if not frame_id:
         return 0
     epochs = _epoch_map(registry)
-    epochs[frame_id] = int(epochs.get(frame_id, 0)) + 1
+    epochs[frame_id] = int(epochs.get(frame_id), 0) + 1
     return int(epochs[frame_id])
 
 
@@ -231,30 +231,96 @@ async def _initialize_session_with_page(self: Any, session_id: str) -> None:
     await self._send_command("Page.enable", {}, session_id=session_id)
 
 
+def _append_oopif_trace(runtime: Any, phase: str, payload: dict[str, Any]) -> None:
+    """Append passive routing diagnostics beside the existing visual trace."""
+    try:
+        profile_dir = getattr(runtime.adapter, "profile_dir", None)
+        if profile_dir is None:
+            return
+        trace_path = profile_dir / ".ares-visual-trace.jsonl"
+        record = {"ts": impl.time.time(), "phase": str(phase), **payload}
+        with trace_path.open("a", encoding="utf-8") as handle:
+            handle.write(impl.json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
 def _oopif_runtime_init(self: Any, *args: Any, **kwargs: Any) -> None:
     _original_oopif_runtime_init(self, *args, **kwargs)
     self._ares_runtime_scheduler = SingleOwnerRuntimeScheduler(self.adapter)
     registry = self._oopif_registry
 
     def discover() -> list[dict[str, Any]]:
-        return registry.discover(self._active_target_id(), limit=impl.base.MAX_DISCOVERED_FRAMES)
+        try:
+            frames = registry.discover(self._active_target_id(), limit=impl.base.MAX_DISCOVERED_FRAMES)
+            _append_oopif_trace(
+                self,
+                "oopif-discover",
+                {
+                    "frameCount": len(frames),
+                    "paths": [
+                        [str(value) for value in entry.get("path") or [] if str(value)]
+                        for entry in frames[:16]
+                        if isinstance(entry, dict)
+                    ],
+                },
+            )
+            return frames
+        except Exception as exc:
+            _append_oopif_trace(
+                self,
+                "oopif-discover-error",
+                {"errorType": type(exc).__name__, "error": str(exc)[:600]},
+            )
+            raise
 
     def evaluate(frame_path: list[str], script: str, args: list[Any] | None = None) -> dict[str, Any]:
-        frame_id, offset_x, offset_y = registry.resolve_path(
-            self._active_target_id(),
-            frame_path,
-            include_offsets=True,
-        )
-        value = registry.evaluate(frame_id, script, args or [])
-        route = registry._route(frame_id) or {}
-        return {
-            "value": value,
-            "offsetX": offset_x,
-            "offsetY": offset_y,
-            "frameId": frame_id,
-            "documentEpoch": registry.document_epoch(frame_id),
-            "sessionGeneration": int(route.get("generation") or 0),
-        }
+        path = [str(value) for value in frame_path if str(value)]
+        try:
+            frame_id, offset_x, offset_y = registry.resolve_path(
+                self._active_target_id(),
+                path,
+                include_offsets=True,
+            )
+            value = registry.evaluate(frame_id, script, args or [])
+            route = registry._route(frame_id) or {}
+            result = {
+                "value": value,
+                "offsetX": offset_x,
+                "offsetY": offset_y,
+                "frameId": frame_id,
+                "documentEpoch": registry.document_epoch(frame_id),
+                "sessionGeneration": int(route.get("generation") or 0),
+            }
+            value_state = value if isinstance(value, dict) else {}
+            _append_oopif_trace(
+                self,
+                "oopif-evaluate",
+                {
+                    "path": path,
+                    "frameId": frame_id,
+                    "sessionId": str(route.get("sessionId") or ""),
+                    "contextId": route.get("contextId"),
+                    "sessionGeneration": int(route.get("generation") or 0),
+                    "documentEpoch": registry.document_epoch(frame_id),
+                    "kind": str(value_state.get("kind") or type(value).__name__),
+                    "scope": str(value_state.get("scope") or ""),
+                    "complete": bool(value_state.get("complete")),
+                    "failed": bool(value_state.get("failed")),
+                },
+            )
+            return result
+        except Exception as exc:
+            _append_oopif_trace(
+                self,
+                "oopif-evaluate-error",
+                {
+                    "path": path,
+                    "errorType": type(exc).__name__,
+                    "error": str(exc)[:600],
+                },
+            )
+            raise
 
     setattr(self.sb, "ares_oopif_discover", discover)
     setattr(self.sb, "ares_oopif_evaluate", evaluate)
