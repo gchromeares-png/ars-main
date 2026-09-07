@@ -6,6 +6,7 @@ import type { CommerceShop } from "../commerce/platforms";
 import type { AresProfile } from "../profiles/models";
 import type { BrowserWorker } from "../browser-worker/browser-worker";
 import { BrowserQueueWaiter } from "../browser-worker/queue-waiter";
+import { SessionHttpPoller } from "./session-http-poller";
 import { getMonitorStrategy, setEarlyGateRuntime } from "./early-gate";
 
 interface ActiveBrowserMonitor { controller: AbortController; }
@@ -16,6 +17,21 @@ export interface BrowserGateMonitorExecutorOptions {
 }
 
 const POST_NAVIGATION_OBSERVATION_MS = 30_000;
+
+function proxyValue(profile: AresProfile): string | undefined {
+  const proxy = profile.proxy;
+  if (!proxy?.host || !proxy.port) return undefined;
+  const auth = proxy.username ? `${proxy.username}:${proxy.password ?? ""}@` : "";
+  const scheme = proxy.protocol || "http";
+  return `${scheme}://${auth}${proxy.host}:${proxy.port}`;
+}
+
+function sessionPollUrl(task: Task, shop: CommerceShop): string {
+  const taskValue = String(task.config.data?.["sessionHttpPollUrl"] ?? "").trim();
+  const shopValue = String(shop.config?.["sessionHttpPollUrl"] ?? "").trim();
+  const candidate = taskValue || shopValue || shop.baseUrl;
+  return /^https?:\/\//i.test(candidate) ? candidate : shop.baseUrl;
+}
 
 /** Lightweight browser-backed gate observer. Checkout/payment modules are intentionally absent. */
 export class BrowserGateMonitorExecutor implements ITaskExecutor {
@@ -31,9 +47,6 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
     options: BrowserGateMonitorExecutorOptions = {}
   ) {
     this.pollIntervalMs = Math.min(10_000, Math.max(250, options.pollIntervalMs ?? 750));
-    // A full reload must not interrupt the automatic post-navigation observation
-    // burst. Queue/DOM telemetry keeps polling during this window; only destructive
-    // navigation is held back long enough for delayed iframe/grid/slider work.
     this.refreshIntervalMs = Math.min(60_000, Math.max(POST_NAVIGATION_OBSERVATION_MS, options.refreshIntervalMs ?? 5_000));
   }
 
@@ -73,6 +86,7 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
       password: profile.proxy.password || undefined
     } : undefined;
 
+    let sessionPoller: SessionHttpPoller | undefined;
     try {
       const handle = await this.browserWorker.createContext({
         taskId: task.id,
@@ -86,6 +100,15 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
         monitorMode: true
       });
       const page = handle.page;
+      const pollUrl = sessionPollUrl(task, shop);
+      sessionPoller = new SessionHttpPoller({
+        url: pollUrl,
+        profileDir: handle.userDataDir,
+        proxy: proxyValue(profile),
+        pollIntervalMs: Math.max(1_000, this.pollIntervalMs)
+      });
+      try { sessionPoller.start(); } catch { sessionPoller = undefined; }
+
       setEarlyGateRuntime(task, {
         activeArea: "monitor", stage: "monitoring", productName: strategy.productName,
         keywords: strategy.discoveryKeywords, monitoringAt: new Date().toISOString()
@@ -96,13 +119,26 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
           mode: "browser", profileId: profile.id, proxyBound: Boolean(proxy),
           userAgent: handle.environmentAudit.snapshot.userAgent,
           pollIntervalMs: this.pollIntervalMs, refreshIntervalMs: this.refreshIntervalMs,
+          sessionHttp: { enabled: Boolean(sessionPoller), url: pollUrl, engine: "curl_cffi" },
           startedAt: new Date().toISOString()
         }
       };
       this.emit(task);
 
       const waiter = new BrowserQueueWaiter(page, task, current => this.emit(current), {
-        pollIntervalMs: this.pollIntervalMs, releaseConfirmations: 2, maxWaitMs: 60 * 60_000
+        pollIntervalMs: this.pollIntervalMs,
+        releaseConfirmations: 2,
+        maxWaitMs: 60 * 60_000,
+        externalSignal: () => {
+          const signal = sessionPoller?.getLatest();
+          return signal?.active ? {
+            active: true,
+            position: signal.position,
+            timeToWaitSeconds: signal.timeToWaitSeconds,
+            statusText: signal.statusText,
+            source: "session-http"
+          } : undefined;
+        }
       });
       waiter.start();
       try {
@@ -128,6 +164,8 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
           }
           await this.delay(this.refreshIntervalMs, controller.signal);
           if (!controller.signal.aborted) {
+            // Stage 4 only. The lightweight/session, Network and DOM stages have
+            // already had the full protected observation window before navigation.
             await page.goto(shop.baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
           }
         }
@@ -139,6 +177,7 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
       this.emit(task);
       return false;
     } finally {
+      sessionPoller?.stop();
       this.active.delete(task.id);
       await this.browserWorker.closeContext(task.id).catch(() => undefined);
     }
