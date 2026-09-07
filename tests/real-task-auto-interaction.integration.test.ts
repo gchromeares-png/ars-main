@@ -76,6 +76,14 @@ async function findNamedFile(root: string, name: string): Promise<string | undef
   return undefined;
 }
 
+async function visualTraceTail(root: string, maxLines = 20): Promise<string[]> {
+  const tracePath = await findNamedFile(root, ".ares-visual-trace.jsonl");
+  if (!tracePath) return ["<visual-trace-missing>"];
+  const trace = await readFile(tracePath, "utf8").catch(error => `<visual-trace-read-error:${String(error)}>`);
+  const lines = trace.split(/\r?\n/).filter(Boolean);
+  return lines.length ? lines.slice(-maxLines) : ["<visual-trace-empty>"];
+}
+
 function fixtureServers(hits: SolveHit[]): FixtureServers {
   const send = (response: http.ServerResponse, body: string, contentType = "text/html; charset=utf-8") => {
     response.writeHead(200, {
@@ -297,16 +305,23 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
       );
 
       setStage("automatic-slider-solve");
-      const solved = await waitFor(
-        () => {
-          if (task.state === TaskState.FAILED) {
-            throw new Error(`Task failed before automatic slider solve: ${task.lastError || "unknown error"}`);
-          }
-          return hits.find(hit => hit.type === "solved");
-        },
-        50_000,
-        `trusted automatic slider solve after frame load; state=${task.state}; hits=${JSON.stringify(hits)}`
-      );
+      let solved: SolveHit;
+      try {
+        solved = await waitFor(
+          () => {
+            if (task.state === TaskState.FAILED) {
+              throw new Error(`Task failed before automatic slider solve: ${task.lastError || "unknown error"}`);
+            }
+            return hits.find(hit => hit.type === "solved");
+          },
+          50_000,
+          `trusted automatic slider solve after frame load; state=${task.state}; hits=${JSON.stringify(hits)}`
+        );
+      } catch (error) {
+        const traceTail = await visualTraceTail(profileRoot);
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`${reason} visualTraceTail=${JSON.stringify(traceTail)}`);
+      }
 
       expect(solved.trusted).toBe("true");
       expect(Number(solved.fraction)).toBeGreaterThanOrEqual(0.94);
@@ -366,10 +381,11 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
 
     expect(manual).toContain("ControlAwareSeleniumBaseCdpAdapter");
     expect(manual).toContain("_enable_oopif_runtime(adapter)");
-    expect(manual).toContain("adapter.poll_runtime()");
+    expect(manual).toContain("scheduler = SingleOwnerRuntimeScheduler(adapter)");
     expect(monitor).toContain("ControlAwareSeleniumBaseCdpAdapter");
-    expect(monitor).toContain("adapter.poll_runtime()");
+    expect(monitor).toContain("scheduler = SingleOwnerRuntimeScheduler(adapter)");
     expect(taskWorker).toContain("impl.base.SeleniumBaseCdpAdapter = ControlAwareSeleniumBaseCdpAdapter");
+    expect(taskWorker).toContain("self._ares_runtime_scheduler = SingleOwnerRuntimeScheduler(self.adapter)");
     expect(taskWorker).toContain("impl.base.run = _seeded_run");
     expect(browserWorker.indexOf("task_browser_worker_oopif.py")).toBeLessThan(browserWorker.indexOf("task_browser_worker.py"));
   });
