@@ -68,15 +68,17 @@ class FeedbackPaths:
         end_hold_backtrack=False,
     ):
         assert preferred == "ghost-cursor"
-        command = max(0.0, min(1.0, float(end[0]) / 100.0))
+        raw_command = float(end[0]) / 100.0
+        applied_command = max(0.0, min(1.0, raw_command))
         before = self.adapter.fraction
         self.adapter.fraction = max(
             0.0,
-            min(1.0, before + self.adapter.gain * (command - before)),
+            min(1.0, before + self.adapter.gain * (applied_command - before)),
         )
         self.commands.append({
             "before": before,
-            "command": command,
+            "command": raw_command,
+            "appliedCommand": applied_command,
             "after": self.adapter.fraction,
             "backtrack": bool(end_hold_backtrack),
         })
@@ -173,11 +175,20 @@ def main() -> int:
     assert over_commands[1]["command"] < over_commands[0]["after"], over_commands
     assert int(over["overshootDirectionChanges"]) >= 1, over
 
+    end_result, end_commands = run_feedback_case(fraction=0.10, gain=1.0, target=0.96)
+    assert len(end_commands) >= 2, end_commands
+    assert abs(end_commands[0]["command"] - 1.02) < 1e-9, end_commands
+    assert end_commands[0]["backtrack"] is True, end_commands
+    assert end_commands[1]["command"] < end_commands[0]["after"], end_commands
+    assert abs(float(end_result["currentFraction"]) - 0.96) <= 0.02, end_result
+
     custom = FeedbackAdapter(fraction=0.20, gain=1.0, target=0.90)
     points = SliderActionExecutor._viewport_points(custom.poll(), 0.90)
     assert points is not None
     _, end = points
     assert abs(end[0] - 90.0) < 1e-6, points
+    overshoot = SliderActionExecutor._viewport_points(custom.poll(), 1.02)
+    assert overshoot is not None and abs(overshoot[1][0] - 102.0) < 1e-6, overshoot
 
     strict_actions = StrictSliderActions()
     controller = AutoInteractionController(

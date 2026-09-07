@@ -14,6 +14,8 @@ class SliderActionExecutor:
 
     TARGET_TOLERANCE = 0.02
     MAX_CORRECTION_DRAGS = 3
+    END_TARGET_THRESHOLD = 0.94
+    MAX_COMMAND_FRACTION = 1.02
 
     def __init__(self, seleniumbase_cdp: Any, slider_adapter: Any, path_provider: CursorPathProvider | None = None) -> None:
         self._sb = seleniumbase_cdp
@@ -124,7 +126,7 @@ class SliderActionExecutor:
                 break
 
             crosses_target = (target - current) * (command - target) > 0
-            end_slider_settle = str(state.get("orientation") or "horizontal") != "vertical" and command >= 0.94
+            end_slider_settle = str(state.get("orientation") or "horizontal") != "vertical" and command >= self.END_TARGET_THRESHOLD
             drag = self._perform_drag(
                 state,
                 command,
@@ -272,13 +274,15 @@ class SliderActionExecutor:
                 tx + width / 2.0 if native else hx + hw / 2.0,
                 ty + height - height * current if native else hy + hh / 2.0,
             )
-            end = (tx + width / 2.0, ty + height - height * target)
+            end_target = max(0.0, min(1.0, target)) if native else target
+            end = (tx + width / 2.0, ty + height - height * end_target)
         else:
             start = (
                 tx + width * current if native else hx + hw / 2.0,
                 ty + height / 2.0 if native else hy + hh / 2.0,
             )
-            end = (tx + width * target, ty + height / 2.0)
+            end_target = max(0.0, min(1.0, target)) if native else target
+            end = (tx + width * end_target, ty + height / 2.0)
         return start, end
 
     def _screen_points(self, state: Dict[str, Any], target: float):
@@ -296,15 +300,16 @@ class SliderActionExecutor:
             if width <= 0 or height <= 0:
                 return None
             native = bool(state.get("nativeRange"))
+            end_target = max(0.0, min(1.0, target)) if native else target
             if state.get("orientation") == "vertical":
                 start_x = float(handle_x)
                 start_y = float(track_y) + height / 2 - height * current if native else float(handle_y)
                 end_x = float(track_x)
-                end_y = float(track_y) + height / 2 - height * target
+                end_y = float(track_y) + height / 2 - height * end_target
             else:
                 start_x = float(track_x) - width / 2 + width * current if native else float(handle_x)
                 start_y = float(handle_y)
-                end_x = float(track_x) - width / 2 + width * target
+                end_x = float(track_x) - width / 2 + width * end_target
                 end_y = float(track_y)
             return (start_x, start_y), (end_x, end_y)
         except Exception:
@@ -361,7 +366,8 @@ class SliderActionExecutor:
 
               if (nativeRange) {{
                 const min = Number(handle.min || 0), max = Number(handle.max || 100);
-                handle.value = String(min + (max - min) * target);
+                const bounded = Math.max(0, Math.min(1, target));
+                handle.value = String(min + (max - min) * bounded);
                 handle.dispatchEvent(new Event('input', {{bubbles:true}}));
                 handle.dispatchEvent(new Event('change', {{bubbles:true}}));
                 return true;
@@ -411,8 +417,11 @@ class SliderActionExecutor:
         direction = self._direction(error)
         if direction == 0 or not overshoot_enabled:
             return target, 0.0
+        if direction > 0 and target >= self.END_TARGET_THRESHOLD:
+            command = self.MAX_COMMAND_FRACTION
+            return command, command - target
         overshoot = min(0.035, max(0.008, abs(error) * 0.08))
-        command = self._clamp(target + direction * overshoot)
+        command = max(-0.02, min(self.MAX_COMMAND_FRACTION, target + direction * overshoot))
         return command, command - target
 
     def _correction_command(self, current: float, target: float) -> tuple[float, float]:

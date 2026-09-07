@@ -47,7 +47,35 @@ def assert_slider_geometry_contract() -> None:
         "handleRect": {"x": 140.0, "y": 40.0, "width": 20.0, "height": 20.0},
     }
     custom_points = SliderActionExecutor._viewport_points(custom, 0.75)
-    assert custom_points == ((150.0, 50.0), (250.0, 50.0)), "custom slider must command the full track; observed feedback closes the loop"
+    assert custom_points == ((150.0, 50.0), (250.0, 50.0)), "custom slider command geometry must use the full track span"
+    overshoot_points = SliderActionExecutor._viewport_points(custom, 1.02)
+    assert overshoot_points == ((150.0, 50.0), (304.0, 50.0)), "custom slider must permit a small deterministic overshoot beyond the target/track end"
+
+
+def assert_oopif_slider_projection() -> None:
+    state = SliderSiteAdapter(FakeSliderSb()).poll()
+    assert state["kind"] == "slider"
+    assert state["scope"] == "oopif:iframe#cross"
+    assert state["framePath"] == ["iframe#cross"]
+    assert state["documentEpoch"] == 7
+    assert state["sessionGeneration"] == 4
+    assert state["handleRect"]["x"] == 310.0
+    assert state["handleRect"]["y"] == 120.0
+    assert state["trackRect"]["x"] == 310.0
+    assert state["marks"][0]["visualBounds"]["x"] == 310.0
+
+
+def assert_document_epoch_lifecycle() -> None:
+    registry = oopif_worker.FlatCdpTargetRegistry("", autostart=False)
+    assert registry.document_epoch("frame-1") == 0
+    registry._handle_event({"method": "Page.frameAttached", "params": {"frameId": "frame-1"}})
+    assert registry.document_epoch("frame-1") == 0
+    registry._handle_event({"method": "Page.frameNavigated", "params": {"frame": {"id": "frame-1"}}})
+    assert registry.document_epoch("frame-1") == 1
+    registry._handle_event({"method": "Page.navigatedWithinDocument", "params": {"frameId": "frame-1"}})
+    assert registry.document_epoch("frame-1") == 2
+    registry._handle_event({"method": "Page.frameDetached", "params": {"frameId": "frame-1"}})
+    assert registry.document_epoch("frame-1") == 0
 
 
 class FakeSliderSb:
@@ -111,32 +139,6 @@ class FakeSliderSb:
             "documentEpoch": 7,
             "sessionGeneration": 4,
         }
-
-
-def assert_oopif_slider_projection() -> None:
-    state = SliderSiteAdapter(FakeSliderSb()).poll()
-    assert state["kind"] == "slider"
-    assert state["scope"] == "oopif:iframe#cross"
-    assert state["framePath"] == ["iframe#cross"]
-    assert state["documentEpoch"] == 7
-    assert state["sessionGeneration"] == 4
-    assert state["handleRect"]["x"] == 310.0
-    assert state["handleRect"]["y"] == 120.0
-    assert state["trackRect"]["x"] == 310.0
-    assert state["marks"][0]["visualBounds"]["x"] == 310.0
-
-
-def assert_document_epoch_lifecycle() -> None:
-    registry = oopif_worker.FlatCdpTargetRegistry("", autostart=False)
-    assert registry.document_epoch("frame-1") == 0
-    registry._handle_event({"method": "Page.frameAttached", "params": {"frameId": "frame-1"}})
-    assert registry.document_epoch("frame-1") == 0
-    registry._handle_event({"method": "Page.frameNavigated", "params": {"frame": {"id": "frame-1"}}})
-    assert registry.document_epoch("frame-1") == 1
-    registry._handle_event({"method": "Page.navigatedWithinDocument", "params": {"frameId": "frame-1"}})
-    assert registry.document_epoch("frame-1") == 2
-    registry._handle_event({"method": "Page.frameDetached", "params": {"frameId": "frame-1"}})
-    assert registry.document_epoch("frame-1") == 0
 
 
 def main() -> int:
