@@ -22,6 +22,11 @@ type SolveHit = {
   fraction: string;
 };
 
+type FixtureServers = {
+  main: http.Server;
+  frame: http.Server;
+};
+
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -49,7 +54,7 @@ async function findNamedFile(root: string, name: string): Promise<string | undef
   return undefined;
 }
 
-function fixtureServer(hits: SolveHit[]): http.Server {
+function fixtureServers(hits: SolveHit[]): FixtureServers {
   const send = (response: http.ServerResponse, body: string, contentType = "text/html; charset=utf-8") => {
     response.writeHead(200, {
       "content-type": contentType,
@@ -59,7 +64,7 @@ function fixtureServer(hits: SolveHit[]): http.Server {
     response.end(body);
   };
 
-  const server = http.createServer((request, response) => {
+  const frame = http.createServer((request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     if (url.pathname === "/frame-loaded") {
       hits.push({ type: "frame-loaded", trusted: "", fraction: "" });
@@ -76,68 +81,67 @@ function fixtureServer(hits: SolveHit[]): http.Server {
       return;
     }
 
-    if (url.pathname === "/frame") {
-      send(response, `<!doctype html><html><head><meta charset="utf-8"><style>
-        html,body{margin:0;padding:0;background:#fff;font-family:Arial,sans-serif}
-        #mount{padding:18px}
-        #slider-fixture{width:430px;border:1px solid #bbb;padding:16px;background:#fff}
-        #instruction{font-size:18px;margin:0 0 12px}
-        #track{position:relative;width:320px;height:44px;background:#e8e8e8;border:1px solid #aaa;user-select:none}
-        #handle{position:absolute;left:0;top:0;width:44px;height:44px;background:#d7d7d7;cursor:grab;box-sizing:border-box}
-        #status{margin-top:9px;height:20px}
-      </style></head><body><div id="mount">Rätsel wird geladen …</div><script>
-      (() => {
-        fetch('/frame-loaded').catch(() => undefined);
-        setTimeout(() => {
-          const mount = document.getElementById('mount');
-          mount.innerHTML = '<div id="slider-fixture">' +
-            '<div id="instruction">Ziehe den Regler nach rechts bis zum Ende.</div>' +
-            '<div id="track" class="slider-track"><div id="handle" class="slider-handle" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div></div>' +
-            '<div id="status">Noch nicht abgeschlossen</div></div>';
-          const track = document.getElementById('track');
-          const handle = document.getElementById('handle');
-          const status = document.getElementById('status');
-          let dragging = false;
-          let downTrusted = false;
-          let fraction = 0;
-          const update = clientX => {
-            const rect = track.getBoundingClientRect();
-            fraction = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
-            handle.style.left = Math.max(0, Math.min(rect.width - handle.offsetWidth, fraction * rect.width - handle.offsetWidth / 2)) + 'px';
-            handle.setAttribute('aria-valuenow', String(fraction * 100));
-          };
-          handle.addEventListener('mousedown', event => {
-            dragging = true;
-            downTrusted = event.isTrusted === true;
-            update(event.clientX);
-            event.preventDefault();
-          });
-          document.addEventListener('mousemove', event => { if (dragging) update(event.clientX); });
-          document.addEventListener('mouseup', event => {
-            if (!dragging) return;
-            update(event.clientX);
-            dragging = false;
-            const trusted = downTrusted && event.isTrusted === true;
-            if (trusted && fraction >= 0.94) {
-              status.textContent = 'Abgeschlossen';
-              const done = document.createElement('div');
-              done.id = 'done';
-              done.hidden = true;
-              document.getElementById('slider-fixture').appendChild(done);
-              fetch('/solved?trusted=' + encodeURIComponent(String(trusted)) + '&fraction=' + encodeURIComponent(fraction.toFixed(6)));
-            } else {
-              status.textContent = 'Nicht abgeschlossen';
-              fetch('/failed?trusted=' + encodeURIComponent(String(trusted)) + '&fraction=' + encodeURIComponent(fraction.toFixed(6)));
-            }
-          });
-        }, 700);
-      })();
-      </script></body></html>`);
-      return;
-    }
+    send(response, `<!doctype html><html><head><meta charset="utf-8"><style>
+      html,body{margin:0;padding:0;background:#fff;font-family:Arial,sans-serif}
+      #mount{padding:18px}
+      #slider-fixture{width:430px;border:1px solid #bbb;padding:16px;background:#fff}
+      #instruction{font-size:18px;margin:0 0 12px}
+      #track{position:relative;width:320px;height:44px;background:#e8e8e8;border:1px solid #aaa;user-select:none}
+      #handle{position:absolute;left:0;top:0;width:44px;height:44px;background:#d7d7d7;cursor:grab;box-sizing:border-box}
+      #status{margin-top:9px;height:20px}
+    </style></head><body><div id="mount">Rätsel wird geladen …</div><script>
+    (() => {
+      fetch('/frame-loaded').catch(() => undefined);
+      setTimeout(() => {
+        const mount = document.getElementById('mount');
+        mount.innerHTML = '<div id="slider-fixture">' +
+          '<div id="instruction">Ziehe den Regler nach rechts bis zum Ende.</div>' +
+          '<div id="track" class="slider-track"><div id="handle" class="slider-handle" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div></div>' +
+          '<div id="status">Noch nicht abgeschlossen</div></div>';
+        const track = document.getElementById('track');
+        const handle = document.getElementById('handle');
+        const status = document.getElementById('status');
+        let dragging = false;
+        let downTrusted = false;
+        let fraction = 0;
+        const update = clientX => {
+          const rect = track.getBoundingClientRect();
+          fraction = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+          handle.style.left = Math.max(0, Math.min(rect.width - handle.offsetWidth, fraction * rect.width - handle.offsetWidth / 2)) + 'px';
+          handle.setAttribute('aria-valuenow', String(fraction * 100));
+        };
+        handle.addEventListener('mousedown', event => {
+          dragging = true;
+          downTrusted = event.isTrusted === true;
+          update(event.clientX);
+          event.preventDefault();
+        });
+        document.addEventListener('mousemove', event => { if (dragging) update(event.clientX); });
+        document.addEventListener('mouseup', event => {
+          if (!dragging) return;
+          update(event.clientX);
+          dragging = false;
+          const trusted = downTrusted && event.isTrusted === true;
+          if (trusted && fraction >= 0.94) {
+            status.textContent = 'Abgeschlossen';
+            const done = document.createElement('div');
+            done.id = 'done';
+            done.hidden = true;
+            document.getElementById('slider-fixture').appendChild(done);
+            fetch('/solved?trusted=' + encodeURIComponent(String(trusted)) + '&fraction=' + encodeURIComponent(fraction.toFixed(6)));
+          } else {
+            status.textContent = 'Nicht abgeschlossen';
+            fetch('/failed?trusted=' + encodeURIComponent(String(trusted)) + '&fraction=' + encodeURIComponent(fraction.toFixed(6)));
+          }
+        });
+      }, 700);
+    })();
+    </script></body></html>`);
+  });
 
-    const address = server.address() as AddressInfo;
-    const frameUrl = `http://localhost:${address.port}/frame`;
+  const main = http.createServer((_request, response) => {
+    const address = frame.address() as AddressInfo;
+    const frameUrl = `http://127.0.0.1:${address.port}/frame`;
     send(response, `<!doctype html><html><head><title>ARES Task Runtime Fixture</title></head><body>
       <main id="root">Produktseite bereit</main>
       <script>
@@ -153,7 +157,8 @@ function fixtureServer(hits: SolveHit[]): http.Server {
       </script>
     </body></html>`);
   });
-  return server;
+
+  return { main, frame };
 }
 
 const profile: AresProfile = {
@@ -178,13 +183,17 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
 
   it("drives a delayed cross-origin slider from TaskOrchestrator through the production worker to trusted CDP input", async () => {
     const hits: SolveHit[] = [];
-    const server = fixtureServer(hits);
+    const servers = fixtureServers(hits);
     await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, () => resolve());
+      servers.frame.once("error", reject);
+      servers.frame.listen(0, "127.0.0.1", () => resolve());
+    });
+    await new Promise<void>((resolve, reject) => {
+      servers.main.once("error", reject);
+      servers.main.listen(0, "127.0.0.1", () => resolve());
     });
 
-    const address = server.address() as AddressInfo;
+    const address = servers.main.address() as AddressInfo;
     const baseUrl = `http://127.0.0.1:${address.port}/`;
     const profileRoot = await mkdtemp(path.join(os.tmpdir(), "ares-real-task-runtime-"));
     const shop: CommerceShop = {
@@ -264,7 +273,10 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
       await run.catch(() => undefined);
       orchestrator.cleanup();
       await router.close().catch(() => undefined);
-      await new Promise<void>(resolve => server.close(() => resolve()));
+      await Promise.all([
+        new Promise<void>(resolve => servers.main.close(() => resolve())),
+        new Promise<void>(resolve => servers.frame.close(() => resolve()))
+      ]);
     }
 
     const visualTrace = await findNamedFile(profileRoot, ".ares-visual-trace.jsonl");
