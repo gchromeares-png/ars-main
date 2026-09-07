@@ -142,11 +142,7 @@ _original_run = impl.base.run
 
 
 def _passive_queue_dom(self: Any) -> dict[str, Any]:
-    """Read the queue DOM via native CDP DOM commands only.
-
-    This path intentionally avoids Runtime.evaluate and therefore does not execute
-    JavaScript in the page context or extend the control quiet window.
-    """
+    """Read queue DOM state with native CDP DOM commands only."""
     registry = self._oopif_registry
     root_frame_id = registry.ensure_target(self._active_target_id())
     route = registry._route(root_frame_id) or {}
@@ -250,7 +246,7 @@ def _bump_document_epoch(registry: Any, frame_id: str) -> int:
     if not frame_id:
         return 0
     epochs = _epoch_map(registry)
-    epochs[frame_id] = int(epochs.get(frame_id), 0) + 1 if False else int(epochs.get(frame_id, 0)) + 1
+    epochs[frame_id] = int(epochs.get(frame_id, 0)) + 1
     return int(epochs[frame_id])
 
 
