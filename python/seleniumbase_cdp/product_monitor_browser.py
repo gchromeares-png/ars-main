@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter as SeleniumBaseCdpAdapter
+from runtime_poll_scheduler import SingleOwnerRuntimeScheduler
 
 RESULT_PREFIX = "ARES_MONITOR_BROWSER\t"
 MAX_HTML_CHARS = 2_000_000
@@ -52,20 +53,22 @@ def _command_reader(target: queue.Queue[Dict[str, Any]]) -> None:
 
 
 def _snapshot(adapter: SeleniumBaseCdpAdapter) -> Dict[str, Any]:
-    value = adapter.execute_script(
-        """
-        (() => {
-          const root = document.documentElement;
-          const body = document.body;
-          return {
-            url: String(window.location.href || ''),
-            title: String(document.title || ''),
-            readyState: String(document.readyState || ''),
-            html: root ? String(root.outerHTML || '') : '',
-            text: body ? String(body.innerText || body.textContent || '') : ''
-          };
-        })()
-        """
+    value = adapter.passive_observation(
+        lambda: adapter.execute_script(
+            """
+            (() => {
+              const root = document.documentElement;
+              const body = document.body;
+              return {
+                url: String(window.location.href || ''),
+                title: String(document.title || ''),
+                readyState: String(document.readyState || ''),
+                html: root ? String(root.outerHTML || '') : '',
+                text: body ? String(body.innerText || body.textContent || '') : ''
+              };
+            })()
+            """
+        )
     )
     if not isinstance(value, dict):
         value = {}
@@ -86,7 +89,12 @@ def _rendered_document(
     timeout_ms: int,
 ) -> Dict[str, Any]:
     if url:
-        current = str(adapter.execute_script("String(window.location.href || '')") or "")
+        current = str(
+            adapter.passive_observation(
+                lambda: adapter.execute_script("String(window.location.href || '')")
+            )
+            or ""
+        )
         if current != url:
             adapter.goto(url)
 
@@ -164,15 +172,18 @@ def _start(command: Dict[str, Any]) -> int:
 
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
         threading.Thread(target=_command_reader, args=(commands,), daemon=True).start()
+        scheduler = SingleOwnerRuntimeScheduler(adapter)
 
         while True:
             if not adapter.is_running():
                 _emit({"type": "browser-closed", "taskId": task_id})
                 break
+
+            scheduler.poll_if_due()
             try:
-                next_command = commands.get(timeout=0.35)
+                next_command = commands.get(timeout=scheduler.queue_timeout(0.35))
             except queue.Empty:
-                adapter.poll_runtime()
+                scheduler.poll_if_due()
                 continue
 
             adapter.note_control_activity()
@@ -220,7 +231,9 @@ def _start(command: Dict[str, Any]) -> int:
                     "error": str(exc),
                 })
             finally:
-                adapter.note_control_activity()
+                if not closed and adapter.is_running():
+                    adapter.note_control_activity()
+                    scheduler.poll_if_due()
     finally:
         if not closed:
             try:

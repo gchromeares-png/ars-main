@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Iterable, List
+from typing import Any, Callable, Dict, Iterable, List
 
 from seleniumbase_adapter import SeleniumBaseCdpAdapter
 
@@ -11,9 +11,8 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
 
     Browser/CDP stays single-owner. Navigation performs only the synchronous work
     required to make the page safe and observable; the expensive automatic visual
-    cycle is deferred to the existing idle poll. This keeps READY/RPC responses
-    from being blocked by background inference while preserving the same automatic
-    runtime once the control plane has been quiet briefly.
+    cycle is deferred to the existing idle poll. Passive telemetry can observe the
+    page without extending the explicit-control quiet window.
     """
 
     CONTROL_QUIET_SECONDS = 0.9
@@ -21,16 +20,27 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._control_quiet_until = 0.0
         self._deferred_navigation_auto = False
+        self._passive_observation_depth = 0
         super().__init__(*args, **kwargs)
         # Give the owner a short window to receive the first command after READY
         # before any expensive idle visual work is allowed to start.
         self.note_control_activity()
 
     def note_control_activity(self) -> None:
+        if self._passive_observation_depth > 0:
+            return
         self._control_quiet_until = max(
             self._control_quiet_until,
             time.monotonic() + self.CONTROL_QUIET_SECONDS,
         )
+
+    def passive_observation(self, action: Callable[[], Any]) -> Any:
+        """Run read-only telemetry without masquerading as user/control traffic."""
+        self._passive_observation_depth += 1
+        try:
+            return action()
+        finally:
+            self._passive_observation_depth = max(0, self._passive_observation_depth - 1)
 
     def poll_runtime(self) -> None:
         if time.monotonic() < self._control_quiet_until:

@@ -5,6 +5,7 @@ from typing import Any
 
 import task_browser_worker_oopif_impl as impl
 from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter
+from runtime_poll_scheduler import SingleOwnerRuntimeScheduler
 
 
 def _child_frame_id(self: Any, frame_id: str, selector: str) -> str:
@@ -132,18 +133,52 @@ def _pointer_mouse(self: Any, action: str, command: dict[str, Any]) -> bool:
 
 
 _original_rpc = impl.base.TaskRpcRuntime.rpc
+_original_network_events = impl.base.TaskRpcRuntime.network_events
+_original_page_state = impl.base.TaskRpcRuntime.page_state
 _original_registry_handle_event = impl.FlatCdpTargetRegistry._handle_event
 _original_registry_initialize_session = impl.FlatCdpTargetRegistry._initialize_session
 _original_oopif_runtime_init = impl.OopifTaskRpcRuntime.__init__
 _original_run = impl.base.run
 
 
-def _pointer_rpc(self: Any, command: dict[str, Any]) -> dict[str, Any]:
+def _control_aware_rpc(self: Any, command: dict[str, Any]) -> dict[str, Any]:
     action = str(command.get("action") or "")
-    if action in {"mouse-down", "mouse-up"}:
-        self._sync_newest_target()
-        return {"result": self._mouse(action, command)}
-    return _original_rpc(self, command)
+    passive = action == "page-state"
+    if not passive:
+        self.adapter.note_control_activity()
+    try:
+        if action in {"mouse-down", "mouse-up"}:
+            self._sync_newest_target()
+            return {"result": self._mouse(action, command)}
+        return _original_rpc(self, command)
+    finally:
+        if not passive:
+            self.adapter.note_control_activity()
+
+
+def _runtime_scheduler(self: Any) -> SingleOwnerRuntimeScheduler | None:
+    scheduler = getattr(self, "_ares_runtime_scheduler", None)
+    return scheduler if isinstance(scheduler, SingleOwnerRuntimeScheduler) else None
+
+
+def _network_events_with_runtime_opportunity(self: Any) -> dict[str, Any]:
+    result = _original_network_events(self)
+    scheduler = _runtime_scheduler(self)
+    if scheduler is not None:
+        scheduler.poll_if_due()
+    return result
+
+
+def _page_state_with_passive_runtime_opportunity(self: Any) -> dict[str, Any]:
+    observer = getattr(self.adapter, "passive_observation", None)
+    if callable(observer):
+        result = observer(lambda: _original_page_state(self))
+    else:
+        result = _original_page_state(self)
+    scheduler = _runtime_scheduler(self)
+    if scheduler is not None:
+        scheduler.poll_if_due()
+    return result
 
 
 def _epoch_map(registry: Any) -> dict[str, int]:
@@ -198,6 +233,7 @@ async def _initialize_session_with_page(self: Any, session_id: str) -> None:
 
 def _oopif_runtime_init(self: Any, *args: Any, **kwargs: Any) -> None:
     _original_oopif_runtime_init(self, *args, **kwargs)
+    self._ares_runtime_scheduler = SingleOwnerRuntimeScheduler(self.adapter)
     registry = self._oopif_registry
 
     def discover() -> list[dict[str, Any]]:
@@ -241,7 +277,7 @@ def _seeded_run(start: dict[str, Any]) -> int:
 
 # The default OOPIF task worker and the manual validation worker use the same
 # control-aware adapter contract: explicit RPC/control traffic gets a short
-# priority window before expensive idle visual inference is allowed to start.
+# priority window before expensive automatic visual inference is allowed to start.
 impl.base.SeleniumBaseCdpAdapter = ControlAwareSeleniumBaseCdpAdapter
 impl.FlatCdpTargetRegistry._child_frame_id = _child_frame_id
 impl.FlatCdpTargetRegistry._handle_event = _handle_event_with_frame_lifecycle
@@ -249,7 +285,9 @@ impl.FlatCdpTargetRegistry._initialize_session = _initialize_session_with_page
 impl.FlatCdpTargetRegistry.document_epoch = _document_epoch
 impl.OopifTaskRpcRuntime.__init__ = _oopif_runtime_init
 impl.base.TaskRpcRuntime._mouse = _pointer_mouse
-impl.base.TaskRpcRuntime.rpc = _pointer_rpc
+impl.base.TaskRpcRuntime.rpc = _control_aware_rpc
+impl.base.TaskRpcRuntime.network_events = _network_events_with_runtime_opportunity
+impl.base.TaskRpcRuntime.page_state = _page_state_with_passive_runtime_opportunity
 impl.base.run = _seeded_run
 
 FlatCdpTargetRegistry = impl.FlatCdpTargetRegistry
