@@ -32,6 +32,7 @@ jobs:
           python -m py_compile
           python/seleniumbase_cdp/product_monitor_browser.py
           python/seleniumbase_cdp/product_monitor_browser_e2e_probe.py
+          python/seleniumbase_cdp/task_rpc_navigation_probe.py
           python/seleniumbase_cdp/consent_popup_handler.py
           python/seleniumbase_cdp/instruction_input_runtime.py
           python/seleniumbase_cdp/extended_grid_site_adapter.py
@@ -51,6 +52,9 @@ jobs:
 
       - name: Verify automatic interaction contract
         run: python python/seleniumbase_cdp/auto_interaction_probe.py
+
+      - name: Verify task RPC navigation responsiveness
+        run: python python/seleniumbase_cdp/task_rpc_navigation_probe.py
 
       - name: Run real JavaScript storefront monitor E2E
         env:
