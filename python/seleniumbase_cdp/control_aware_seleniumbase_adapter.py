@@ -7,19 +7,24 @@ from seleniumbase_adapter import SeleniumBaseCdpAdapter
 
 
 class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
-    """Keep automatic page work behind recent explicit control-plane activity.
+    """Keep expensive automatic page work behind explicit control-plane traffic.
 
-    SeleniumBase/CDP remains single-owner. Explicit RPC/control calls mark a short
-    quiet window; idle polling skips expensive automatic visual work during that
-    window so a follow-up command cannot lose a race to background inference.
-    The next idle poll resumes the unchanged full runtime automatically.
+    Browser/CDP stays single-owner. Navigation performs only the synchronous work
+    required to make the page safe and observable; the expensive automatic visual
+    cycle is deferred to the existing idle poll. This keeps READY/RPC responses
+    from being blocked by background inference while preserving the same automatic
+    runtime once the control plane has been quiet briefly.
     """
 
     CONTROL_QUIET_SECONDS = 0.9
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._control_quiet_until = 0.0
+        self._deferred_navigation_auto = False
         super().__init__(*args, **kwargs)
+        # Give the owner a short window to receive the first command after READY
+        # before any expensive idle visual work is allowed to start.
+        self.note_control_activity()
 
     def note_control_activity(self) -> None:
         self._control_quiet_until = max(
@@ -30,12 +35,40 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
     def poll_runtime(self) -> None:
         if time.monotonic() < self._control_quiet_until:
             return
+        if self._deferred_navigation_auto:
+            self._deferred_navigation_auto = False
+            self._poll_observation_watchdog(force=True)
+            return
         super().poll_runtime()
 
     def goto(self, url: str) -> None:
+        """Navigate synchronously, but defer expensive automatic visual work.
+
+        This is the base adapter's navigation contract minus the final forced
+        automatic visual cycle. Challenge stabilization/handling, watchdog state,
+        and debug capture remain unchanged. The deferred cycle is executed by
+        poll_runtime() after the control quiet window.
+        """
         self.note_control_activity()
-        super().goto(url)
+        self._sb.goto(url)
+        self._challenge_tracker.wait_for_stable_challenge()
+        self._sb.solve_captcha()
+        self._watchdog.reset()
+        initial = self._watchdog.poll()
+        self._last_watchdog_state = initial
+        self._capture_debug(
+            "page-load",
+            generation=int(initial.get("generation") or 0),
+            force=True,
+        )
+        self._deferred_navigation_auto = True
         self.note_control_activity()
+
+    def execute_script(self, script: str, *args: Any) -> Any:
+        self.note_control_activity()
+        result = super().execute_script(script, *args)
+        self.note_control_activity()
+        return result
 
     def challenge_state(self) -> Dict[str, Any]:
         self.note_control_activity()

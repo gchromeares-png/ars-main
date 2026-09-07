@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-from seleniumbase_adapter import SeleniumBaseCdpAdapter
+from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter as SeleniumBaseCdpAdapter
 
 RESULT_PREFIX = "ARES_MONITOR_BROWSER\t"
 MAX_HTML_CHARS = 2_000_000
@@ -52,8 +52,6 @@ def _command_reader(target: queue.Queue[Dict[str, Any]]) -> None:
 
 
 def _snapshot(adapter: SeleniumBaseCdpAdapter) -> Dict[str, Any]:
-    # Pure CDP evaluates JavaScript as an expression. Keep the return inside
-    # an IIFE instead of relying on WebDriver-style function-body semantics.
     value = adapter.execute_script(
         """
         (() => {
@@ -166,7 +164,6 @@ def _start(command: Dict[str, Any]) -> int:
 
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
         threading.Thread(target=_command_reader, args=(commands,), daemon=True).start()
-        next_forced_visual_poll = time.monotonic() + 1.0
 
         while True:
             if not adapter.is_running():
@@ -175,14 +172,10 @@ def _start(command: Dict[str, Any]) -> int:
             try:
                 next_command = commands.get(timeout=0.35)
             except queue.Empty:
-                now = time.monotonic()
-                if now >= next_forced_visual_poll:
-                    adapter._poll_observation_watchdog(force=True)
-                    next_forced_visual_poll = now + 1.0
-                else:
-                    adapter.poll_runtime()
+                adapter.poll_runtime()
                 continue
 
+            adapter.note_control_activity()
             command_type = str(next_command.get("type") or "")
             next_request_id = str(next_command.get("requestId") or "")
             try:
@@ -226,6 +219,8 @@ def _start(command: Dict[str, Any]) -> int:
                     "errorType": type(exc).__name__,
                     "error": str(exc),
                 })
+            finally:
+                adapter.note_control_activity()
     finally:
         if not closed:
             try:
