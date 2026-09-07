@@ -2,7 +2,7 @@ import type { Page, Response } from "./types";
 import type { Task } from "../models";
 
 export type QueuePhase = "waiting" | "released" | "timed-out";
-export type QueueSignalSource = "dom" | "network" | "url" | "combined";
+export type QueueSignalSource = "session-http" | "dom" | "network" | "url" | "combined";
 
 export interface QueueRuntimeStatus {
   active: boolean;
@@ -26,6 +26,14 @@ interface QueueSignal {
   source: QueueSignalSource;
 }
 
+export interface QueueExternalSignal {
+  active: boolean;
+  position?: number;
+  timeToWaitSeconds?: number;
+  statusText?: string;
+  source: "session-http";
+}
+
 interface NetworkQueueSignal {
   active: true;
   position?: number;
@@ -38,6 +46,7 @@ export interface QueueWaitOptions {
   maxWaitMs?: number;
   pollIntervalMs?: number;
   releaseConfirmations?: number;
+  externalSignal?: () => QueueExternalSignal | undefined;
 }
 
 export interface QueueWaitResult {
@@ -64,7 +73,7 @@ function numericValue(value: unknown): number | undefined {
 }
 
 function queueSource(value: unknown): QueueSignalSource {
-  return value === "dom" || value === "network" || value === "url" || value === "combined"
+  return value === "session-http" || value === "dom" || value === "network" || value === "url" || value === "combined"
     ? value
     : "network";
 }
@@ -79,7 +88,6 @@ function extractQueuePayload(value: unknown): { position?: number; timeToWaitSec
   const data = record["data"] && typeof record["data"] === "object"
     ? record["data"] as Record<string, unknown>
     : undefined;
-
   const position = numericValue(record["pos"] ?? record["position"] ?? data?.["pos"] ?? data?.["position"]);
   const timeToWaitSeconds = numericValue(record["ttw"] ?? record["timeToWait"] ?? data?.["ttw"] ?? data?.["timeToWait"]);
   const rawStatus = record["status"] ?? data?.["status"];
@@ -102,6 +110,10 @@ function extractUrlTelemetry(url: string): { position?: number; timeToWaitSecond
 type PageResponseEvents = {
   on?: (event: "response", listener: (response: Response) => void) => unknown;
   off?: (event: "response", listener: (response: Response) => void) => unknown;
+};
+
+type PassivePage = Page & {
+  passiveEvaluate?: <T = unknown>(fn: ((...args: any[]) => T) | string, ...args: any[]) => Promise<T>;
 };
 
 export class BrowserQueueWaiter {
@@ -163,33 +175,18 @@ export class BrowserQueueWaiter {
         clearCount = 0;
         lastSignal = signal;
         this.publish({
-          active: true,
-          phase: "waiting",
-          position: signal.position,
-          timeToWaitSeconds: signal.timeToWaitSeconds,
-          statusText: signal.statusText,
-          source: signal.source,
-          detectedAt,
-          updatedAt: new Date().toISOString(),
-          elapsedMs,
-          maxWaitMs
+          active: true, phase: "waiting", position: signal.position,
+          timeToWaitSeconds: signal.timeToWaitSeconds, statusText: signal.statusText,
+          source: signal.source, detectedAt, updatedAt: new Date().toISOString(), elapsedMs, maxWaitMs
         });
       } else {
         clearCount += 1;
         if (clearCount >= releaseConfirmations) {
           const releasedAt = new Date().toISOString();
           this.publish({
-            active: false,
-            phase: "released",
-            position: lastSignal.position,
-            timeToWaitSeconds: 0,
-            statusText: "Warteschlange verlassen",
-            source: lastSignal.source,
-            detectedAt,
-            updatedAt: releasedAt,
-            releasedAt,
-            elapsedMs,
-            maxWaitMs
+            active: false, phase: "released", position: lastSignal.position,
+            timeToWaitSeconds: 0, statusText: "Warteschlange verlassen", source: lastSignal.source,
+            detectedAt, updatedAt: releasedAt, releasedAt, elapsedMs, maxWaitMs
           });
           return { detected: true, released: true, elapsedMs };
         }
@@ -199,16 +196,9 @@ export class BrowserQueueWaiter {
 
     const elapsedMs = Math.max(0, Date.now() - startedAt);
     this.publish({
-      active: false,
-      phase: "timed-out",
-      position: lastSignal.position,
-      timeToWaitSeconds: lastSignal.timeToWaitSeconds,
-      statusText: "Maximale Queue-Wartezeit erreicht",
-      source: lastSignal.source,
-      detectedAt,
-      updatedAt: new Date().toISOString(),
-      elapsedMs,
-      maxWaitMs
+      active: false, phase: "timed-out", position: lastSignal.position,
+      timeToWaitSeconds: lastSignal.timeToWaitSeconds, statusText: "Maximale Queue-Wartezeit erreicht",
+      source: lastSignal.source, detectedAt, updatedAt: new Date().toISOString(), elapsedMs, maxWaitMs
     });
     throw new Error(`Queue-Wartezeit von ${Math.round(maxWaitMs / 60_000)} Minuten überschritten.`);
   }
@@ -220,62 +210,60 @@ export class BrowserQueueWaiter {
 
   private async readSignal(): Promise<QueueSignal> {
     if (this.page.isClosed()) return { active: false, source: "dom" };
-    const dom = await this.page.evaluate(() => {
+
+    // Stage 1: renderer-free curl_cffi result. Positive signals only: an HTTP miss
+    // never releases an already observed browser queue by itself.
+    const external = this.options.externalSignal?.();
+    if (external?.active) return { ...external };
+
+    // Stage 2: passive CDP Network observation. Avoid touching DOM when the browser
+    // has already emitted a fresh queue response.
+    const recentNetwork = this.networkSignal && Date.now() - this.networkSignal.updatedAt <= NETWORK_SIGNAL_TTL_MS
+      ? this.networkSignal
+      : undefined;
+    if (recentNetwork?.active) {
+      return {
+        active: true, source: "network", position: recentNetwork.position,
+        timeToWaitSeconds: recentNetwork.timeToWaitSeconds, statusText: recentNetwork.statusText
+      };
+    }
+
+    // Stage 3: protocol-backed DOM fallback. SeleniumBaseRpcPage exposes a passive
+    // action that does not extend the AutoInteraction control quiet window.
+    const page = this.page as PassivePage;
+    const evaluator = typeof page.passiveEvaluate === "function"
+      ? page.passiveEvaluate.bind(page)
+      : page.evaluate.bind(page);
+    const dom = await evaluator(() => {
       const queuePosition = document.getElementById("queue-position");
       const position = queuePosition ?? document.getElementById("position");
       const status = document.getElementById("status");
       return {
-        hasQueuePosition: Boolean(queuePosition),
-        hasPosition: Boolean(position),
-        positionText: position?.textContent?.trim() ?? "",
-        statusText: status?.textContent?.trim() ?? "",
+        hasQueuePosition: Boolean(queuePosition), hasPosition: Boolean(position),
+        positionText: position?.textContent?.trim() ?? "", statusText: status?.textContent?.trim() ?? "",
         url: location.href
       };
     }).catch(() => ({
-      hasQueuePosition: false,
-      hasPosition: false,
-      positionText: "",
-      statusText: "",
-      url: this.page.url()
+      hasQueuePosition: false, hasPosition: false, positionText: "", statusText: "", url: this.page.url()
     }));
 
-    const recentNetwork = this.networkSignal && Date.now() - this.networkSignal.updatedAt <= NETWORK_SIGNAL_TTL_MS
-      ? this.networkSignal
-      : undefined;
     const domPosition = numericValue(dom.positionText);
     const urlSignal = queueLikeUrl(dom.url);
     const statusLooksQueued = /(queue|warteschlange|waiting|position|wait)/i.test(dom.statusText);
     const domActive = dom.hasQueuePosition || (dom.hasPosition && (statusLooksQueued || urlSignal));
-    const networkActive = Boolean(recentNetwork?.active);
-    const active = domActive || networkActive || urlSignal;
-
-    const source: QueueSignalSource = [domActive, networkActive, urlSignal].filter(Boolean).length > 1
-      ? "combined"
-      : domActive ? "dom"
-      : networkActive ? "network"
-      : "url";
-
     return {
-      active,
-      position: recentNetwork?.position ?? domPosition,
-      timeToWaitSeconds: recentNetwork?.timeToWaitSeconds,
-      statusText: recentNetwork?.statusText || dom.statusText || undefined,
-      source
+      active: domActive || urlSignal,
+      position: domPosition,
+      statusText: dom.statusText || undefined,
+      source: domActive && urlSignal ? "combined" : domActive ? "dom" : "url"
     };
   }
 
   private async captureResponse(response: Response): Promise<void> {
     const url = response.url();
     if (!queueLikeUrl(url)) return;
-
     const fromUrl = extractUrlTelemetry(url);
-    const next: NetworkQueueSignal = {
-      active: true,
-      ...fromUrl,
-      updatedAt: Date.now()
-    };
-    this.networkSignal = next;
-
+    this.networkSignal = { active: true, ...fromUrl, updatedAt: Date.now() };
     try {
       const contentType = response.headers()["content-type"] ?? "";
       if (!/(json|javascript|text)/i.test(contentType)) return;
@@ -297,7 +285,7 @@ export class BrowserQueueWaiter {
         updatedAt: Date.now()
       };
     } catch {
-      // Queue traffic is passive best-effort telemetry. DOM/URL detection stays available.
+      // Passive best-effort telemetry; Stage 3 DOM remains available.
     }
   }
 
