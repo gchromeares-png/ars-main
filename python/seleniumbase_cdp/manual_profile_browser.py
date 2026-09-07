@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 import psutil
 
-from seleniumbase_adapter import SeleniumBaseCdpAdapter
+from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter
 
 RESULT_PREFIX = "ARES_SB_MANUAL\t"
 LAST_URL_FILENAME = ".ares-last-url"
@@ -91,7 +91,7 @@ def _read_last_url(profile_dir: Path) -> str:
     return value if _restorable_url(value) else ""
 
 
-def _remember_last_url(profile_dir: Path, adapter: SeleniumBaseCdpAdapter, previous: str = "") -> str:
+def _remember_last_url(profile_dir: Path, adapter: ControlAwareSeleniumBaseCdpAdapter, previous: str = "") -> str:
     try:
         value = str(adapter.execute_script("return window.location.href;") or "").strip()
     except Exception:
@@ -113,7 +113,7 @@ def _remember_last_url(profile_dir: Path, adapter: SeleniumBaseCdpAdapter, previ
     return value
 
 
-def _active_target_id(adapter: SeleniumBaseCdpAdapter) -> str:
+def _active_target_id(adapter: ControlAwareSeleniumBaseCdpAdapter) -> str:
     tab = adapter._sb.get_active_tab()
     target_id = getattr(tab, "target_id", None)
     if target_id is None:
@@ -125,7 +125,7 @@ def _active_target_id(adapter: SeleniumBaseCdpAdapter) -> str:
     return value
 
 
-def _enable_oopif_runtime(adapter: SeleniumBaseCdpAdapter) -> bool:
+def _enable_oopif_runtime(adapter: ControlAwareSeleniumBaseCdpAdapter) -> bool:
     from task_browser_worker_oopif_impl import FlatCdpTargetRegistry
 
     driver = getattr(adapter._sb, "driver", None)
@@ -155,7 +155,7 @@ def _enable_oopif_runtime(adapter: SeleniumBaseCdpAdapter) -> bool:
     return True
 
 
-def _close_oopif_runtime(adapter: SeleniumBaseCdpAdapter) -> None:
+def _close_oopif_runtime(adapter: ControlAwareSeleniumBaseCdpAdapter) -> None:
     registry = getattr(adapter, "_ares_oopif_registry", None)
     if registry is None:
         return
@@ -165,7 +165,7 @@ def _close_oopif_runtime(adapter: SeleniumBaseCdpAdapter) -> None:
         pass
 
 
-def _close_adapter(adapter: SeleniumBaseCdpAdapter) -> None:
+def _close_adapter(adapter: ControlAwareSeleniumBaseCdpAdapter) -> None:
     owned_pids = adapter._profile_browser_pids()
     chrome_pid = adapter.chrome_pid
     if chrome_pid and chrome_pid not in owned_pids:
@@ -228,7 +228,7 @@ def _start(command: Dict[str, Any]) -> int:
         raise ValueError("profileDir is required")
 
     request_id = str(command.get("requestId") or "")
-    adapter = SeleniumBaseCdpAdapter(
+    adapter = ControlAwareSeleniumBaseCdpAdapter(
         profile_dir=profile_dir,
         headless=_manual_browser_headless(command),
         proxy=_proxy_value(command),
@@ -268,7 +268,6 @@ def _start(command: Dict[str, Any]) -> int:
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
         threading.Thread(target=_command_reader, args=(commands,), daemon=True).start()
         next_url_capture = time.monotonic() + 2.0
-        next_forced_visual_poll = time.monotonic() + 1.0
 
         while True:
             if not adapter.is_running():
@@ -283,14 +282,13 @@ def _start(command: Dict[str, Any]) -> int:
             try:
                 next_command = commands.get(timeout=0.4)
             except queue.Empty:
-                now = time.monotonic()
-                if now >= next_forced_visual_poll:
-                    adapter._poll_observation_watchdog(force=True)
-                    next_forced_visual_poll = now + 1.0
-                else:
-                    adapter.poll_runtime()
+                # The adapter itself owns the control quiet-window. Keep one
+                # background entry point so validation and production exercise
+                # the same event/watchdog/visual scheduling semantics.
+                adapter.poll_runtime()
                 continue
 
+            adapter.note_control_activity()
             command_type = str(next_command.get("type") or "")
             next_request_id = str(next_command.get("requestId") or "")
             try:
