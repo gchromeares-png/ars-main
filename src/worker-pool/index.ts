@@ -20,6 +20,10 @@ export class WorkerPool {
   }
 
   assignTask(task: Task): string | null {
+    // A paused/resumed task can be queued while its previous executor call is
+    // still unwinding. Never allow the same task id to own two workers at once.
+    if (this.assignments.has(task.id)) return null;
+
     const workerId = this.available.shift();
     if (!workerId) return null;
 

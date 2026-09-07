@@ -107,6 +107,7 @@ jobs:
           tests/shopify-purchase-ready-executor.test.ts
           tests/retry-policy-block.test.ts
           tests/pokemon-center-final-purchase-guard.test.ts
+          tests/task-lifecycle-safety.test.ts
           tests/payment-source-guard.test.ts
           tests/browser-gate-monitor-lanes.test.ts
           tests/commerce-monitor-browser-fallback.test.ts

@@ -122,7 +122,29 @@ export class TaskOrchestrator {
       this.transition(task, TaskState.RUNNING);
       this.eventBus.emit("taskStarted", task);
 
-      const success = await this.executor.execute(task);
+      let success: boolean;
+      try {
+        success = await this.executor.execute(task);
+      } catch (error) {
+        const wasPausedWhileRunning = this.pausedRunningTaskIds.delete(task.id);
+        const currentState = task.state as TaskState;
+        task.lastError = error instanceof Error ? error.message : String(error);
+
+        if (currentState === TaskState.CANCELLED || currentState === TaskState.PAUSED || wasPausedWhileRunning) {
+          if (wasPausedWhileRunning && currentState === TaskState.QUEUED) {
+            this.enqueueTask(task.id);
+          }
+          await this.registry.saveTask(task.id);
+          return;
+        }
+
+        if (this.stateMachine.canTransition(task.state, TaskState.FAILED)) {
+          this.transition(task, TaskState.FAILED);
+          this.eventBus.emit("taskFailed", task);
+        }
+        await this.registry.saveTask(task.id);
+        return;
+      }
 
       const wasPausedWhileRunning = this.pausedRunningTaskIds.delete(task.id);
       const currentState = task.state as TaskState;
