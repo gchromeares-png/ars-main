@@ -146,7 +146,7 @@ class SliderSiteAdapter:
             let handles = [];
             if (overrides.sliderHandle) handles = [...scopedRoot.querySelectorAll(overrides.sliderHandle)].filter(visible);
             if (!handles.length) handles = [...scopedRoot.querySelectorAll('input[type="range"],[role="slider"],[aria-valuenow]')].filter(visible);
-            if (!handles.length) handles = [...scopedRoot.querySelectorAll('[class*="slider" i] [class*="thumb" i],[class*="slider" i] [class*="handle" i],[class*="drag" i] [class*="handle" i]')].filter(visible);
+            if (!handles.length) handles = [...scopedRoot.querySelectorAll('[class*="slider" i] [class*="thumb" i],[class*="slider" i] [class*="handle" i],[class*="drag" i] [class*="handle" i],.sliderContainer > .slider')].filter(visible);
 
             const complete = Boolean(overrides.sliderComplete && scopedRoot.querySelector(overrides.sliderComplete));
             const failed = Boolean(overrides.sliderFailed && scopedRoot.querySelector(overrides.sliderFailed));
@@ -157,6 +157,7 @@ class SliderSiteAdapter:
               const nativeRange = handle.matches('input[type="range"]');
               let track = overrides.sliderTrack ? scopedRoot.querySelector(overrides.sliderTrack) : null;
               if (!track && nativeRange) track = handle;
+              if (!track && handle.matches?.('.slider') && handle.parentElement?.matches?.('.sliderContainer')) track = handle.parentElement.querySelector('.sliderbg');
               if (!track) track = handle.closest('[role="slider"]')?.parentElement || handle.closest('[class*="slider" i],[class*="track" i],[class*="drag" i]') || handle.parentElement;
               if (!track || !visible(track)) continue;
 
@@ -175,9 +176,11 @@ class SliderSiteAdapter:
               const fraction = Math.max(0, Math.min(1, (value - min) / span));
               const instruction = overrides.sliderInstruction
                 ? scopedRoot.querySelector(overrides.sliderInstruction)
-                : track.parentElement?.previousElementSibling || track.parentElement;
+                : handle.closest('.sliderContainer')?.previousElementSibling?.matches?.('.sliderText')
+                  ? handle.closest('.sliderContainer').previousElementSibling
+                  : track.parentElement?.previousElementSibling || track.parentElement;
 
-              const targetSelector = overrides.sliderTarget || '[data-target],[data-goal],[aria-label*="target" i],[aria-label*="goal" i],[class*="target" i],[class*="goal" i],[class*="marker" i],[class*="tick" i]';
+              const targetSelector = overrides.sliderTarget || '.sliderContainer .sliderTarget,[data-target],[data-goal],[aria-label*="target" i],[aria-label*="goal" i],[class*="target" i],[class*="goal" i],[class*="marker" i],[class*="tick" i]';
               const targetNodes = [...(scopedRoot.querySelectorAll?.(targetSelector) || [])]
                 .filter(el => el !== handle && el !== track && visible(el));
               const rawTargets = [];
@@ -231,6 +234,7 @@ class SliderSiteAdapter:
               let score = 45;
               if (handle.matches('input[type="range"],[role="slider"]')) score += 25;
               if (overrides.sliderHandle || overrides.sliderTrack) score += 20;
+              if (handle.matches?.('.slider') && handle.parentElement?.matches?.('.sliderContainer')) score += 20;
               if (t.width >= 120 || t.height >= 120) score += 10;
               if (text(instruction)) score += 5;
               if (rawTargets.length) score += 8;
