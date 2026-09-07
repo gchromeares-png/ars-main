@@ -3,7 +3,6 @@ import * as http from "http";
 import type { AddressInfo } from "net";
 import * as os from "os";
 import * as path from "path";
-import { BrowserWorkerPoolClient } from "../src/browser-worker/client";
 import type { CommerceShop } from "../src/commerce/platforms";
 import { CommerceTaskExecutorRouter } from "../src/commerce/task-executor-router";
 import { TaskRepositoryMock, WorkerMock } from "../src/mocks";
@@ -11,6 +10,10 @@ import { TaskState } from "../src/models";
 import { TaskOrchestrator } from "../src/orchestrator";
 import { EphemeralPaymentExecutor } from "../src/payments/ephemeral-payment-executor";
 import type { AresProfile } from "../src/profiles/models";
+
+const { BrowserWorkerPoolClient } = require(
+  path.join(process.cwd(), "dist/backend/browser-worker/client.js")
+) as typeof import("../src/browser-worker/client");
 
 const describeBrowserIntegration = process.env["ARES_RUN_BROWSER_INTEGRATION"] === "1"
   ? describe
