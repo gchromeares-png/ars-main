@@ -288,7 +288,7 @@ class SliderSiteAdapter:
             if not path:
                 continue
             try:
-                evaluated = evaluate(path, f"return {expression};", [])
+                evaluated = evaluate(path, f"return {expression.strip()};", [])
             except Exception:
                 continue
             if not isinstance(evaluated, dict):
