@@ -141,12 +141,64 @@ _original_oopif_runtime_init = impl.OopifTaskRpcRuntime.__init__
 _original_run = impl.base.run
 
 
+def _passive_queue_dom(self: Any) -> dict[str, Any]:
+    """Read the queue DOM via native CDP DOM commands only.
+
+    This path intentionally avoids Runtime.evaluate and therefore does not execute
+    JavaScript in the page context or extend the control quiet window.
+    """
+    registry = self._oopif_registry
+    root_frame_id = registry.ensure_target(self._active_target_id())
+    route = registry._route(root_frame_id) or {}
+    session_id = str(route.get("sessionId") or "")
+    if not session_id:
+        raise RuntimeError("Passive queue DOM route is unavailable")
+
+    document = registry.call("DOM.getDocument", {"depth": 0, "pierce": True}, session_id=session_id)
+    root = document.get("root") if isinstance(document.get("root"), dict) else {}
+    root_node_id = int(root.get("nodeId") or 0)
+    if root_node_id <= 0:
+        raise RuntimeError("Passive queue DOM root node is unavailable")
+
+    def outer_html(selector: str) -> str:
+        found = registry.call(
+            "DOM.querySelector",
+            {"nodeId": root_node_id, "selector": selector},
+            session_id=session_id,
+        )
+        node_id = int(found.get("nodeId") or 0)
+        if node_id <= 0:
+            return ""
+        html = registry.call("DOM.getOuterHTML", {"nodeId": node_id}, session_id=session_id)
+        return str(html.get("outerHTML") or "")[:8192]
+
+    queue_position = outer_html("#queue-position")
+    position = queue_position or outer_html("#position")
+    status = outer_html("#status")
+    try:
+        url = str(self.sb.get_current_url() or "")
+    except Exception:
+        url = ""
+    return {
+        "result": {
+            "hasQueuePosition": bool(queue_position),
+            "hasPosition": bool(position),
+            "positionText": position,
+            "statusText": status,
+            "url": url,
+        },
+        "url": url,
+    }
+
+
 def _control_aware_rpc(self: Any, command: dict[str, Any]) -> dict[str, Any]:
     action = str(command.get("action") or "")
-    passive = action == "page-state"
+    passive = action in {"page-state", "passive-queue-dom"}
     if not passive:
         self.adapter.note_control_activity()
     try:
+        if action == "passive-queue-dom":
+            return _passive_queue_dom(self)
         if action in {"mouse-down", "mouse-up"}:
             self._sync_newest_target()
             return {"result": self._mouse(action, command)}
@@ -198,7 +250,7 @@ def _bump_document_epoch(registry: Any, frame_id: str) -> int:
     if not frame_id:
         return 0
     epochs = _epoch_map(registry)
-    epochs[frame_id] = int(epochs.get(frame_id, 0)) + 1
+    epochs[frame_id] = int(epochs.get(frame_id), 0) + 1 if False else int(epochs.get(frame_id, 0)) + 1
     return int(epochs[frame_id])
 
 
