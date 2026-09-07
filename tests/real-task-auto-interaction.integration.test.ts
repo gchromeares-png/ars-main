@@ -144,17 +144,7 @@ function fixtureServers(hits: SolveHit[]): FixtureServers {
     const frameUrl = `http://127.0.0.1:${address.port}/frame`;
     send(response, `<!doctype html><html><head><title>ARES Task Runtime Fixture</title></head><body>
       <main id="root">Produktseite bereit</main>
-      <script>
-        setTimeout(() => {
-          const frame = document.createElement('iframe');
-          frame.id = 'puzzle-frame';
-          frame.src = ${JSON.stringify(frameUrl)};
-          frame.style.width = '520px';
-          frame.style.height = '220px';
-          frame.style.border = '0';
-          document.body.appendChild(frame);
-        }, 500);
-      </script>
+      <iframe id="puzzle-frame" src=${JSON.stringify(frameUrl)} style="width:520px;height:220px;border:0"></iframe>
     </body></html>`);
   });
 
@@ -248,26 +238,47 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
     const run = orchestrator.startTask(task.id);
     try {
       await waitFor(
-        () => hits.find(hit => hit.type === "frame-loaded"),
-        15_000,
-        `cross-origin iframe load; hits=${JSON.stringify(hits)}`
+        () => {
+          if (task.state === TaskState.FAILED) {
+            throw new Error(`Task failed before browser runtime became ready: ${task.lastError || "unknown error"}`);
+          }
+          return task.config.data?.["browserGateMonitor"] ? true : undefined;
+        },
+        45_000,
+        `browser runtime readiness; state=${task.state}; lastError=${task.lastError || ""}`
       );
-      const solved = await waitFor(
-        () => hits.find(hit => hit.type === "solved"),
-        70_000,
-        `trusted automatic slider solve after frame load; hits=${JSON.stringify(hits)}`
-      );
-
-      expect(solved.trusted).toBe("true");
-      expect(Number(solved.fraction)).toBeGreaterThanOrEqual(0.94);
-      expect(task.state).toBe(TaskState.RUNNING);
-      expect(task.config.data?.["browserGateMonitor"]).toMatchObject({ mode: "browser", profileId: profile.id });
       expect(task.config.data?.["browserSession"]).toMatchObject({
         type: "ares-browser-runtime",
         engine: "seleniumbase-cdp",
         profileId: profile.id,
         isolatedPerProfile: true
       });
+
+      await waitFor(
+        () => {
+          if (task.state === TaskState.FAILED) {
+            throw new Error(`Task failed before cross-origin iframe load: ${task.lastError || "unknown error"}`);
+          }
+          return hits.find(hit => hit.type === "frame-loaded");
+        },
+        20_000,
+        `cross-origin iframe load after runtime ready; state=${task.state}; hits=${JSON.stringify(hits)}`
+      );
+      const solved = await waitFor(
+        () => {
+          if (task.state === TaskState.FAILED) {
+            throw new Error(`Task failed before automatic slider solve: ${task.lastError || "unknown error"}`);
+          }
+          return hits.find(hit => hit.type === "solved");
+        },
+        70_000,
+        `trusted automatic slider solve after frame load; state=${task.state}; hits=${JSON.stringify(hits)}`
+      );
+
+      expect(solved.trusted).toBe("true");
+      expect(Number(solved.fraction)).toBeGreaterThanOrEqual(0.94);
+      expect(task.state).toBe(TaskState.RUNNING);
+      expect(task.config.data?.["browserGateMonitor"]).toMatchObject({ mode: "browser", profileId: profile.id });
     } finally {
       orchestrator.cancelTask(task.id);
       await run.catch(() => undefined);
