@@ -155,9 +155,15 @@ class FakeGridActions:
         self.calls = []
 
     def apply(self, indexes, *, submit=True):
-        self.calls.append((list(indexes), submit))
+        selected = list(indexes)
+        self.calls.append((selected, submit))
         self.adapter.active = False
-        return {"clickedIndexes": list(indexes), "submitted": submit, "state": self.adapter.poll()}
+        return {
+            "clickedIndexes": selected,
+            "clickedMarkIds": [f"GRI-{index}" for index in selected],
+            "submitted": submit,
+            "state": self.adapter.poll(),
+        }
 
 
 class FakeSliderActions:
