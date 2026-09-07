@@ -71,9 +71,9 @@ function clampNumber(value: number, min: number, max: number): number {
 function numericValue(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string") return undefined;
-  const normalized = value.replace(/[^0-9.,-]/g, "").replace(",", ".");
-  if (!normalized) return undefined;
-  const parsed = Number(normalized);
+  const match = value.match(/-?\d+(?:[.,]\d+)?/);
+  if (!match) return undefined;
+  const parsed = Number(match[0].replace(",", "."));
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
