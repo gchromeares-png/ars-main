@@ -44,6 +44,25 @@ async function waitFor<T>(read: () => T | undefined, timeoutMs: number, label: s
   throw new Error(`Timed out waiting for ${label}.`);
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<T>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}.`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function closeServer(server: http.Server): Promise<void> {
+  await new Promise<void>(resolve => {
+    server.close(() => resolve());
+    server.closeAllConnections?.();
+  });
+}
+
 async function findNamedFile(root: string, name: string): Promise<string | undefined> {
   const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
@@ -176,6 +195,11 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
 
   it("drives a delayed cross-origin slider from TaskOrchestrator through the production worker to trusted CDP input", async () => {
     const hits: SolveHit[] = [];
+    let stage = "fixture-start";
+    const setStage = (next: string): void => {
+      stage = next;
+      process.stderr.write(`[ARES_GLUE_STAGE] ${stage}\n`);
+    };
     const servers = fixtureServers(hits);
     await new Promise<void>((resolve, reject) => {
       servers.frame.once("error", reject);
@@ -239,7 +263,10 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
     });
 
     const run = orchestrator.startTask(task.id);
+    let mainCompleted = false;
+    let cleanupError: Error | undefined;
     try {
+      setStage("runtime-ready");
       await waitFor(
         () => {
           if (task.state === TaskState.FAILED) {
@@ -247,7 +274,7 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
           }
           return task.config.data?.["browserGateMonitor"] ? true : undefined;
         },
-        45_000,
+        50_000,
         `browser runtime readiness; state=${task.state}; lastError=${task.lastError || ""}`
       );
       expect(task.config.data?.["browserSession"]).toMatchObject({
@@ -257,6 +284,7 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
         isolatedPerProfile: true
       });
 
+      setStage("iframe-loaded");
       await waitFor(
         () => {
           if (task.state === TaskState.FAILED) {
@@ -264,9 +292,11 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
           }
           return hits.find(hit => hit.type === "frame-loaded");
         },
-        20_000,
+        10_000,
         `cross-origin iframe load after runtime ready; state=${task.state}; hits=${JSON.stringify(hits)}`
       );
+
+      setStage("automatic-slider-solve");
       const solved = await waitFor(
         () => {
           if (task.state === TaskState.FAILED) {
@@ -274,7 +304,7 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
           }
           return hits.find(hit => hit.type === "solved");
         },
-        70_000,
+        50_000,
         `trusted automatic slider solve after frame load; state=${task.state}; hits=${JSON.stringify(hits)}`
       );
 
@@ -282,17 +312,36 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
       expect(Number(solved.fraction)).toBeGreaterThanOrEqual(0.94);
       expect(task.state).toBe(TaskState.RUNNING);
       expect(task.config.data?.["browserGateMonitor"]).toMatchObject({ mode: "browser", profileId: profile.id });
+      mainCompleted = true;
     } finally {
+      const fromStage = stage;
+      setStage("cleanup-cancel");
       orchestrator.cancelTask(task.id);
-      await run.catch(() => undefined);
+      await withTimeout(
+        run.catch(() => undefined),
+        10_000,
+        `task execution cancellation; from=${fromStage}; state=${task.state}; hits=${JSON.stringify(hits)}`
+      ).catch(error => { cleanupError = error instanceof Error ? error : new Error(String(error)); });
       orchestrator.cleanup();
-      await router.close().catch(() => undefined);
-      await Promise.all([
-        new Promise<void>(resolve => servers.main.close(() => resolve())),
-        new Promise<void>(resolve => servers.frame.close(() => resolve()))
-      ]);
+
+      setStage("cleanup-router");
+      await withTimeout(
+        router.close(),
+        10_000,
+        `browser router close; from=${fromStage}; state=${task.state}`
+      ).catch(error => { cleanupError ??= error instanceof Error ? error : new Error(String(error)); });
+
+      setStage("cleanup-servers");
+      await withTimeout(
+        Promise.all([closeServer(servers.main), closeServer(servers.frame)]),
+        5_000,
+        `fixture server close; from=${fromStage}`
+      ).catch(error => { cleanupError ??= error instanceof Error ? error : new Error(String(error)); });
+
+      if (mainCompleted && cleanupError) throw cleanupError;
     }
 
+    setStage("trace-verification");
     const visualTrace = await findNamedFile(profileRoot, ".ares-visual-trace.jsonl");
     expect(visualTrace).toBeDefined();
     if (visualTrace) {
