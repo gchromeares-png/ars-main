@@ -212,11 +212,12 @@ class VisionGridClassifier:
         return result
 
     def _text_features(self, target: str) -> Any:
-        cache_key = target.casefold().strip()
+        normalized_target = target.casefold().strip()
+        cache_key = normalized_target
         cached = self._text_cache.get(cache_key)
         if cached is not None:
             return cached
-        prompts = [template.format(target=target) for template in PROMPT_TEMPLATES]
+        prompts = [template.format(target=normalized_target) for template in PROMPT_TEMPLATES]
         inputs = self._processor(
             text=prompts,
             padding="max_length",
@@ -314,6 +315,8 @@ class VisionGridClassifier:
         patterns = [
             r"(?i)^.*?(?:select|click|choose|mark)\s+(?:all\s+)?(?:images?|squares?|tiles?)\s+(?:with|containing|of)\s+",
             r"(?i)^.*?(?:wähle|wählen|klicke|anklicken|markiere|markieren)\s+(?:alle\s+)?(?:bilder|felder|kacheln)?\s*(?:mit|von|auf denen)\s+",
+            r"(?i)^.*?(?:select|click|choose|mark)\s+(?:all\s+)?",
+            r"(?i)^.*?(?:wähle|wählen|klicke|anklicken|markiere|markieren)\s+(?:alle\s+)?(?:auf\s+)?",
         ]
         for pattern in patterns:
             cleaned = re.sub(pattern, "", value).strip(" .:;-")
