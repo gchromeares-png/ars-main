@@ -157,12 +157,19 @@ class FakeGridActions:
     def apply(self, indexes, *, submit=True):
         selected = list(indexes)
         self.calls.append((selected, submit))
+        completed_state = {
+            "kind": "image-grid",
+            "score": 95,
+            "signature": self.adapter.signature,
+            "complete": True,
+            "failed": False,
+        }
         self.adapter.active = False
         return {
             "clickedIndexes": selected,
             "clickedMarkIds": [f"GRI-{index}" for index in selected],
             "submitted": submit,
-            "state": self.adapter.poll(),
+            "state": completed_state,
         }
 
 
@@ -201,6 +208,7 @@ def main() -> int:
     )
     result = controller.poll_and_act()
     assert result["acted"] is True and result["verified"] is True
+    assert result["verification"]["reason"] == "explicit-complete"
     assert grid_actions.calls == [([1, 4, 7], True)]
     duplicate = controller.poll_and_act()
     assert duplicate["acted"] is False
@@ -208,7 +216,8 @@ def main() -> int:
     grid.active = True
     grid.signature = "grid-b"
     changed = controller.poll_and_act()
-    assert changed["acted"] is True
+    assert changed["acted"] is True and changed["verified"] is True
+    assert changed["verification"]["reason"] == "explicit-complete"
     assert len(grid_actions.calls) == 2
 
     print("Automatic SeleniumBase interaction probe passed.")
