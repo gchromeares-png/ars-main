@@ -198,7 +198,7 @@ def _bump_document_epoch(registry: Any, frame_id: str) -> int:
     if not frame_id:
         return 0
     epochs = _epoch_map(registry)
-    epochs[frame_id] = int(epochs.get(frame_id), 0) + 1
+    epochs[frame_id] = int(epochs.get(frame_id, 0)) + 1
     return int(epochs[frame_id])
 
 
