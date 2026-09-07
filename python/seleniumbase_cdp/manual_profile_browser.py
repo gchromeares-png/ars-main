@@ -12,6 +12,7 @@ from typing import Any, Dict
 import psutil
 
 from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter
+from runtime_poll_scheduler import SingleOwnerRuntimeScheduler
 
 RESULT_PREFIX = "ARES_SB_MANUAL\t"
 LAST_URL_FILENAME = ".ares-last-url"
@@ -93,7 +94,12 @@ def _read_last_url(profile_dir: Path) -> str:
 
 def _remember_last_url(profile_dir: Path, adapter: ControlAwareSeleniumBaseCdpAdapter, previous: str = "") -> str:
     try:
-        value = str(adapter.execute_script("return window.location.href;") or "").strip()
+        value = str(
+            adapter.passive_observation(
+                lambda: adapter.execute_script("return window.location.href;")
+            )
+            or ""
+        ).strip()
     except Exception:
         return previous
     if not _restorable_url(value) or value == previous:
@@ -267,6 +273,7 @@ def _start(command: Dict[str, Any]) -> int:
 
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
         threading.Thread(target=_command_reader, args=(commands,), daemon=True).start()
+        scheduler = SingleOwnerRuntimeScheduler(adapter)
         next_url_capture = time.monotonic() + 2.0
 
         while True:
@@ -274,18 +281,16 @@ def _start(command: Dict[str, Any]) -> int:
                 _emit({"type": "browser-closed", "profileId": profile_id})
                 break
 
+            scheduler.poll_if_due()
             now = time.monotonic()
             if now >= next_url_capture:
                 last_url = _remember_last_url(profile_dir, adapter, last_url)
                 next_url_capture = now + 2.0
 
             try:
-                next_command = commands.get(timeout=0.4)
+                next_command = commands.get(timeout=scheduler.queue_timeout(0.4))
             except queue.Empty:
-                # The adapter itself owns the control quiet-window. Keep one
-                # background entry point so validation and production exercise
-                # the same event/watchdog/visual scheduling semantics.
-                adapter.poll_runtime()
+                scheduler.poll_if_due()
                 continue
 
             adapter.note_control_activity()
@@ -380,6 +385,10 @@ def _start(command: Dict[str, Any]) -> int:
                     "errorType": type(exc).__name__,
                     "error": str(exc),
                 })
+            finally:
+                if not closed and adapter.is_running():
+                    adapter.note_control_activity()
+                    scheduler.poll_if_due()
     finally:
         if not closed:
             try:

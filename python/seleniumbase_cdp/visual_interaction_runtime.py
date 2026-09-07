@@ -56,17 +56,36 @@ class VisualInteractionRuntime:
         self._last_grid_debug_signature = ""
 
     def poll_and_act(self) -> Dict[str, Any]:
+        started = time.monotonic()
         popup = self._popup_handler.dismiss_once()
+        self._trace.append("runtime-stage", {
+            "stage": "popup-dismiss",
+            "elapsedMs": round((time.monotonic() - started) * 1000.0, 3),
+            "result": popup,
+        })
         if popup.get("dismissed"):
             self._trace.append("popup-action", popup)
             return {"acted": True, "kind": "popup", "result": popup}
 
+        started = time.monotonic()
         checkout = self._popup_handler.advance_checkout_once()
+        self._trace.append("runtime-stage", {
+            "stage": "checkout-progress",
+            "elapsedMs": round((time.monotonic() - started) * 1000.0, 3),
+            "result": checkout,
+        })
         if checkout.get("advanced"):
             self._trace.append("checkout-action", checkout)
             return {"acted": True, "kind": "checkout", "result": checkout}
 
+        started = time.monotonic()
         grid_state = self._grid.poll()
+        self._trace.append("runtime-stage", {
+            "stage": "grid-prefetch",
+            "elapsedMs": round((time.monotonic() - started) * 1000.0, 3),
+            "kind": str(grid_state.get("kind") or "none"),
+            "scope": str(grid_state.get("scope") or ""),
+        })
         if grid_state.get("kind") == "image-grid":
             signature = str(grid_state.get("signature") or "")
             if signature and signature != self._last_grid_debug_signature:
@@ -114,7 +133,15 @@ class VisualInteractionRuntime:
                     },
                 )
 
+        started = time.monotonic()
         primary = self._finalize_interaction(self._controller.poll_and_act())
+        self._trace.append("runtime-stage", {
+            "stage": "controller",
+            "elapsedMs": round((time.monotonic() - started) * 1000.0, 3),
+            "kind": str(primary.get("kind") or "none"),
+            "acted": bool(primary.get("acted")),
+            "verified": primary.get("verified"),
+        })
         if primary.get("kind") != "image-grid" or bool(primary.get("acted")):
             return primary
 
