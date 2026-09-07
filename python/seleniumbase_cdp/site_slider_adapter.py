@@ -146,7 +146,7 @@ class SliderSiteAdapter:
             let handles = [];
             if (overrides.sliderHandle) handles = [...scopedRoot.querySelectorAll(overrides.sliderHandle)].filter(visible);
             if (!handles.length) handles = [...scopedRoot.querySelectorAll('input[type="range"],[role="slider"],[aria-valuenow]')].filter(visible);
-            if (!handles.length) handles = [...scopedRoot.querySelectorAll('[class*="slider" i] [class*="thumb" i],[class*="slider" i] [class*="handle" i],[class*="drag" i] [class*="handle" i]')].filter(visible);
+            if (!handles.length) handles = [...scopedRoot.querySelectorAll('[class*="slider" i] [class*="thumb" i],[class*="slider" i] [class*="handle" i],[class*="drag" i] [class*="handle" i],.sliderContainer > .slider,.sliderContainer .sliderIcon')].filter(visible);
 
             const complete = Boolean(overrides.sliderComplete && scopedRoot.querySelector(overrides.sliderComplete));
             const failed = Boolean(overrides.sliderFailed && scopedRoot.querySelector(overrides.sliderFailed));
@@ -157,6 +157,7 @@ class SliderSiteAdapter:
               const nativeRange = handle.matches('input[type="range"]');
               let track = overrides.sliderTrack ? scopedRoot.querySelector(overrides.sliderTrack) : null;
               if (!track && nativeRange) track = handle;
+              if (!track && scopedRoot.querySelector?.('.sliderContainer .sliderbg')) track = scopedRoot.querySelector('.sliderContainer .sliderbg');
               if (!track) track = handle.closest('[role="slider"]')?.parentElement || handle.closest('[class*="slider" i],[class*="track" i],[class*="drag" i]') || handle.parentElement;
               if (!track || !visible(track)) continue;
 
@@ -175,9 +176,9 @@ class SliderSiteAdapter:
               const fraction = Math.max(0, Math.min(1, (value - min) / span));
               const instruction = overrides.sliderInstruction
                 ? scopedRoot.querySelector(overrides.sliderInstruction)
-                : track.parentElement?.previousElementSibling || track.parentElement;
+                : scopedRoot.querySelector?.('.sliderText') || track.parentElement?.previousElementSibling || track.parentElement;
 
-              const targetSelector = overrides.sliderTarget || '[data-target],[data-goal],[aria-label*="target" i],[aria-label*="goal" i],[class*="target" i],[class*="goal" i],[class*="marker" i],[class*="tick" i]';
+              const targetSelector = overrides.sliderTarget || '.sliderContainer .sliderTarget,.sliderContainer .sliderTargetIcon,[data-target],[data-goal],[aria-label*="target" i],[aria-label*="goal" i],[class*="target" i],[class*="goal" i],[class*="marker" i],[class*="tick" i]';
               const targetNodes = [...(scopedRoot.querySelectorAll?.(targetSelector) || [])]
                 .filter(el => el !== handle && el !== track && visible(el));
               const rawTargets = [];
@@ -231,6 +232,7 @@ class SliderSiteAdapter:
               let score = 45;
               if (handle.matches('input[type="range"],[role="slider"]')) score += 25;
               if (overrides.sliderHandle || overrides.sliderTrack) score += 20;
+              if (handle.matches?.('.slider,.sliderIcon')) score += 20;
               if (t.width >= 120 || t.height >= 120) score += 10;
               if (text(instruction)) score += 5;
               if (rawTargets.length) score += 8;
@@ -258,179 +260,3 @@ class SliderSiteAdapter:
         """
 
     def _snapshot_document(self) -> Dict[str, Any]:
-        try:
-            value = self._evaluate(self._slider_expression())
-        except Exception:
-            return self._empty()
-        return self._normalize(value)
-
-    def _snapshot_oopif_frames(self) -> Dict[str, Any]:
-        discover = getattr(self._sb, "ares_oopif_discover", None)
-        evaluate = getattr(self._sb, "ares_oopif_evaluate", None)
-        if not callable(discover) or not callable(evaluate):
-            return self._empty("oopif")
-        try:
-            frames = list(discover() or [])
-        except Exception:
-            return self._empty("oopif")
-
-        best = self._empty("oopif")
-        outcome: Dict[str, Any] | None = None
-        expression = self._slider_expression()
-        for entry in frames:
-            if not isinstance(entry, dict):
-                continue
-            path = [str(value) for value in entry.get("path") or [] if str(value)]
-            if not path:
-                continue
-            try:
-                evaluated = evaluate(path, f"return {expression};", [])
-            except Exception:
-                continue
-            if not isinstance(evaluated, dict):
-                continue
-            value = evaluated.get("value")
-            if not isinstance(value, dict):
-                continue
-            scope_suffix = str(value.get("scope") or "document")
-            scope = "oopif:" + "/".join(path)
-            if scope_suffix and scope_suffix != "document":
-                scope += "/" + scope_suffix
-            if value.get("kind") != "slider":
-                if bool(value.get("complete")) or bool(value.get("failed")):
-                    outcome = {
-                        **self._empty(scope),
-                        "complete": bool(value.get("complete")),
-                        "failed": bool(value.get("failed")),
-                        "framePath": path,
-                        "documentEpoch": int(evaluated.get("documentEpoch") or 0),
-                        "sessionGeneration": int(evaluated.get("sessionGeneration") or 0),
-                    }
-                continue
-            try:
-                offset_x = float(evaluated.get("offsetX") or 0.0)
-                offset_y = float(evaluated.get("offsetY") or 0.0)
-            except (TypeError, ValueError):
-                offset_x = offset_y = 0.0
-
-            adjusted = dict(value)
-            adjusted["scope"] = scope
-            adjusted["framePath"] = path
-            adjusted["documentEpoch"] = int(evaluated.get("documentEpoch") or 0)
-            adjusted["sessionGeneration"] = int(evaluated.get("sessionGeneration") or 0)
-            for key in ("handleRect", "trackRect"):
-                rect = adjusted.get(key)
-                if isinstance(rect, dict):
-                    item = dict(rect)
-                    item["x"] = float(item.get("x") or 0.0) + offset_x
-                    item["y"] = float(item.get("y") or 0.0) + offset_y
-                    adjusted[key] = item
-            raw_marks = []
-            for raw in adjusted.get("rawMarks") or []:
-                if not isinstance(raw, dict):
-                    continue
-                item = dict(raw)
-                bounds = item.get("visualBounds")
-                if isinstance(bounds, dict):
-                    shifted = dict(bounds)
-                    shifted["x"] = float(shifted.get("x") or 0.0) + offset_x
-                    shifted["y"] = float(shifted.get("y") or 0.0) + offset_y
-                    item["visualBounds"] = shifted
-                raw_marks.append(item)
-            adjusted["rawMarks"] = raw_marks
-            candidate = self._normalize(adjusted)
-            if candidate.get("kind") == "slider" and int(candidate.get("score") or 0) > int(best.get("score") or 0):
-                best = candidate
-        return best if best.get("kind") == "slider" else (outcome if outcome is not None else best)
-
-    def _with_generation(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
-        target_state = [
-            [
-                str(item.get("markId") or ""),
-                round(float(item.get("fraction") or 0.0), 4),
-                str(item.get("semanticVisualSignature") or ""),
-            ]
-            for item in snapshot.get("targetCandidates") or []
-            if isinstance(item, dict)
-        ]
-        signature_input = "|".join([
-            str(snapshot.get("kind") or "none"),
-            str(snapshot.get("scope") or ""),
-            str(snapshot.get("documentEpoch") or 0),
-            str(snapshot.get("sessionGeneration") or 0),
-            str(snapshot.get("orientation") or ""),
-            str(round(float(snapshot.get("fraction") or 0), 4)),
-            str(snapshot.get("instruction") or ""),
-            stable_mark_digest(snapshot.get("marks") or []),
-            json.dumps(target_state, sort_keys=True),
-            str(bool(snapshot.get("complete"))),
-            str(bool(snapshot.get("failed"))),
-        ])
-        signature = hashlib.sha256(signature_input.encode("utf-8", errors="ignore")).hexdigest()
-        if signature != self._last_signature:
-            self._generation += 1
-            self._last_signature = signature
-        return {**snapshot, "generation": self._generation, "signature": signature}
-
-    def _evaluate(self, script: str) -> Any:
-        evaluator = getattr(self._sb, "evaluate", None)
-        if callable(evaluator):
-            return evaluator(script)
-        return self._sb.execute_script(f"return {script};")
-
-    @staticmethod
-    def _clean_overrides(values: Dict[str, str]) -> Dict[str, str]:
-        allowed = {"sliderRoot", "sliderHandle", "sliderTrack", "sliderTarget", "sliderInstruction", "sliderComplete", "sliderFailed"}
-        return {key: str(value).strip() for key, value in values.items() if key in allowed and str(value).strip()}
-
-    @staticmethod
-    def _normalize(value: Any) -> Dict[str, Any]:
-        if not isinstance(value, dict):
-            return SliderSiteAdapter._empty()
-        scope = str(value.get("scope") or "document")
-        marks = build_stable_marks(
-            [dict(item) for item in value.get("rawMarks") or [] if isinstance(item, dict)],
-            scope=scope,
-            viewport=value.get("viewport") if isinstance(value.get("viewport"), dict) else {},
-        )
-        targets = [
-            {
-                "markId": mark.get("markId"),
-                "fraction": mark.get("fraction"),
-                "score": mark.get("score"),
-                "confidence": mark.get("confidence"),
-                "label": mark.get("label", ""),
-                "rect": mark.get("visualBounds"),
-                "semanticVisualSignature": mark.get("semanticVisualSignature"),
-            }
-            for mark in marks
-            if mark.get("role") == "slider-target"
-        ]
-        return {
-            "kind": str(value.get("kind") or "none"),
-            "scope": scope,
-            "score": int(value.get("score") or 0),
-            "orientation": str(value.get("orientation") or "horizontal"),
-            "fraction": float(value.get("fraction") or 0),
-            "min": float(value.get("min") or 0),
-            "max": float(value.get("max") or 0),
-            "value": float(value.get("value") or 0),
-            "instruction": str(value.get("instruction") or ""),
-            "handleRect": value.get("handleRect"),
-            "trackRect": value.get("trackRect"),
-            "handleSelector": str(value.get("handleSelector") or ""),
-            "trackSelector": str(value.get("trackSelector") or ""),
-            "nativeRange": bool(value.get("nativeRange")),
-            "targetCandidates": targets,
-            "marks": marks,
-            "complete": bool(value.get("complete")),
-            "failed": bool(value.get("failed")),
-            "override": bool(value.get("override")),
-            "framePath": [str(item) for item in value.get("framePath") or [] if str(item)],
-            "documentEpoch": int(value.get("documentEpoch") or 0),
-            "sessionGeneration": int(value.get("sessionGeneration") or 0),
-        }
-
-    @staticmethod
-    def _empty(scope: str = "document") -> Dict[str, Any]:
-        return {"kind":"none","scope":scope,"score":0,"orientation":"horizontal","fraction":0.0,"min":0.0,"max":0.0,"value":0.0,"instruction":"","handleRect":None,"trackRect":None,"handleSelector":"","trackSelector":"","nativeRange":False,"targetCandidates":[],"marks":[],"complete":False,"failed":False,"override":False,"framePath":[],"documentEpoch":0,"sessionGeneration":0}
