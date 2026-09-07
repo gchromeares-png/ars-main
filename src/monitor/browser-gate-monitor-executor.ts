@@ -11,6 +11,8 @@ import { getMonitorStrategy, setEarlyGateRuntime } from "./early-gate";
 
 interface ActiveBrowserMonitor { controller: AbortController; }
 
+export type MonitorNetworkMode = "session-http-preferred" | "browser-only";
+
 export interface BrowserGateMonitorExecutorOptions {
   pollIntervalMs?: number;
   refreshIntervalMs?: number;
@@ -31,6 +33,24 @@ function sessionPollUrl(task: Task, shop: CommerceShop): string {
   const shopValue = String(shop.config?.["sessionHttpPollUrl"] ?? "").trim();
   const candidate = taskValue || shopValue || shop.baseUrl;
   return /^https?:\/\//i.test(candidate) ? candidate : shop.baseUrl;
+}
+
+export function resolveMonitorNetworkMode(task: Task, shop: CommerceShop): MonitorNetworkMode {
+  const taskValue = String(task.config.data?.["monitorNetworkMode"] ?? "").trim().toLowerCase();
+  const shopValue = String(shop.config?.["monitorNetworkMode"] ?? "").trim().toLowerCase();
+  const value = taskValue || shopValue;
+  return value === "browser-only" || value === "strict" || value === "high-security"
+    ? "browser-only"
+    : "session-http-preferred";
+}
+
+function safeUrlLabel(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.host}${url.pathname}`;
+  } catch {
+    return "unknown";
+  }
 }
 
 /** Lightweight browser-backed gate observer. Checkout/payment modules are intentionally absent. */
@@ -85,8 +105,11 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
       username: profile.proxy.username || undefined,
       password: profile.proxy.password || undefined
     } : undefined;
+    const networkMode = resolveMonitorNetworkMode(task, shop);
 
     let sessionPoller: SessionHttpPoller | undefined;
+    let lastSessionLogKey = "";
+    let lastSessionError = "";
     try {
       const handle = await this.browserWorker.createContext({
         taskId: task.id,
@@ -101,13 +124,27 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
       });
       const page = handle.page;
       const pollUrl = sessionPollUrl(task, shop);
-      sessionPoller = new SessionHttpPoller({
-        url: pollUrl,
-        profileDir: handle.userDataDir,
-        proxy: proxyValue(profile),
-        pollIntervalMs: Math.max(1_000, this.pollIntervalMs)
-      });
-      try { sessionPoller.start(); } catch { sessionPoller = undefined; }
+
+      console.info(`[MONITOR] task=${task.id} mode=${networkMode === "browser-only" ? "STRICT" : "NORMAL"} stage=${networkMode === "browser-only" ? "network" : "session-http"} profile=${profile.id}`);
+      if (networkMode === "session-http-preferred") {
+        sessionPoller = new SessionHttpPoller({
+          url: pollUrl,
+          profileDir: handle.userDataDir,
+          proxy: proxyValue(profile),
+          pollIntervalMs: Math.max(1_000, this.pollIntervalMs)
+        });
+        try {
+          sessionPoller.start();
+          console.info(`[MONITOR] task=${task.id} stage=session-http engine=curl_cffi target=${safeUrlLabel(pollUrl)}`);
+        } catch (error) {
+          sessionPoller = undefined;
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[MONITOR] task=${task.id} session-http=start-failed fallback=network error=${message}`);
+        }
+      } else {
+        console.info(`[MONITOR] task=${task.id} stage=session-http skipped=true reason=browser-only`);
+        console.info(`[MONITOR] task=${task.id} stage=network source=passive-cdp`);
+      }
 
       setEarlyGateRuntime(task, {
         activeArea: "monitor", stage: "monitoring", productName: strategy.productName,
@@ -116,20 +153,76 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
       task.config.data = {
         ...(task.config.data ?? {}),
         browserGateMonitor: {
-          mode: "browser", profileId: profile.id, proxyBound: Boolean(proxy),
+          mode: "browser", profileId: profile.id, proxyBound: Boolean(proxy), networkMode,
           userAgent: handle.environmentAudit.snapshot.userAgent,
           pollIntervalMs: this.pollIntervalMs, refreshIntervalMs: this.refreshIntervalMs,
-          sessionHttp: { enabled: Boolean(sessionPoller), url: pollUrl, engine: "curl_cffi" },
+          sessionHttp: {
+            enabled: Boolean(sessionPoller),
+            skipped: networkMode === "browser-only",
+            url: networkMode === "session-http-preferred" ? pollUrl : undefined,
+            engine: networkMode === "session-http-preferred" ? "curl_cffi" : undefined
+          },
           startedAt: new Date().toISOString()
+        },
+        monitorPipeline: {
+          mode: networkMode,
+          stage: networkMode === "browser-only" ? "network" : "session-http",
+          source: networkMode === "browser-only" ? "passive-cdp" : "curl_cffi",
+          updatedAt: new Date().toISOString()
         }
       };
       this.emit(task);
+
+      const publishSessionTelemetry = (): void => {
+        if (!sessionPoller) return;
+        const signal = sessionPoller.getLatest();
+        if (signal) {
+          const key = [signal.statusCode ?? "-", signal.active, signal.position ?? "-", signal.timeToWaitSeconds ?? "-", signal.statusText ?? ""].join("|");
+          if (key !== lastSessionLogKey) {
+            lastSessionLogKey = key;
+            console.info(`[MONITOR] task=${task.id} stage=session-http status=${signal.statusCode ?? "-"} active=${signal.active} pos=${signal.position ?? "-"} ttw=${signal.timeToWaitSeconds ?? "-"}`);
+            task.config.data = {
+              ...(task.config.data ?? {}),
+              monitorPipeline: {
+                mode: networkMode,
+                stage: "session-http",
+                source: "curl_cffi",
+                statusCode: signal.statusCode,
+                active: signal.active,
+                position: signal.position,
+                timeToWaitSeconds: signal.timeToWaitSeconds,
+                statusText: signal.statusText,
+                updatedAt: new Date().toISOString()
+              }
+            };
+            this.emit(task);
+          }
+        }
+        const error = sessionPoller.getError() ?? "";
+        if (error && error !== lastSessionError) {
+          lastSessionError = error;
+          console.warn(`[MONITOR] task=${task.id} session-http=error fallback=network error=${error}`);
+          task.config.data = {
+            ...(task.config.data ?? {}),
+            monitorPipeline: {
+              mode: networkMode,
+              stage: "network",
+              source: "passive-cdp",
+              fallbackFrom: "session-http",
+              error,
+              updatedAt: new Date().toISOString()
+            }
+          };
+          this.emit(task);
+        }
+      };
 
       const waiter = new BrowserQueueWaiter(page, task, current => this.emit(current), {
         pollIntervalMs: this.pollIntervalMs,
         releaseConfirmations: 2,
         maxWaitMs: 60 * 60_000,
-        externalSignal: () => {
+        externalSignal: networkMode === "session-http-preferred" ? () => {
+          publishSessionTelemetry();
           const signal = sessionPoller?.getLatest();
           return signal?.active ? {
             active: true,
@@ -138,16 +231,18 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
             statusText: signal.statusText,
             source: "session-http"
           } : undefined;
-        }
+        } : undefined
       });
       waiter.start();
       try {
         await page.goto(shop.baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
         while (!controller.signal.aborted) {
+          publishSessionTelemetry();
           const queue = await waiter.waitIfQueued();
           if (queue.detected) {
             const status = task.config.data?.["queueStatus"] as Record<string, unknown> | undefined;
             const detectedAt = String(status?.["detectedAt"] ?? new Date().toISOString());
+            console.info(`[MONITOR] task=${task.id} queue=detected source=${String(status?.["source"] ?? "combined")} released=${queue.released}`);
             setEarlyGateRuntime(task, { activeArea: "gate", stage: "gate-detected", gateDetectedAt: detectedAt });
             task.config.data = {
               ...(task.config.data ?? {}),
@@ -157,6 +252,16 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
                 position: status?.["position"], timeToWaitSeconds: status?.["timeToWaitSeconds"],
                 statusText: status?.["statusText"], released: queue.released,
                 readyAt: new Date().toISOString()
+              },
+              monitorPipeline: {
+                mode: networkMode,
+                stage: queue.released ? "released" : "queue",
+                source: String(status?.["source"] ?? "combined"),
+                active: status?.["active"],
+                position: status?.["position"],
+                timeToWaitSeconds: status?.["timeToWaitSeconds"],
+                statusText: status?.["statusText"],
+                updatedAt: new Date().toISOString()
               }
             };
             this.emit(task);
@@ -164,6 +269,17 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
           }
           await this.delay(this.refreshIntervalMs, controller.signal);
           if (!controller.signal.aborted) {
+            console.info(`[MONITOR] task=${task.id} stage=navigation reason=no-passive-signal-after-observation-window`);
+            task.config.data = {
+              ...(task.config.data ?? {}),
+              monitorPipeline: {
+                mode: networkMode,
+                stage: "navigation",
+                source: "browser",
+                updatedAt: new Date().toISOString()
+              }
+            };
+            this.emit(task);
             // Stage 4 only. The lightweight/session, Network and DOM stages have
             // already had the full protected observation window before navigation.
             await page.goto(shop.baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
@@ -174,6 +290,7 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
     } catch (error) {
       if (controller.signal.aborted) return true;
       task.lastError = error instanceof Error ? error.message : String(error);
+      console.warn(`[MONITOR] task=${task.id} runtime=failed error=${task.lastError}`);
       this.emit(task);
       return false;
     } finally {

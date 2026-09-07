@@ -3,6 +3,7 @@ import * as path from "path";
 import { CommerceTaskExecutorRouter } from "../src/commerce/task-executor-router";
 import type { ITaskExecutor } from "../src/interfaces";
 import type { Task } from "../src/models";
+import { resolveMonitorNetworkMode } from "../src/monitor/browser-gate-monitor-executor";
 
 class CaptureExecutor implements ITaskExecutor {
   task?: Task;
@@ -63,5 +64,40 @@ describe("browser gate monitor lanes", () => {
   it("uses the profile user-agent for the monitor lane", () => {
     const monitor = fs.readFileSync(path.join(process.cwd(), "src/monitor/browser-gate-monitor-executor.ts"), "utf8");
     expect(monitor).toContain("userAgent: profile.browser?.userAgent?.trim() || undefined");
+  });
+
+  it("defaults to normal session-http monitoring", () => {
+    const task = gateTask();
+    const shop = { id: "shop-1", name: "Shop", baseUrl: "https://example.test", platform: "custom", config: {} } as any;
+    expect(resolveMonitorNetworkMode(task, shop)).toBe("session-http-preferred");
+  });
+
+  it("allows strict browser-only monitoring per task", () => {
+    const task = gateTask();
+    task.config.data = { ...(task.config.data ?? {}), monitorNetworkMode: "browser-only" };
+    const shop = { id: "shop-1", name: "Shop", baseUrl: "https://example.test", platform: "custom", config: {} } as any;
+    expect(resolveMonitorNetworkMode(task, shop)).toBe("browser-only");
+  });
+
+  it("allows strict browser-only monitoring per shop and task override wins", () => {
+    const task = gateTask();
+    const shop = {
+      id: "shop-1",
+      name: "Shop",
+      baseUrl: "https://example.test",
+      platform: "custom",
+      config: { monitorNetworkMode: "browser-only" }
+    } as any;
+    expect(resolveMonitorNetworkMode(task, shop)).toBe("browser-only");
+
+    task.config.data = { ...(task.config.data ?? {}), monitorNetworkMode: "session-http-preferred" };
+    expect(resolveMonitorNetworkMode(task, shop)).toBe("session-http-preferred");
+  });
+
+  it("does not instantiate session HTTP in strict mode", () => {
+    const monitor = fs.readFileSync(path.join(process.cwd(), "src/monitor/browser-gate-monitor-executor.ts"), "utf8");
+    expect(monitor).toContain('if (networkMode === "session-http-preferred")');
+    expect(monitor).toContain('stage=session-http skipped=true reason=browser-only');
+    expect(monitor).toContain('externalSignal: networkMode === "session-http-preferred"');
   });
 });
