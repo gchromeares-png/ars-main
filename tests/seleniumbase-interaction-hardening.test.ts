@@ -25,11 +25,11 @@ describe("SeleniumBase interaction hardening", () => {
     expect(sliderActions).toContain("get_gui_element_center");
     expect(sliderActions).toContain("gui_drag_drop_points");
     expect(sliderActions).toContain("timeframe=0.55");
-    expect(sliderActions).toContain('mode = "seleniumbase-native"');
+    expect(sliderActions).toContain('"mode": "seleniumbase-native"');
   });
 
   it("keeps grid and slider execution on SeleniumBase-owned action paths", () => {
-    expect(sliderActions).toContain('mode = "seleniumbase-native"');
+    expect(sliderActions).toContain('"mode": "seleniumbase-native"');
     expect(gridActions).toContain("class AuthorizedGridActionExecutor");
     expect(gridActions).toContain("selected = self._indexes(");
     expect(gridActions).toContain("return self._apply_state(state, selected, submit=submit)");
