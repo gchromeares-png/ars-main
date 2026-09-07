@@ -46,7 +46,78 @@ class ScopeLockedGridSiteAdapter(ExtendedGridSiteAdapter):
         return candidate
 
     def _discover_global(self) -> Dict[str, Any]:
-        return super().poll()
+        producers = (
+            self._snapshot_document,
+            self._snapshot_extended_document,
+            self._snapshot_nested_frames,
+            self._snapshot_extended_frames,
+            self._snapshot_oopif_frames,
+        )
+        debug: List[Dict[str, Any]] = []
+        outcome: Dict[str, Any] | None = None
+        rejected: Dict[str, Any] | None = None
+        best: Dict[str, Any] | None = None
+        best_rank = float("-inf")
+
+        try:
+            frames = list(self._sb.find_elements("iframe") or [])
+            debug.append({"producer": "iframe-enumeration", "count": len(frames)})
+        except Exception as exc:
+            debug.append({"producer": "iframe-enumeration", "error": str(exc)[:500]})
+
+        for producer in producers:
+            name = getattr(producer, "__name__", producer.__class__.__name__)
+            try:
+                snapshot = producer()
+            except Exception as exc:
+                debug.append({"producer": name, "error": str(exc)[:500]})
+                continue
+
+            debug.append({
+                "producer": name,
+                "kind": str(snapshot.get("kind") or "none"),
+                "scope": str(snapshot.get("scope") or ""),
+                "score": int(snapshot.get("score") or 0),
+                "tileCount": int(snapshot.get("tileCount") or 0),
+                "instruction": str(snapshot.get("instruction") or "")[:240],
+                "framePath": [str(value) for value in snapshot.get("framePath") or [] if str(value)],
+            })
+
+            if snapshot.get("kind") == "none":
+                if self._terminal(snapshot):
+                    outcome = snapshot
+                continue
+            if not self._candidate_is_plausible(snapshot):
+                rejected = snapshot
+                continue
+            rank = self._candidate_rank(snapshot)
+            if best is None or rank > best_rank:
+                best = snapshot
+                best_rank = rank
+
+        discover = getattr(self._sb, "ares_oopif_discover", None)
+        if callable(discover):
+            try:
+                entries = [entry for entry in (discover() or []) if isinstance(entry, dict)]
+                debug.append({
+                    "producer": "ares_oopif_discover",
+                    "count": len(entries),
+                    "paths": [
+                        [str(value) for value in entry.get("path") or [] if str(value)]
+                        for entry in entries[:16]
+                    ],
+                })
+            except Exception as exc:
+                debug.append({"producer": "ares_oopif_discover", "error": str(exc)[:500]})
+        else:
+            debug.append({"producer": "ares_oopif_discover", "available": False})
+
+        if outcome is not None:
+            return self._with_generation({**outcome, "discoveryDebug": debug})
+        if best is not None:
+            return self._with_generation({**best, "discoveryDebug": debug})
+        scope = str((rejected or {}).get("scope") or "document")
+        return self._with_generation({**self._empty(scope), "discoveryDebug": debug})
 
     @staticmethod
     def _terminal(state: Dict[str, Any]) -> bool:
