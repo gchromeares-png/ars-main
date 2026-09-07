@@ -132,7 +132,6 @@ def _pointer_mouse(self: Any, action: str, command: dict[str, Any]) -> bool:
 
 
 _original_rpc = impl.base.TaskRpcRuntime.rpc
-_original_network_events = impl.base.TaskRpcRuntime.network_events
 _original_registry_handle_event = impl.FlatCdpTargetRegistry._handle_event
 _original_registry_initialize_session = impl.FlatCdpTargetRegistry._initialize_session
 _original_oopif_runtime_init = impl.OopifTaskRpcRuntime.__init__
@@ -145,27 +144,6 @@ def _pointer_rpc(self: Any, command: dict[str, Any]) -> dict[str, Any]:
         self._sync_newest_target()
         return {"result": self._mouse(action, command)}
     return _original_rpc(self, command)
-
-
-def _network_events_with_idle_runtime(self: Any) -> dict[str, Any]:
-    """Turn empty passive telemetry polls into bounded auto-runtime opportunities.
-
-    SeleniumBaseRpcPage polls response telemetry frequently while a queue waiter is
-    attached. Without this hook, those cheap requests can keep the base worker's
-    command queue non-idle forever, so its queue.Empty -> poll_runtime() path never
-    runs. Real queue/gate events keep priority and are returned immediately; only
-    an empty telemetry poll is allowed to enter the existing control-aware idle
-    runtime. ControlAwareSeleniumBaseCdpAdapter still enforces its quiet window and
-    the normal watchdog interval, so this does not create a second action owner.
-    """
-    result = _original_network_events(self)
-    events = result.get("events") if isinstance(result, dict) else None
-    if not events:
-        try:
-            self.adapter.poll_runtime()
-        except Exception:
-            pass
-    return result
 
 
 def _epoch_map(registry: Any) -> dict[str, int]:
@@ -272,7 +250,6 @@ impl.FlatCdpTargetRegistry.document_epoch = _document_epoch
 impl.OopifTaskRpcRuntime.__init__ = _oopif_runtime_init
 impl.base.TaskRpcRuntime._mouse = _pointer_mouse
 impl.base.TaskRpcRuntime.rpc = _pointer_rpc
-impl.base.TaskRpcRuntime.network_events = _network_events_with_idle_runtime
 impl.base.run = _seeded_run
 
 FlatCdpTargetRegistry = impl.FlatCdpTargetRegistry
