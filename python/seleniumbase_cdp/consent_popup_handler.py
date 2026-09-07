@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Iterable
 
 
@@ -77,6 +78,8 @@ class ConsentPopupHandler:
         cdp = getattr(self._sb, 'cdp', self._sb)
         if cdp is None:
             return {'dismissed': False, 'reason': 'cdp-unavailable'}
+        if not self._candidate_exists(_ACCEPT_TEXT):
+            return {'dismissed': False, 'reason': 'no-explicit-consent-control'}
 
         for dialog_selector in _DIALOG_SELECTORS:
             try:
@@ -115,12 +118,15 @@ class ConsentPopupHandler:
         cdp = getattr(self._sb, 'cdp', self._sb)
         if cdp is None:
             return {'advanced': False, 'reason': 'cdp-unavailable'}
+        candidates = tuple(str(value) for value in values)
+        if not self._candidate_exists(candidates):
+            return {'advanced': False, 'reason': empty_reason}
 
         for root, scope in self._roots(cdp):
             for selector in _BUTTON_SELECTORS:
                 for element in self._elements(root, selector):
                     text = self._element_text(element)
-                    if not text or not self._matches(text, values):
+                    if not text or not self._matches(text, candidates):
                         continue
                     click = getattr(element, 'mouse_click', None)
                     if not callable(click):
@@ -137,6 +143,66 @@ class ConsentPopupHandler:
                     except Exception:
                         continue
         return {'advanced': False, 'reason': empty_reason}
+
+    def _candidate_exists(self, values: Iterable[str]) -> bool:
+        """Cheap read-only gate before SeleniumBase element queries with implicit waits.
+
+        Runtime polling must stay cheap when no popup/progress control exists. The
+        preflight recursively inspects only script-accessible documents; any real
+        candidate still uses the existing trusted CDP mouse-click path below.
+        """
+        candidates = [str(value).strip().lower() for value in values if str(value).strip()]
+        if not candidates:
+            return False
+        script = f"""
+        (() => {{
+          const candidates = {json.dumps(candidates)};
+          const selectors = {json.dumps(list(_BUTTON_SELECTORS))};
+          const normalize = value => String(value || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+          const matches = raw => {{
+            const text = normalize(raw);
+            if (!text) return false;
+            return candidates.some(rawCandidate => {{
+              const candidate = normalize(rawCandidate);
+              if (!candidate) return false;
+              if (text === candidate) return true;
+              return candidate.includes(' ') && candidate.length > 8 && text.includes(candidate);
+            }});
+          }};
+          const elementText = element =>
+            element?.innerText || element?.textContent || element?.getAttribute?.('value') ||
+            element?.getAttribute?.('aria-label') || element?.getAttribute?.('title') || '';
+          const seen = new Set();
+          const scan = doc => {{
+            if (!doc || seen.has(doc)) return false;
+            seen.add(doc);
+            for (const selector of selectors) {{
+              let elements = [];
+              try {{ elements = Array.from(doc.querySelectorAll(selector)); }} catch (_) {{}}
+              if (elements.some(element => matches(elementText(element)))) return true;
+            }}
+            let frames = [];
+            try {{ frames = Array.from(doc.querySelectorAll('iframe,frame')); }} catch (_) {{}}
+            for (const frame of frames) {{
+              try {{ if (frame.contentDocument && scan(frame.contentDocument)) return true; }} catch (_) {{}}
+            }}
+            return false;
+          }};
+          return scan(document);
+        }})()
+        """
+        try:
+            evaluator = getattr(self._sb, 'evaluate', None)
+            if callable(evaluator):
+                return bool(evaluator(script))
+            executor = getattr(self._sb, 'execute_script', None)
+            if callable(executor):
+                return bool(executor(f"return {script};"))
+        except Exception:
+            # Fail open to the established CDP query path when cheap observation
+            # itself is unavailable; behavior is preserved rather than skipped.
+            return True
+        return True
 
     def _click_in_root(self, root: Any, *, fallback: bool = False) -> Dict[str, Any]:
         accepted = set(_ACCEPT_TEXT)
