@@ -15,6 +15,8 @@ export interface BrowserGateMonitorExecutorOptions {
   refreshIntervalMs?: number;
 }
 
+const POST_NAVIGATION_OBSERVATION_MS = 30_000;
+
 /** Lightweight browser-backed gate observer. Checkout/payment modules are intentionally absent. */
 export class BrowserGateMonitorExecutor implements ITaskExecutor {
   private readonly active = new Map<string, ActiveBrowserMonitor>();
@@ -29,7 +31,10 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
     options: BrowserGateMonitorExecutorOptions = {}
   ) {
     this.pollIntervalMs = Math.min(10_000, Math.max(250, options.pollIntervalMs ?? 750));
-    this.refreshIntervalMs = Math.min(60_000, Math.max(1_000, options.refreshIntervalMs ?? 5_000));
+    // A full reload must not interrupt the automatic post-navigation observation
+    // burst. Queue/DOM telemetry keeps polling during this window; only destructive
+    // navigation is held back long enough for delayed iframe/grid/slider work.
+    this.refreshIntervalMs = Math.min(60_000, Math.max(POST_NAVIGATION_OBSERVATION_MS, options.refreshIntervalMs ?? 5_000));
   }
 
   onTaskUpdate(callback: (task: Task) => void): () => void {
