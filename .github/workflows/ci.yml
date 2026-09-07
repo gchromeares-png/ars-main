@@ -34,9 +34,11 @@ jobs:
           python/seleniumbase_cdp/product_monitor_browser_e2e_probe.py
           python/seleniumbase_cdp/task_rpc_navigation_probe.py
           python/seleniumbase_cdp/oopif_seed_slider_probe.py
+          python/seleniumbase_cdp/grid_scope_lifecycle_probe.py
           python/seleniumbase_cdp/consent_popup_handler.py
           python/seleniumbase_cdp/instruction_input_runtime.py
           python/seleniumbase_cdp/extended_grid_site_adapter.py
+          python/seleniumbase_cdp/scope_locked_grid_site_adapter.py
           python/seleniumbase_cdp/site_grid_adapter.py
           python/seleniumbase_cdp/site_slider_adapter.py
           python/seleniumbase_cdp/slider_action_executor.py
@@ -51,6 +53,9 @@ jobs:
 
       - name: Verify structural grid adapter
         run: python python/seleniumbase_cdp/site_grid_adapter_probe.py
+
+      - name: Verify grid scope lifecycle
+        run: python python/seleniumbase_cdp/grid_scope_lifecycle_probe.py
 
       - name: Verify task-seeded OOPIF slider runtime
         run: python python/seleniumbase_cdp/oopif_seed_slider_probe.py

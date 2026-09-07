@@ -8,11 +8,11 @@ from auto_interaction_controller import AutoInteractionController
 from composite_slider_grounder import CompositeSliderGrounder
 from consent_popup_handler import ConsentPopupHandler
 from cursor_path_provider import CursorPathProvider
-from extended_grid_site_adapter import ExtendedGridSiteAdapter
 from interaction_policy import InteractionPolicy
 from interaction_trace import InteractionTrace
 from observation_capture import ObservationCapture
 from proximity_grid_action_executor import ProximityGridActionExecutor
+from scope_locked_grid_site_adapter import ScopeLockedGridSiteAdapter
 from screenshot_grid_tile_provider import ScreenshotGridTileProvider
 from site_slider_adapter import SliderSiteAdapter
 from slider_action_executor import SliderActionExecutor
@@ -34,7 +34,7 @@ class VisualInteractionRuntime:
         self._profile_dir = Path(profile_dir).expanduser().resolve()
         self._policy = InteractionPolicy.from_profile(self._profile_dir)
         self._capture = capture or ObservationCapture(self._sb, profile_dir=self._profile_dir, policy=self._policy)
-        self._grid = ExtendedGridSiteAdapter(self._sb, overrides=overrides or {})
+        self._grid = ScopeLockedGridSiteAdapter(self._sb, overrides=overrides or {})
         self._slider = SliderSiteAdapter(self._sb, overrides=overrides or {})
         self._paths = CursorPathProvider(seed=str(self._profile_dir))
         self._grid_actions = ProximityGridActionExecutor(self._sb, self._grid, self._policy, self._paths)
