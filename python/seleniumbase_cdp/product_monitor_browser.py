@@ -19,6 +19,15 @@ def _emit(payload: Dict[str, Any]) -> None:
     print(f"{RESULT_PREFIX}{json.dumps(payload, ensure_ascii=False)}", flush=True)
 
 
+def _startup_stage(stage: str, *, request_id: str, task_id: str, started: float) -> None:
+    elapsed_ms = int((time.monotonic() - started) * 1000.0)
+    print(
+        f"ARES_MONITOR_STARTUP stage={stage} request={request_id} task={task_id} elapsedMs={elapsed_ms}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _read_first_command() -> Dict[str, Any]:
     line = sys.stdin.readline()
     if not line:
@@ -127,17 +136,22 @@ def _start(command: Dict[str, Any]) -> int:
     if not task_id:
         raise ValueError("taskId is required")
 
+    startup_started = time.monotonic()
+    _startup_stage("adapter-create-start", request_id=request_id, task_id=task_id, started=startup_started)
     adapter = SeleniumBaseCdpAdapter(
         profile_dir=profile_dir,
         headless=bool(command.get("headless")),
         proxy=str(command.get("proxy") or "").strip() or None,
         user_agent=str(command.get("userAgent") or "").strip() or None,
     )
+    _startup_stage("adapter-created", request_id=request_id, task_id=task_id, started=startup_started)
     closed = False
     try:
         start_url = str(command.get("startUrl") or "").strip()
         if start_url:
+            _startup_stage("goto-start", request_id=request_id, task_id=task_id, started=startup_started)
             adapter.goto(start_url)
+            _startup_stage("goto-complete", request_id=request_id, task_id=task_id, started=startup_started)
 
         _emit({
             "type": "ready",
