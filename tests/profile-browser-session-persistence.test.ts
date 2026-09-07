@@ -14,19 +14,23 @@ describe("profile-owned browser session persistence", () => {
   const protocol = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/protocol.ts"), "utf8");
   const electronMain = fs.readFileSync(path.resolve(__dirname, "../src/electron/main.ts"), "utf8");
 
-  it("binds manual and task browser runs to profile-owned userDataDir paths", () => {
+  it("binds manual and task browser runs to the exact same profile-owned userDataDir", () => {
     expect(browserWorker).toContain("resolveProfileUserDataDir(profileId, requestedRoot)");
-    expect(manualController).toContain("resolveProfileUserDataDir");
+    expect(manualController).toContain("return resolveProfileUserDataDir(profileId, this.profileRoot);");
+    expect(manualController).not.toContain("SELENIUMBASE_PROFILE_DIR");
     expect(workerRuntime).toContain("browserCore.bindTaskProfile(request.task.id, request.profile.id)");
     expect(electronMain).toContain('browserProfileRoot = path.join(userData, "browser-profiles")');
     expect(electronMain).toContain("profileRoot: browserProfileRoot");
   });
 
-  it("keeps task profile ownership explicit and isolated", () => {
+  it("keeps both manual and task profile ownership explicit and isolated", () => {
     expect(browserWorker).toContain("activeProfileDirs");
     expect(browserWorker).toContain("profileLeases");
     expect(browserWorker).toContain("acquireBrowserProfileLease");
     expect(browserWorker).toContain("BrowserProfileInUseError");
+    expect(manualController).toContain("acquireBrowserProfileLease(userDataDir");
+    expect(manualController).toContain("lease: BrowserProfileLease");
+    expect(manualController).toContain("lease.release()");
   });
 
   it("lets SeleniumBase/Chromium own persistent profile flushing", () => {
