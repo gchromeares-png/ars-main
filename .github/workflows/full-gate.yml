@@ -1,0 +1,258 @@
+name: ARES Full Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ares-full-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  seleniumbase-cdp-persistence:
+    if: github.event_name != 'pull_request' || github.event.label.name == 'full-ci'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements-seleniumbase-cdp.txt
+            requirements-seleniumbase-vision.txt
+
+      - name: Install SeleniumBase CDP PoC dependency
+        run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
+
+      - name: Install local puzzle-slider matcher
+        run: python -m pip install --disable-pip-version-check ddddocr==1.6.1
+
+      - name: Compile-check ARES vision and grounding runtime
+        run: >-
+          python -m py_compile
+          python/seleniumbase_cdp/vision_grid_classifier.py
+          python/seleniumbase_cdp/robust_vision_grid_classifier.py
+          python/seleniumbase_cdp/vision_runtime_bootstrap.py
+          python/seleniumbase_cdp/vision_inference_service.py
+          python/seleniumbase_cdp/siglip_randomized_grid_probe.py
+          python/seleniumbase_cdp/siglip_context_ab_probe.py
+          python/seleniumbase_cdp/siglip_calibration_latency_probe.py
+          python/seleniumbase_cdp/siglip_calibration_gate.py
+          python/seleniumbase_cdp/product_monitor_browser.py
+          python/seleniumbase_cdp/product_monitor_browser_e2e_probe.py
+          python/seleniumbase_cdp/slider_browser_e2e_probe.py
+          python/seleniumbase_cdp/stable_marks.py
+          python/seleniumbase_cdp/cursor_path_provider.py
+          python/seleniumbase_cdp/slider_target_grounder.py
+          python/seleniumbase_cdp/ddddocr_slider_provider.py
+          python/seleniumbase_cdp/composite_slider_grounder.py
+          python/seleniumbase_cdp/interaction_trace.py
+          python/seleniumbase_cdp/interaction_outcome.py
+          python/seleniumbase_cdp/interaction_orchestrator.py
+          python/seleniumbase_cdp/interaction_policy.py
+          python/seleniumbase_cdp/page_observation_watchdog.py
+          python/seleniumbase_cdp/observation_capture.py
+          python/seleniumbase_cdp/visual_event_trigger.py
+          python/seleniumbase_cdp/extended_grid_site_adapter.py
+          python/seleniumbase_cdp/proximity_grid_action_executor.py
+          python/seleniumbase_cdp/instruction_input_runtime.py
+          python/seleniumbase_cdp/visual_interaction_runtime.py
+          python/seleniumbase_cdp/semantic_interaction_runtime.py
+          python/seleniumbase_cdp/auto_interaction_controller.py
+          python/seleniumbase_cdp/site_grid_adapter.py
+          python/seleniumbase_cdp/site_slider_adapter.py
+          python/seleniumbase_cdp/slider_action_executor.py
+          python/seleniumbase_cdp/seleniumbase_adapter.py
+
+      - name: Run real puzzle-slider-to-CDP E2E
+        run: python python/seleniumbase_cdp/slider_browser_e2e_probe.py
+
+      - name: Run real JavaScript storefront monitor E2E
+        run: python python/seleniumbase_cdp/product_monitor_browser_e2e_probe.py
+
+      - name: Cache SigLIP2 model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: siglip2-${{ runner.os }}-${{ hashFiles('requirements-seleniumbase-vision.txt') }}
+
+      - name: Prepare real SigLIP2 vision runtime
+        run: python python/seleniumbase_cdp/vision_runtime_bootstrap.py --prepare
+
+      - name: Run randomized SigLIP2 ranking diagnostics
+        env:
+          ARES_SIGLIP_TEST_ROUNDS: "3"
+        run: python python/seleniumbase_cdp/siglip_randomized_grid_probe.py
+
+      - name: Compare tile-only vs whole-grid context + tile batch
+        env:
+          ARES_SIGLIP_AB_ROUNDS: "2"
+        run: python python/seleniumbase_cdp/siglip_context_ab_probe.py
+
+      - name: Enforce held-out SigLIP calibration quality
+        env:
+          ARES_SIGLIP_CALIBRATION_ROUNDS: "3"
+          ARES_SIGLIP_HELDOUT_ROUNDS: "3"
+        run: python python/seleniumbase_cdp/siglip_calibration_gate.py
+
+      - name: Verify stable visual marks contract
+        run: python python/seleniumbase_cdp/stable_marks_probe.py
+
+      - name: Verify visual grounding and cursor planning
+        run: python python/seleniumbase_cdp/visual_grounding_probe.py
+
+      - name: Verify optional ddddocr slider fallback
+        run: python python/seleniumbase_cdp/ddddocr_slider_provider_probe.py
+
+      - name: Verify unified interaction outcome contract
+        run: python python/seleniumbase_cdp/interaction_outcome_probe.py
+
+      - name: Verify single-owner interaction orchestration
+        run: python python/seleniumbase_cdp/interaction_orchestrator_probe.py
+
+      - name: Verify structural visual event trigger policy
+        run: python python/seleniumbase_cdp/visual_event_trigger_probe.py
+
+      - name: Verify event-driven observation policy
+        run: python python/seleniumbase_cdp/observation_policy_probe.py
+
+      - name: Verify larger visual grid readiness
+        run: python python/seleniumbase_cdp/test_readiness_grid_probe.py
+
+      - name: Verify instruction text and numeric input fallback
+        run: python python/seleniumbase_cdp/instruction_input_probe.py
+
+      - name: Verify semantic interaction runtime
+        run: python python/seleniumbase_cdp/semantic_interaction_probe.py
+
+      - name: Verify SeleniumBase challenge state tracker
+        run: python python/seleniumbase_cdp/challenge_state_tracker_probe.py
+
+      - name: Verify SeleniumBase structural site adapter
+        run: python python/seleniumbase_cdp/site_grid_adapter_probe.py
+
+      - name: Verify authorized SeleniumBase grid actions
+        run: python python/seleniumbase_cdp/authorized_grid_action_executor_probe.py
+
+      - name: Verify automatic SeleniumBase grid and slider interactions
+        run: python python/seleniumbase_cdp/auto_interaction_probe.py
+
+      - name: Run isolated SeleniumBase CDP persistence PoC
+        run: python python/seleniumbase_cdp/persistence_probe.py
+
+      - name: Run SeleniumBase manual process and cookie bridge PoC
+        run: python python/seleniumbase_cdp/manual_profile_probe.py
+
+      - name: Verify SeleniumBase clean reopen restores page and cookies
+        run: python python/seleniumbase_cdp/reopen_profile_probe.py
+
+  build-and-test:
+    if: github.event_name != 'pull_request' || github.event.label.name == 'full-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-seleniumbase-cdp.txt
+
+      - name: Install SeleniumBase task runtime dependency
+        run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify GhostCursor and Bezier path providers
+        run: node python/seleniumbase_cdp/cursor_path_helper_probe.cjs
+
+      - name: Run targeted payment gates
+        env:
+          ARES_RUN_BROWSER_INTEGRATION: "1"
+        run: >-
+          npx jest --runInBand
+          tests/payment-session-normalizer.test.ts
+          tests/profile-payment-vault.test.ts
+          tests/ephemeral-payment-executor.test.ts
+          tests/payment-persistence-safety.test.ts
+          tests/payment-preparation.test.ts
+          tests/payment-fixture.integration.test.ts
+          tests/payment-source-guard.test.ts
+
+      - name: Build backend
+        run: npm run build:backend
+
+      - name: Build UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          log_file="$(mktemp)"
+
+          setsid bash -lc 'npm run build:ui' > >(tee "$log_file") 2>&1 &
+          build_pid=$!
+
+          cleanup() {
+            kill -TERM -- "-$build_pid" 2>/dev/null || true
+            sleep 1
+            kill -KILL -- "-$build_pid" 2>/dev/null || true
+            wait "$build_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 120); do
+            if grep -q "Build at:" "$log_file" && test -f dist/ares/index.html; then
+              echo "Angular build output verified; terminating any lingering CLI process."
+              exit 0
+            fi
+
+            if ! kill -0 "$build_pid" 2>/dev/null; then
+              set +e
+              wait "$build_pid"
+              status=$?
+              set -e
+              if [ "$status" -eq 0 ] && test -f dist/ares/index.html; then
+                echo "Angular build exited normally and output was verified."
+                exit 0
+              fi
+              echo "Angular build exited with status $status before a valid output was produced."
+              exit "$status"
+            fi
+
+            sleep 1
+          done
+
+          echo "Angular build did not produce a verified output within 120 seconds."
+          exit 1
+
+      - name: Run full test suite
+        env:
+          ARES_RUN_BROWSER_INTEGRATION: "1"
+        run: npm test -- --runInBand
+
+      - name: Upload auto-checkout test screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-checkout-parallel-screenshot
+          path: test-artifacts/auto-checkout-parallel.png
+          if-no-files-found: ignore
