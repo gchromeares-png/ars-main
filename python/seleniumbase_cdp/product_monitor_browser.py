@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-from seleniumbase_adapter import SeleniumBaseCdpAdapter
+from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter as SeleniumBaseCdpAdapter
 
 RESULT_PREFIX = "ARES_MONITOR_BROWSER\t"
 MAX_HTML_CHARS = 2_000_000
@@ -17,6 +17,15 @@ MAX_TEXT_CHARS = 250_000
 
 def _emit(payload: Dict[str, Any]) -> None:
     print(f"{RESULT_PREFIX}{json.dumps(payload, ensure_ascii=False)}", flush=True)
+
+
+def _startup_stage(stage: str, *, request_id: str, task_id: str, started: float) -> None:
+    elapsed_ms = int((time.monotonic() - started) * 1000.0)
+    print(
+        f"ARES_MONITOR_STARTUP stage={stage} request={request_id} task={task_id} elapsedMs={elapsed_ms}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _read_first_command() -> Dict[str, Any]:
@@ -43,8 +52,6 @@ def _command_reader(target: queue.Queue[Dict[str, Any]]) -> None:
 
 
 def _snapshot(adapter: SeleniumBaseCdpAdapter) -> Dict[str, Any]:
-    # Pure CDP evaluates JavaScript as an expression. Keep the return inside
-    # an IIFE instead of relying on WebDriver-style function-body semantics.
     value = adapter.execute_script(
         """
         (() => {
@@ -127,17 +134,22 @@ def _start(command: Dict[str, Any]) -> int:
     if not task_id:
         raise ValueError("taskId is required")
 
+    startup_started = time.monotonic()
+    _startup_stage("adapter-create-start", request_id=request_id, task_id=task_id, started=startup_started)
     adapter = SeleniumBaseCdpAdapter(
         profile_dir=profile_dir,
         headless=bool(command.get("headless")),
         proxy=str(command.get("proxy") or "").strip() or None,
         user_agent=str(command.get("userAgent") or "").strip() or None,
     )
+    _startup_stage("adapter-created", request_id=request_id, task_id=task_id, started=startup_started)
     closed = False
     try:
         start_url = str(command.get("startUrl") or "").strip()
         if start_url:
+            _startup_stage("goto-start", request_id=request_id, task_id=task_id, started=startup_started)
             adapter.goto(start_url)
+            _startup_stage("goto-complete", request_id=request_id, task_id=task_id, started=startup_started)
 
         _emit({
             "type": "ready",
@@ -152,7 +164,6 @@ def _start(command: Dict[str, Any]) -> int:
 
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
         threading.Thread(target=_command_reader, args=(commands,), daemon=True).start()
-        next_forced_visual_poll = time.monotonic() + 1.0
 
         while True:
             if not adapter.is_running():
@@ -161,14 +172,10 @@ def _start(command: Dict[str, Any]) -> int:
             try:
                 next_command = commands.get(timeout=0.35)
             except queue.Empty:
-                now = time.monotonic()
-                if now >= next_forced_visual_poll:
-                    adapter._poll_observation_watchdog(force=True)
-                    next_forced_visual_poll = now + 1.0
-                else:
-                    adapter.poll_runtime()
+                adapter.poll_runtime()
                 continue
 
+            adapter.note_control_activity()
             command_type = str(next_command.get("type") or "")
             next_request_id = str(next_command.get("requestId") or "")
             try:
@@ -212,6 +219,8 @@ def _start(command: Dict[str, Any]) -> int:
                     "errorType": type(exc).__name__,
                     "error": str(exc),
                 })
+            finally:
+                adapter.note_control_activity()
     finally:
         if not closed:
             try:

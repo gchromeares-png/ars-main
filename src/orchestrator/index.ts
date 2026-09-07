@@ -60,6 +60,8 @@ export class TaskOrchestrator {
     });
 
     this.eventBus.on("taskFailed", task => {
+      const retryPolicy = task.config.data?.["retryPolicy"] as Record<string, unknown> | undefined;
+      if (retryPolicy?.["blocked"] === true) return;
       if (task.retries < task.maxRetries) {
         task.retries += 1;
         this.transition(task, TaskState.RETRYING);
@@ -120,7 +122,29 @@ export class TaskOrchestrator {
       this.transition(task, TaskState.RUNNING);
       this.eventBus.emit("taskStarted", task);
 
-      const success = await this.executor.execute(task);
+      let success: boolean;
+      try {
+        success = await this.executor.execute(task);
+      } catch (error) {
+        const wasPausedWhileRunning = this.pausedRunningTaskIds.delete(task.id);
+        const currentState = task.state as TaskState;
+        task.lastError = error instanceof Error ? error.message : String(error);
+
+        if (currentState === TaskState.CANCELLED || currentState === TaskState.PAUSED || wasPausedWhileRunning) {
+          if (wasPausedWhileRunning && currentState === TaskState.QUEUED) {
+            this.enqueueTask(task.id);
+          }
+          await this.registry.saveTask(task.id);
+          return;
+        }
+
+        if (this.stateMachine.canTransition(task.state, TaskState.FAILED)) {
+          this.transition(task, TaskState.FAILED);
+          this.eventBus.emit("taskFailed", task);
+        }
+        await this.registry.saveTask(task.id);
+        return;
+      }
 
       const wasPausedWhileRunning = this.pausedRunningTaskIds.delete(task.id);
       const currentState = task.state as TaskState;
@@ -337,13 +361,26 @@ export class TaskOrchestrator {
   }
 
   private drainQueue(): void {
-    while (this.workerPool.getAvailableWorkers() > 0 && this.pendingTaskIds.length > 0) {
+    // Inspect each task that was pending when this drain started at most once.
+    // A resumed task may still own its previous worker while that executor is
+    // unwinding; keep it queued until releaseWorker() triggers the next drain.
+    const candidates = this.pendingTaskIds.length;
+    for (
+      let inspected = 0;
+      inspected < candidates && this.workerPool.getAvailableWorkers() > 0 && this.pendingTaskIds.length > 0;
+      inspected += 1
+    ) {
       const taskId = this.pendingTaskIds.shift();
       if (!taskId) return;
 
       this.pendingTaskIdSet.delete(taskId);
       const task = this.registry.getTask(taskId);
       if (!task || task.state !== TaskState.QUEUED) continue;
+
+      if (this.workerPool.hasAssignment(taskId)) {
+        this.enqueueTask(taskId);
+        continue;
+      }
 
       void this.startTask(taskId).catch(error => {
         task.lastError = error instanceof Error ? error.message : String(error);

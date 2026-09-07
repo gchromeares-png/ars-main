@@ -12,6 +12,12 @@ class InteractionTrace:
     def __init__(self, profile_dir: str | Path) -> None:
         root = Path(profile_dir).expanduser().resolve()
         self._path = root / ".ares-visual-trace.jsonl"
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.touch(exist_ok=True)
+        except OSError:
+            pass
+        self.append("session-start", {"state": {"kind": "runtime", "status": "initialized"}})
 
     @property
     def path(self) -> Path:

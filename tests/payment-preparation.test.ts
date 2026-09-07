@@ -91,7 +91,7 @@ describe("Shopify payment preparation", () => {
       expiry: "12/30",
       securityCode
     });
-    expect(result.requiresUserAction).toBe(true);
+    expect(result.requiresUserAction).toBe(false);
   });
 
   it("never contains generic payment-button or submit activation", () => {

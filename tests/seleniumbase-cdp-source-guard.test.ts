@@ -5,6 +5,7 @@ describe("SeleniumBase CDP architecture guard", () => {
   const read = (relative: string) => fs.readFileSync(path.resolve(__dirname, "..", relative), "utf8");
   const requirements = read("requirements-seleniumbase-cdp.txt");
   const adapter = read("python/seleniumbase_cdp/seleniumbase_adapter.py");
+  const controlAwareAdapter = read("python/seleniumbase_cdp/control_aware_seleniumbase_adapter.py");
   const tracker = read("python/seleniumbase_cdp/challenge_state_tracker.py");
   const trackerProbe = read("python/seleniumbase_cdp/challenge_state_tracker_probe.py");
   const siteAdapter = read("python/seleniumbase_cdp/site_grid_adapter.py");
@@ -36,8 +37,12 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("self._sb.set_all_cookies(params)");
     expect(adapter).toContain("self._sb.get_all_cookies()");
     expect(adapter).toContain("mycdp.network.CookieParam.from_json(payload)");
-    for (const source of [worker, manualWorker, productMonitorWorker]) {
-      expect(source).toContain("from seleniumbase_adapter import SeleniumBaseCdpAdapter");
+    expect(controlAwareAdapter).toContain("from seleniumbase_adapter import SeleniumBaseCdpAdapter");
+    expect(controlAwareAdapter).toContain("class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter)");
+    expect(worker).toContain("from seleniumbase_adapter import SeleniumBaseCdpAdapter");
+    expect(productMonitorWorker).toContain("from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter as SeleniumBaseCdpAdapter");
+    expect(manualWorker).toContain("from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter");
+    for (const source of [worker, manualWorker, productMonitorWorker, controlAwareAdapter]) {
       expect(source).not.toContain("from seleniumbase import");
       expect(source).not.toContain("import mycdp");
       expect(source).not.toContain("selenium.webdriver");
@@ -95,7 +100,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(manualWorker).toContain('command_type == "apply-grid-selection"');
     expect(manualWorker).not.toContain("authorizedTestMode");
     expect(manualWorker).toContain('\"gridActionsEnabled\": True');
-    expect(manualWorker).toContain('\"type\": "grid-selection-applied"');
+    expect(manualWorker).toContain('\"type\": "grid-selection-applied\"');
     expect(gridActionsProbe).toContain('result = executor.apply([8, 3, 1, 3, -1, 99]');
   });
 
@@ -136,7 +141,7 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("self._sb.get_current_url()");
     expect(adapter).toContain("self._sb.get_title()");
     expect(manualWorker).toContain('command_type == "inspect-session"');
-    expect(manualWorker).toContain('\"type\": "session-inspection"');
+    expect(manualWorker).toContain('\"type\": \"session-inspection\"');
   });
 
   it("keeps the SeleniumBase worker isolated from protected ARES cores", () => {
@@ -149,10 +154,13 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(manualController).toContain("resolveUserDataDir(profileId)");
   });
 
-  it("uses the same full SeleniumBase runtime for rendered product monitoring", () => {
+  it("uses the same full SeleniumBase runtime for rendered product monitoring without bypassing control priority", () => {
+    expect(productMonitorWorker).toContain("ControlAwareSeleniumBaseCdpAdapter as SeleniumBaseCdpAdapter");
     expect(productMonitorWorker).toContain("SeleniumBaseCdpAdapter(");
     expect(productMonitorWorker).toContain("adapter.poll_runtime()");
-    expect(productMonitorWorker).toContain("adapter._poll_observation_watchdog(force=True)");
+    expect(productMonitorWorker).not.toContain("adapter._poll_observation_watchdog(force=True)");
+    expect(controlAwareAdapter).toContain("self._deferred_navigation_auto = True");
+    expect(controlAwareAdapter).toContain("self._poll_observation_watchdog(force=True)");
     expect(productMonitorWorker).toContain('\"type\": \"rendered-document\"');
   });
 

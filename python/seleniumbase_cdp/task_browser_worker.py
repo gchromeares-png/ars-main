@@ -733,6 +733,7 @@ def run(start: Dict[str, Any]) -> int:
             try:
                 command = commands.get(timeout=0.25)
             except queue.Empty:
+                adapter.poll_runtime()
                 continue
             request_id = str(command.get("requestId") or "")
             command_type = str(command.get("type") or "")

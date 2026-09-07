@@ -1,4 +1,6 @@
 import type { Locator, Page } from "../../browser-worker/types";
+import { observeCheckoutOutcome } from "../../browser-worker/checkout-outcome-observer";
+import { GhostCursorUiInteractionHelper } from "../../browser-worker/ui-interaction-helper";
 import type { CommerceShop } from "../platforms";
 import { ProductMatcher } from "../../monitor/product-matcher";
 import type { ProductObservation } from "../../monitor/models";
@@ -120,7 +122,7 @@ export class PokemonCenterReleaseJourney implements ReleaseJourney {
     if (!(await add.isVisible().catch(() => false)) || !(await add.isEnabled().catch(() => false))) {
       throw new Error("Pokémon-Center-Produkt ist nicht mehr in den Einkaufswagen legbar.");
     }
-    await add.click();
+    await new GhostCursorUiInteractionHelper(page).click(add);
     await page.waitForTimeout(600);
     const cartUrl = new URL("/de-de/cart", shop.baseUrl).toString();
     await page.goto(cartUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -138,7 +140,7 @@ export class PokemonCenterReleaseJourney implements ReleaseJourney {
     if (!(await guest.isVisible().catch(() => false)) || !(await guest.isEnabled().catch(() => false))) {
       throw new Error("Pokémon-Center-Gast-Checkout ist nicht verfügbar.");
     }
-    await guest.click();
+    await new GhostCursorUiInteractionHelper(page).click(guest);
     await page.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => undefined);
     const title = await page.title().catch(() => "");
     const current = page.url();
@@ -151,22 +153,27 @@ export class PokemonCenterReleaseJourney implements ReleaseJourney {
     return Boolean(await this.findButton(page, FINAL_PURCHASE_TEXT));
   }
 
+  async isOrderConfirmed(page: Page, _shop: CommerceShop): Promise<boolean> {
+    return (await observeCheckoutOutcome(page)).confirmed;
+  }
+
   async advanceCheckout(page: Page, _shop: CommerceShop): Promise<boolean> {
     const candidate = await this.findButton(page, SAFE_CONTINUE_TEXT, FINAL_PURCHASE_TEXT);
     if (!candidate) return false;
-    await candidate.click();
+    await new GhostCursorUiInteractionHelper(page).click(candidate);
     await page.waitForLoadState("domcontentloaded", { timeout: 12_000 }).catch(() => undefined);
     await page.waitForTimeout(350).catch(() => undefined);
     return true;
   }
 
+  /** Returns only whether the guarded irreversible click was dispatched. */
   async submitOrder(page: Page, _shop: CommerceShop, allowFinalPurchase: () => boolean): Promise<boolean> {
     const candidate = await this.findButton(page, FINAL_PURCHASE_TEXT);
     if (!candidate) return false;
 
     // Hard backend-side guard immediately before the irreversible submit click.
     if (!allowFinalPurchase()) return false;
-    await candidate.click();
+    await new GhostCursorUiInteractionHelper(page).click(candidate);
     await page.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => undefined);
     return true;
   }

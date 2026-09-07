@@ -18,11 +18,17 @@ class ScreenshotGridTileProvider:
             mark for mark in state.get("marks") or []
             if isinstance(mark, dict) and mark.get("role") == "grid-tile"
         ]
+        expected = int(state.get("tileCount") or 0)
         if not marks:
             return {"sources": [], "error": "grid-marks-missing", "path": str(path)}
-
-        if str(state.get("scope") or "").startswith("iframe:"):
-            return {"sources": [], "error": "iframe-screenshot-crop-not-supported", "path": str(path)}
+        if expected <= 0 or len(marks) != expected:
+            return {
+                "sources": [],
+                "error": "grid-mark-count-mismatch",
+                "path": str(path),
+                "tileCount": expected,
+                "markCount": len(marks),
+            }
 
         try:
             from PIL import Image
@@ -36,7 +42,14 @@ class ScreenshotGridTileProvider:
 
         boxes = self.crop_boxes(image.size, marks)
         if len(boxes) != len(marks):
-            return {"sources": [], "error": "invalid-grid-bounds", "path": str(path)}
+            return {
+                "sources": [],
+                "error": "invalid-grid-bounds",
+                "path": str(path),
+                "tileCount": expected,
+                "markCount": len(marks),
+                "cropCount": len(boxes),
+            }
 
         sources: List[str] = []
         for box in boxes:
@@ -52,12 +65,17 @@ class ScreenshotGridTileProvider:
             except Exception:
                 sources.append("")
 
+        readable = sum(1 for source in sources if source)
         return {
             "sources": sources,
-            "readable": sum(1 for source in sources if source),
-            "tileCount": len(marks),
+            "readable": readable,
+            "tileCount": expected,
+            "markCount": len(marks),
+            "cropCount": len(boxes),
+            "cropBoxes": [list(box) for box in boxes],
+            "scope": str(state.get("scope") or ""),
             "path": str(path),
-            "error": "" if any(sources) else "no-readable-crops",
+            "error": "" if readable == expected else "incomplete-grid-crops",
         }
 
     @staticmethod
@@ -79,11 +97,7 @@ class ScreenshotGridTileProvider:
             scale_x = image_width / viewport_width
             scale_y = image_height / viewport_height
         else:
-            try:
-                dpr = max(0.25, float(viewport.get("devicePixelRatio") or 1.0))
-            except (TypeError, ValueError):
-                dpr = 1.0
-            scale_x = scale_y = dpr
+            scale_x = scale_y = 1.0
 
         result: List[Tuple[int, int, int, int]] = []
         for mark in marks:

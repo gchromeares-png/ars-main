@@ -33,12 +33,10 @@ _ACCEPT_TEXT = (
     'continue',
 )
 _PROGRESS_TEXT = (
-    'bestätigen',
     'bestätigen und weiter',
     'weiter',
     'fortfahren',
     'continue',
-    'confirm',
     'ok',
     'weiter zur kasse',
     'zur kasse',
@@ -66,26 +64,17 @@ _CHECKOUT_TEXT = (
     'weiter zur zahlung',
     'continue to shipping',
     'continue to payment',
-    'jetzt kaufen',
-    'zahlungspflichtig bestellen',
-    'kostenpflichtig bestellen',
-    'bestellung abschicken',
-    'place order',
-    'buy now',
-    'pay now',
-    'complete purchase',
-    'submit order',
 )
 
 
 class ConsentPopupHandler:
-    """Dismiss explicit popups and advance explicit progress controls with CDP mouse clicks."""
+    """Dismiss explicit popups and advance only reversible controls with CDP mouse clicks."""
 
     def __init__(self, seleniumbase_cdp: Any) -> None:
         self._sb = seleniumbase_cdp
 
     def dismiss_once(self) -> Dict[str, Any]:
-        cdp = getattr(self._sb, 'cdp', None)
+        cdp = getattr(self._sb, 'cdp', self._sb)
         if cdp is None:
             return {'dismissed': False, 'reason': 'cdp-unavailable'}
 
@@ -119,11 +108,11 @@ class ConsentPopupHandler:
         return self._advance_once(_PROGRESS_TEXT, empty_reason='no-progress-control')
 
     def advance_checkout_once(self) -> Dict[str, Any]:
-        """Advance checkout/navigation/final purchase controls by explicit text."""
+        """Advance only reversible checkout-navigation controls; never final purchase."""
         return self._advance_once(_CHECKOUT_TEXT, empty_reason='no-checkout-control')
 
     def _advance_once(self, values: Iterable[str], *, empty_reason: str) -> Dict[str, Any]:
-        cdp = getattr(self._sb, 'cdp', None)
+        cdp = getattr(self._sb, 'cdp', self._sb)
         if cdp is None:
             return {'advanced': False, 'reason': 'cdp-unavailable'}
 
@@ -194,7 +183,10 @@ class ConsentPopupHandler:
                 continue
             if normalized == candidate:
                 return True
-            if len(candidate) > 3 and candidate in normalized:
+            # Single-word controls are intentionally exact-only. This prevents
+            # generic "continue"/"weiter" text from matching an irreversible
+            # order control that merely contains the same word.
+            if ' ' in candidate and len(candidate) > 8 and candidate in normalized:
                 return True
         return False
 

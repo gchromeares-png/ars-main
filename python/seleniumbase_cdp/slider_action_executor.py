@@ -44,7 +44,7 @@ class SliderActionExecutor:
         moved = self._native_drag(state, target)
         mode = "seleniumbase-native" if moved else "event-fallback"
         if not moved:
-            moved = self._apply_document(target)
+            moved = self._apply_document(target, state)
         return {
             "moved": moved,
             "targetFraction": target,
@@ -95,24 +95,34 @@ class SliderActionExecutor:
         if width <= 0 or height <= 0:
             return None
 
+        native = bool(state.get("nativeRange"))
         if state.get("orientation") == "vertical":
             start = (
-                tx + width / 2.0 if state.get("nativeRange") else hx + hw / 2.0,
-                ty + height - height * current if state.get("nativeRange") else hy + hh / 2.0,
+                tx + width / 2.0 if native else hx + hw / 2.0,
+                ty + height - height * current if native else hy + hh / 2.0,
             )
-            end = (tx + width / 2.0, ty + height - height * target)
+            if native:
+                end = (tx + width / 2.0, ty + height - height * target)
+            else:
+                usable = max(0.0, height - hh)
+                end = (tx + width / 2.0, ty + hh / 2.0 + usable * (1.0 - target))
         else:
             start = (
-                tx + width * current if state.get("nativeRange") else hx + hw / 2.0,
-                ty + height / 2.0 if state.get("nativeRange") else hy + hh / 2.0,
+                tx + width * current if native else hx + hw / 2.0,
+                ty + height / 2.0 if native else hy + hh / 2.0,
             )
-            end = (tx + width * target, ty + height / 2.0)
+            if native:
+                end = (tx + width * target, ty + height / 2.0)
+            else:
+                usable = max(0.0, width - hw)
+                end = (tx + hw / 2.0 + usable * target, ty + height / 2.0)
         return start, end
 
     def _screen_points(self, state: Dict[str, Any], target: float):
         handle_selector = str(state.get("handleSelector") or "")
         track_selector = str(state.get("trackSelector") or "")
         rect = state.get("trackRect") if isinstance(state.get("trackRect"), dict) else {}
+        handle_rect = state.get("handleRect") if isinstance(state.get("handleRect"), dict) else {}
         if not handle_selector or not track_selector or not rect:
             return None
         try:
@@ -120,18 +130,29 @@ class SliderActionExecutor:
             track_x, track_y = self._sb.get_gui_element_center(track_selector)
             width = float(rect.get("width") or 0)
             height = float(rect.get("height") or 0)
+            hw = float(handle_rect.get("width") or 0)
+            hh = float(handle_rect.get("height") or 0)
             current = max(0.0, min(1.0, float(state.get("fraction") or 0)))
             if width <= 0 or height <= 0:
                 return None
+            native = bool(state.get("nativeRange"))
             if state.get("orientation") == "vertical":
                 start_x = float(handle_x)
-                start_y = float(track_y) + height / 2 - height * current if state.get("nativeRange") else float(handle_y)
+                start_y = float(track_y) + height / 2 - height * current if native else float(handle_y)
                 end_x = float(track_x)
-                end_y = float(track_y) + height / 2 - height * target
+                if native:
+                    end_y = float(track_y) + height / 2 - height * target
+                else:
+                    usable = max(0.0, height - hh)
+                    end_y = float(track_y) - height / 2 + hh / 2 + usable * (1.0 - target)
             else:
-                start_x = float(track_x) - width / 2 + width * current if state.get("nativeRange") else float(handle_x)
+                start_x = float(track_x) - width / 2 + width * current if native else float(handle_x)
                 start_y = float(handle_y)
-                end_x = float(track_x) - width / 2 + width * target
+                if native:
+                    end_x = float(track_x) - width / 2 + width * target
+                else:
+                    usable = max(0.0, width - hw)
+                    end_x = float(track_x) - width / 2 + hw / 2 + usable * target
                 end_y = float(track_y)
             return (start_x, start_y), (end_x, end_y)
         except Exception:
@@ -152,7 +173,7 @@ class SliderActionExecutor:
         except Exception:
             return False
 
-    def _apply_document(self, target: float) -> bool:
+    def _apply_document(self, target: float, state: Dict[str, Any]) -> bool:
         overrides = getattr(self._slider_adapter, "_overrides", {})
         script = f"""
         (() => {{
@@ -195,10 +216,14 @@ class SliderActionExecutor:
               }}
 
               const r = track.getBoundingClientRect();
-              const horizontal = r.width >= r.height;
-              const x = horizontal ? r.left + r.width * target : r.left + r.width / 2;
-              const y = horizontal ? r.top + r.height / 2 : r.bottom - r.height * target;
               const h = handle.getBoundingClientRect();
+              const horizontal = r.width >= r.height;
+              const x = horizontal
+                ? r.left + h.width / 2 + Math.max(0, r.width - h.width) * target
+                : r.left + r.width / 2;
+              const y = horizontal
+                ? r.top + r.height / 2
+                : r.top + h.height / 2 + Math.max(0, r.height - h.height) * (1 - target);
               const sx = h.left + h.width / 2, sy = h.top + h.height / 2;
               const opts = {{bubbles:true, cancelable:true, pointerId:1, pointerType:'mouse', isPrimary:true}};
               handle.dispatchEvent(new PointerEvent('pointerdown', {{...opts, clientX:sx, clientY:sy, buttons:1}}));
@@ -213,6 +238,15 @@ class SliderActionExecutor:
           return false;
         }})()
         """
+        frame_path = [str(value) for value in state.get("framePath") or [] if str(value)]
+        if frame_path:
+            oopif_evaluate = getattr(self._sb, "ares_oopif_evaluate", None)
+            if callable(oopif_evaluate):
+                try:
+                    evaluated = oopif_evaluate(frame_path, f"return {script};", [])
+                    return bool(evaluated.get("value")) if isinstance(evaluated, dict) else bool(evaluated)
+                except Exception:
+                    return False
         try:
             return bool(self._evaluate(script))
         except Exception:

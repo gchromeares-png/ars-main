@@ -44,7 +44,12 @@ export class AresBrowserRuntime extends SeleniumBaseBrowserWorker {
     // Session Python processes inherit ARES_VISION_SERVICE_URL/TOKEN from this
     // process. Wait only for the lightweight loopback listener, not model load.
     await this.ensureSharedVisionService();
-    return super.createContext(config);
+    const handle = await super.createContext(config);
+    // Reuse the existing task identity as the seed namespace for the existing
+    // InteractionEngine/SeededRandom path. No second RNG or seed subsystem is
+    // introduced; every task simply owns a distinct namespace from startup.
+    handle.page["interactionSeed"] = String(config.taskId);
+    return handle;
   }
 
   override async shutdown(): Promise<void> {
