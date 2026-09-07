@@ -6,9 +6,13 @@ import type { CommerceShop } from "../commerce/platforms";
 import type { AresProfile } from "../profiles/models";
 import type { BrowserWorker } from "../browser-worker/browser-worker";
 import { BrowserQueueWaiter } from "../browser-worker/queue-waiter";
+import { SessionHttpPoller } from "./session-http-poller";
 import { getMonitorStrategy, setEarlyGateRuntime } from "./early-gate";
+import { resolveMonitorPolicy, type MonitorNetworkMode } from "./monitor-policy";
 
 interface ActiveBrowserMonitor { controller: AbortController; }
+
+export type { MonitorNetworkMode } from "./monitor-policy";
 
 export interface BrowserGateMonitorExecutorOptions {
   pollIntervalMs?: number;
@@ -16,6 +20,43 @@ export interface BrowserGateMonitorExecutorOptions {
 }
 
 const POST_NAVIGATION_OBSERVATION_MS = 30_000;
+const RELEASE_STATUS_RE = /(released|complete|completed|redirect|passed|admitted)/i;
+
+function proxyValue(profile: AresProfile): string | undefined {
+  const proxy = profile.proxy;
+  if (!proxy?.host || !proxy.port) return undefined;
+  const auth = proxy.username ? `${proxy.username}:${proxy.password ?? ""}@` : "";
+  const scheme = proxy.protocol || "http";
+  return `${scheme}://${auth}${proxy.host}:${proxy.port}`;
+}
+
+function sessionPollUrl(task: Task, shop: CommerceShop): string {
+  const taskValue = String(task.config.data?.["sessionHttpPollUrl"] ?? "").trim();
+  const shopValue = String(shop.config?.["sessionHttpPollUrl"] ?? "").trim();
+  const candidate = taskValue || shopValue || shop.baseUrl;
+  return /^https?:\/\//i.test(candidate) ? candidate : shop.baseUrl;
+}
+
+export function resolveMonitorNetworkMode(task: Task, shop: CommerceShop): MonitorNetworkMode {
+  return resolveMonitorPolicy(task, shop).networkMode;
+}
+
+function safeUrlLabel(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.host}${url.pathname}`;
+  } catch {
+    return "unknown";
+  }
+}
+
+function safeLogText(value: unknown): string {
+  return String(value ?? "").replace(/[\r\n\t]+/g, " ").slice(0, 600);
+}
+
+function monitorLog(taskId: string, message: string): void {
+  process.stderr.write(`[MONITOR] task=${safeLogText(taskId)} ${safeLogText(message)}\n`);
+}
 
 /** Lightweight browser-backed gate observer. Checkout/payment modules are intentionally absent. */
 export class BrowserGateMonitorExecutor implements ITaskExecutor {
@@ -31,9 +72,6 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
     options: BrowserGateMonitorExecutorOptions = {}
   ) {
     this.pollIntervalMs = Math.min(10_000, Math.max(250, options.pollIntervalMs ?? 750));
-    // A full reload must not interrupt the automatic post-navigation observation
-    // burst. Queue/DOM telemetry keeps polling during this window; only destructive
-    // navigation is held back long enough for delayed iframe/grid/slider work.
     this.refreshIntervalMs = Math.min(60_000, Math.max(POST_NAVIGATION_OBSERVATION_MS, options.refreshIntervalMs ?? 5_000));
   }
 
@@ -72,7 +110,13 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
       username: profile.proxy.username || undefined,
       password: profile.proxy.password || undefined
     } : undefined;
+    const policy = resolveMonitorPolicy(task, shop);
+    const networkMode = policy.networkMode;
 
+    let sessionPoller: SessionHttpPoller | undefined;
+    let lastSessionLogKey = "";
+    let lastSessionError = "";
+    let passiveIdleLogged = false;
     try {
       const handle = await this.browserWorker.createContext({
         taskId: task.id,
@@ -86,6 +130,28 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
         monitorMode: true
       });
       const page = handle.page;
+      const pollUrl = sessionPollUrl(task, shop);
+
+      monitorLog(task.id, `mode=${networkMode === "browser-only" ? "STRICT" : "NORMAL"} stage=${networkMode === "browser-only" ? "network" : "session-http"} profile=${profile.id}`);
+      if (networkMode === "session-http-preferred") {
+        sessionPoller = new SessionHttpPoller({
+          url: pollUrl,
+          profileDir: handle.userDataDir,
+          proxy: proxyValue(profile),
+          pollIntervalMs: Math.max(1_000, this.pollIntervalMs)
+        });
+        try {
+          sessionPoller.start();
+          monitorLog(task.id, `stage=session-http engine=curl_cffi target=${safeUrlLabel(pollUrl)}`);
+        } catch (error) {
+          sessionPoller = undefined;
+          monitorLog(task.id, `session-http=start-failed fallback=${policy.allowPassiveNetwork ? "network" : policy.allowPassiveDom ? "dom" : "none"} error=${error instanceof Error ? error.message : String(error)}`);
+        }
+      } else {
+        monitorLog(task.id, "stage=session-http skipped=true reason=browser-only");
+        monitorLog(task.id, `stage=${policy.allowPassiveNetwork ? "network" : policy.allowPassiveDom ? "dom" : "passive-idle"} source=${policy.allowPassiveNetwork ? "passive-cdp" : policy.allowPassiveDom ? "native-cdp-dom" : "none"}`);
+      }
+
       setEarlyGateRuntime(task, {
         activeArea: "monitor", stage: "monitoring", productName: strategy.productName,
         keywords: strategy.discoveryKeywords, monitoringAt: new Date().toISOString()
@@ -93,25 +159,102 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
       task.config.data = {
         ...(task.config.data ?? {}),
         browserGateMonitor: {
-          mode: "browser", profileId: profile.id, proxyBound: Boolean(proxy),
+          mode: "browser", profileId: profile.id, proxyBound: Boolean(proxy), networkMode, policy,
           userAgent: handle.environmentAudit.snapshot.userAgent,
           pollIntervalMs: this.pollIntervalMs, refreshIntervalMs: this.refreshIntervalMs,
+          sessionHttp: {
+            enabled: Boolean(sessionPoller),
+            skipped: networkMode === "browser-only",
+            url: networkMode === "session-http-preferred" ? pollUrl : undefined,
+            engine: networkMode === "session-http-preferred" ? "curl_cffi" : undefined
+          },
           startedAt: new Date().toISOString()
+        },
+        monitorPipeline: {
+          mode: networkMode,
+          stage: networkMode === "browser-only" ? (policy.allowPassiveNetwork ? "network" : "dom") : "session-http",
+          source: networkMode === "browser-only" ? (policy.allowPassiveNetwork ? "passive-cdp" : "native-cdp-dom") : "curl_cffi",
+          updatedAt: new Date().toISOString()
         }
       };
       this.emit(task);
 
+      const publishSessionTelemetry = (): void => {
+        if (!sessionPoller) return;
+        const signal = sessionPoller.getLatest();
+        if (signal) {
+          const key = [signal.statusCode ?? "-", signal.active, signal.position ?? "-", signal.timeToWaitSeconds ?? "-", signal.statusText ?? ""].join("|");
+          if (key !== lastSessionLogKey) {
+            lastSessionLogKey = key;
+            monitorLog(task.id, `stage=session-http status=${signal.statusCode ?? "-"} active=${signal.active} pos=${signal.position ?? "-"} ttw=${signal.timeToWaitSeconds ?? "-"}`);
+            task.config.data = {
+              ...(task.config.data ?? {}),
+              monitorPipeline: {
+                mode: networkMode,
+                stage: "session-http",
+                source: "curl_cffi",
+                statusCode: signal.statusCode,
+                active: signal.active,
+                position: signal.position,
+                timeToWaitSeconds: signal.timeToWaitSeconds,
+                statusText: signal.statusText,
+                updatedAt: new Date().toISOString()
+              }
+            };
+            this.emit(task);
+          }
+        }
+        const error = sessionPoller.getError() ?? "";
+        if (error && error !== lastSessionError) {
+          lastSessionError = error;
+          monitorLog(task.id, `session-http=error fallback=${policy.allowPassiveNetwork ? "network" : policy.allowPassiveDom ? "dom" : "none"} error=${error}`);
+          task.config.data = {
+            ...(task.config.data ?? {}),
+            monitorPipeline: {
+              mode: networkMode,
+              stage: policy.allowPassiveNetwork ? "network" : policy.allowPassiveDom ? "dom" : "passive-idle",
+              source: policy.allowPassiveNetwork ? "passive-cdp" : policy.allowPassiveDom ? "native-cdp-dom" : "none",
+              fallbackFrom: "session-http",
+              error,
+              updatedAt: new Date().toISOString()
+            }
+          };
+          this.emit(task);
+        }
+      };
+
       const waiter = new BrowserQueueWaiter(page, task, current => this.emit(current), {
-        pollIntervalMs: this.pollIntervalMs, releaseConfirmations: 2, maxWaitMs: 60 * 60_000
+        pollIntervalMs: this.pollIntervalMs,
+        releaseConfirmations: 2,
+        maxWaitMs: 60 * 60_000,
+        allowPassiveNetwork: policy.allowPassiveNetwork,
+        allowPassiveDom: policy.allowPassiveDom,
+        externalSignal: networkMode === "session-http-preferred" ? () => {
+          publishSessionTelemetry();
+          const signal = sessionPoller?.getLatest();
+          if (!signal) return undefined;
+          const authoritativeRelease = signal.active === false && Boolean(signal.statusText && RELEASE_STATUS_RE.test(signal.statusText));
+          if (!signal.active && !authoritativeRelease) return undefined;
+          return {
+            active: signal.active,
+            authoritativeRelease,
+            position: signal.position,
+            timeToWaitSeconds: signal.timeToWaitSeconds,
+            statusText: signal.statusText,
+            source: "session-http"
+          };
+        } : undefined
       });
       waiter.start();
       try {
         await page.goto(shop.baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
         while (!controller.signal.aborted) {
+          publishSessionTelemetry();
           const queue = await waiter.waitIfQueued();
           if (queue.detected) {
             const status = task.config.data?.["queueStatus"] as Record<string, unknown> | undefined;
             const detectedAt = String(status?.["detectedAt"] ?? new Date().toISOString());
+            monitorLog(task.id, `queue=detected source=${String(status?.["source"] ?? "combined")} released=${queue.released}`);
             setEarlyGateRuntime(task, { activeArea: "gate", stage: "gate-detected", gateDetectedAt: detectedAt });
             task.config.data = {
               ...(task.config.data ?? {}),
@@ -121,24 +264,63 @@ export class BrowserGateMonitorExecutor implements ITaskExecutor {
                 position: status?.["position"], timeToWaitSeconds: status?.["timeToWaitSeconds"],
                 statusText: status?.["statusText"], released: queue.released,
                 readyAt: new Date().toISOString()
+              },
+              monitorPipeline: {
+                mode: networkMode,
+                stage: queue.released ? "released" : "queue",
+                source: String(status?.["source"] ?? "combined"),
+                active: status?.["active"],
+                position: status?.["position"],
+                timeToWaitSeconds: status?.["timeToWaitSeconds"],
+                statusText: status?.["statusText"],
+                updatedAt: new Date().toISOString()
               }
             };
             this.emit(task);
             return true;
           }
           await this.delay(this.refreshIntervalMs, controller.signal);
-          if (!controller.signal.aborted) {
-            await page.goto(shop.baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+          if (controller.signal.aborted) continue;
+          if (!policy.allowActiveBrowserFallback) {
+            if (!passiveIdleLogged) {
+              passiveIdleLogged = true;
+              monitorLog(task.id, "stage=passive-idle active-browser-fallback=disabled");
+            }
+            task.config.data = {
+              ...(task.config.data ?? {}),
+              monitorPipeline: {
+                mode: networkMode,
+                stage: "passive-idle",
+                source: policy.allowPassiveNetwork ? "passive-cdp" : policy.allowPassiveDom ? "native-cdp-dom" : "none",
+                updatedAt: new Date().toISOString()
+              }
+            };
+            this.emit(task);
+            continue;
           }
+          monitorLog(task.id, "stage=navigation reason=no-passive-signal-after-observation-window");
+          task.config.data = {
+            ...(task.config.data ?? {}),
+            monitorPipeline: {
+              mode: networkMode,
+              stage: "navigation",
+              source: "browser",
+              updatedAt: new Date().toISOString()
+            }
+          };
+          this.emit(task);
+          await page.goto(shop.baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
         }
         return true;
       } finally { waiter.stop(); }
     } catch (error) {
       if (controller.signal.aborted) return true;
       task.lastError = error instanceof Error ? error.message : String(error);
+      monitorLog(task.id, `runtime=failed error=${task.lastError}`);
       this.emit(task);
       return false;
     } finally {
+      sessionPoller?.stop();
       this.active.delete(task.id);
       await this.browserWorker.closeContext(task.id).catch(() => undefined);
     }

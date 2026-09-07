@@ -56,6 +56,7 @@ export class BrowserWorkerProcessClient {
   private readyReject?: (error: Error) => void;
   private stdoutBuffer = "";
   private stderrBuffer = "";
+  private stderrLineBuffer = "";
   private readonly pending = new Map<string, PendingRequest>();
   private readonly taskIds = new Set<string>();
   private readonly taskRefs = new Map<string, Task>();
@@ -204,17 +205,28 @@ export class BrowserWorkerProcessClient {
     this.child = child;
     this.stdoutBuffer = "";
     this.stderrBuffer = "";
+    this.stderrLineBuffer = "";
     this.lastHeartbeatAt = undefined;
     this.ready = new Promise<void>((resolve, reject) => { this.readyResolve = resolve; this.readyReject = reject; });
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", chunk => this.handleStdout(String(chunk)));
     child.stderr.setEncoding("utf8");
-    child.stderr.on("data", chunk => { this.stderrBuffer = `${this.stderrBuffer}${String(chunk)}`.slice(-8_000); });
+    child.stderr.on("data", chunk => this.handleStderr(String(chunk)));
     child.on("error", error => this.handleWorkerExit(new Error(`Browser Worker konnte nicht mit Node-Executable "${nodeExecutable}" gestartet werden: ${error.message}`), child));
     child.on("exit", (code, signal) => {
       const details = this.stderrBuffer.trim();
       this.handleWorkerExit(new Error(`Browser Worker beendet (code=${String(code)}, signal=${String(signal)}).${details ? ` ${details}` : ""}`), child);
     });
+  }
+
+  private handleStderr(chunk: string): void {
+    this.stderrBuffer = `${this.stderrBuffer}${chunk}`.slice(-8_000);
+    this.stderrLineBuffer += chunk;
+    const lines = this.stderrLineBuffer.split(/\r?\n/);
+    this.stderrLineBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.startsWith("[MONITOR]")) process.stderr.write(`${line}\n`);
+    }
   }
 
   private handleStdout(chunk: string): void {

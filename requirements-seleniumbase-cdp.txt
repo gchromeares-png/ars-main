@@ -1,3 +1,4 @@
 # ARES SeleniumBase Pure CDP dependency.
 # SeleniumBase itself stays unmodified and owns browser/profile/session lifecycle.
 seleniumbase==4.53.7
+curl_cffi==0.16.3
