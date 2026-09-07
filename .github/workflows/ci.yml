@@ -129,6 +129,7 @@ jobs:
           tests/task-lifecycle-safety.test.ts
           tests/payment-source-guard.test.ts
           tests/browser-gate-monitor-lanes.test.ts
+          tests/queue-monitor-escalation.test.ts
           tests/commerce-monitor-browser-fallback.test.ts
           tests/seleniumbase-cdp-source-guard.test.ts
 
