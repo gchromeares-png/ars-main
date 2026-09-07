@@ -19,15 +19,19 @@ import {
   readRegisteredProfileCookieSnapshot,
   saveRegisteredProfileCookieSnapshot
 } from "../cookies/profile-cookie-snapshot-registry";
-import { resolveProfileUserDataDir } from "../browser-worker/profile-session-manager";
+import {
+  acquireBrowserProfileLease,
+  resolveProfileUserDataDir,
+  type BrowserProfileLease
+} from "../browser-worker/profile-session-manager";
 
 const WIRE_PREFIX = "ARES_SB_MANUAL\t";
-const SELENIUMBASE_PROFILE_DIR = ".ares-seleniumbase-cdp";
 
 interface SeleniumBaseManualSession {
   profileId: string;
   child: ChildProcessWithoutNullStreams;
   userDataDir: string;
+  lease: BrowserProfileLease;
   startedAt: string;
   appliedSnapshotId?: string;
 }
@@ -83,33 +87,42 @@ export class SeleniumBaseProfileBrowserController {
     const userDataDir = this.resolveUserDataDir(profileId);
     const workerScript = this.resolveWorkerScript();
     const pythonExecutable = process.env["ARES_PYTHON_EXECUTABLE"]?.trim() || "python";
-    const child = spawn(pythonExecutable, [workerScript], {
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      env: { ...process.env }
-    });
-
-    const session: SeleniumBaseManualSession = {
-      profileId,
-      child,
-      userDataDir,
-      startedAt: new Date().toISOString(),
-      appliedSnapshotId: String(cookieSnapshotId ?? "").trim() || undefined
-    };
-    this.sessions.set(profileId, session);
-    child.once("exit", () => {
-      if (this.sessions.get(profileId)?.child === child) this.sessions.delete(profileId);
-    });
-
     const snapshotId = String(cookieSnapshotId ?? "").trim();
     const cookies = snapshotId
       ? readRegisteredProfileCookieSnapshot(profileId, snapshotId)
       : undefined;
     if (snapshotId && !cookies) {
-      this.sessions.delete(profileId);
-      if (child.exitCode == null) child.kill("SIGTERM");
       throw new Error("Cookie-Snapshot konnte für SeleniumBase nicht geladen werden.");
     }
+    const proxy = this.toSeleniumBaseProxy(this.resolveProxy(profile));
+
+    const lease = acquireBrowserProfileLease(userDataDir, `manual:${process.pid}:${profileId}`);
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(pythonExecutable, [workerScript], {
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        env: { ...process.env }
+      });
+    } catch (error) {
+      lease.release();
+      throw error;
+    }
+
+    const session: SeleniumBaseManualSession = {
+      profileId,
+      child,
+      userDataDir,
+      lease,
+      startedAt: new Date().toISOString(),
+      appliedSnapshotId: snapshotId || undefined
+    };
+    this.sessions.set(profileId, session);
+    child.once("exit", () => {
+      if (this.sessions.get(profileId)?.child === child) this.sessions.delete(profileId);
+      lease.release();
+    });
+    child.once("error", () => lease.release());
 
     const requestId = randomUUID();
     const payload = {
@@ -118,7 +131,7 @@ export class SeleniumBaseProfileBrowserController {
       profileId,
       profileDir: userDataDir,
       startUrl: startUrl?.trim() || undefined,
-      proxy: this.toSeleniumBaseProxy(this.resolveProxy(profile)),
+      proxy,
       userAgent: profile.browser?.userAgent || undefined,
       headless: false,
       cookies
@@ -140,6 +153,7 @@ export class SeleniumBaseProfileBrowserController {
     } catch (error) {
       this.sessions.delete(profileId);
       if (child.exitCode == null) child.kill("SIGTERM");
+      else lease.release();
       throw error;
     }
   }
@@ -228,6 +242,7 @@ export class SeleniumBaseProfileBrowserController {
       if (!graceful && child.exitCode == null) child.kill("SIGKILL");
     }
     this.sessions.delete(id);
+    if (child.exitCode != null) session.lease.release();
     return this.status(id);
   }
 
@@ -276,7 +291,7 @@ export class SeleniumBaseProfileBrowserController {
   }
 
   private resolveUserDataDir(profileId: string): string {
-    return path.join(resolveProfileUserDataDir(profileId, this.profileRoot), SELENIUMBASE_PROFILE_DIR);
+    return resolveProfileUserDataDir(profileId, this.profileRoot);
   }
 
   private resolveWorkerScript(): string {

@@ -130,6 +130,9 @@ jobs:
           tests/payment-source-guard.test.ts
           tests/browser-gate-monitor-lanes.test.ts
           tests/queue-monitor-escalation.test.ts
+          tests/queue-waiter.test.ts
+          tests/profile-session-manager.test.ts
+          tests/profile-browser-session-persistence.test.ts
           tests/commerce-monitor-browser-fallback.test.ts
           tests/seleniumbase-cdp-source-guard.test.ts
 
