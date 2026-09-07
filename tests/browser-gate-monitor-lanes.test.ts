@@ -4,6 +4,7 @@ import { CommerceTaskExecutorRouter } from "../src/commerce/task-executor-router
 import type { ITaskExecutor } from "../src/interfaces";
 import type { Task } from "../src/models";
 import { resolveMonitorNetworkMode } from "../src/monitor/browser-gate-monitor-executor";
+import { resolveMonitorPolicy } from "../src/monitor/monitor-policy";
 
 class CaptureExecutor implements ITaskExecutor {
   task?: Task;
@@ -70,6 +71,12 @@ describe("browser gate monitor lanes", () => {
     const task = gateTask();
     const shop = { id: "shop-1", name: "Shop", baseUrl: "https://example.test", platform: "custom", config: {} } as any;
     expect(resolveMonitorNetworkMode(task, shop)).toBe("session-http-preferred");
+    expect(resolveMonitorPolicy(task, shop)).toEqual({
+      networkMode: "session-http-preferred",
+      allowPassiveNetwork: true,
+      allowPassiveDom: true,
+      allowActiveBrowserFallback: true
+    });
   });
 
   it("allows strict browser-only monitoring per task", () => {
@@ -79,25 +86,51 @@ describe("browser gate monitor lanes", () => {
     expect(resolveMonitorNetworkMode(task, shop)).toBe("browser-only");
   });
 
-  it("allows strict browser-only monitoring per shop and task override wins", () => {
+  it("allows a complete policy per shop with task override", () => {
     const task = gateTask();
     const shop = {
       id: "shop-1",
       name: "Shop",
       baseUrl: "https://example.test",
       platform: "custom",
-      config: { monitorNetworkMode: "browser-only" }
+      config: {
+        monitorPolicy: {
+          networkMode: "browser-only",
+          allowPassiveNetwork: true,
+          allowPassiveDom: false,
+          allowActiveBrowserFallback: false
+        }
+      }
     } as any;
-    expect(resolveMonitorNetworkMode(task, shop)).toBe("browser-only");
+    expect(resolveMonitorPolicy(task, shop)).toEqual({
+      networkMode: "browser-only",
+      allowPassiveNetwork: true,
+      allowPassiveDom: false,
+      allowActiveBrowserFallback: false
+    });
 
-    task.config.data = { ...(task.config.data ?? {}), monitorNetworkMode: "session-http-preferred" };
-    expect(resolveMonitorNetworkMode(task, shop)).toBe("session-http-preferred");
+    task.config.data = {
+      ...(task.config.data ?? {}),
+      monitorPolicy: { networkMode: "session-http-preferred", allowPassiveDom: true }
+    };
+    expect(resolveMonitorPolicy(task, shop)).toEqual({
+      networkMode: "session-http-preferred",
+      allowPassiveNetwork: true,
+      allowPassiveDom: true,
+      allowActiveBrowserFallback: false
+    });
   });
 
-  it("does not instantiate session HTTP in strict mode", () => {
+  it("does not instantiate session HTTP in strict mode and uses native passive DOM", () => {
     const monitor = fs.readFileSync(path.join(process.cwd(), "src/monitor/browser-gate-monitor-executor.ts"), "utf8");
+    const runtime = fs.readFileSync(path.join(process.cwd(), "src/browser-worker/seleniumbase-browser-worker.ts"), "utf8");
+    const oopif = fs.readFileSync(path.join(process.cwd(), "python/seleniumbase_cdp/task_browser_worker_oopif.py"), "utf8");
     expect(monitor).toContain('if (networkMode === "session-http-preferred")');
     expect(monitor).toContain('stage=session-http skipped=true reason=browser-only');
     expect(monitor).toContain('externalSignal: networkMode === "session-http-preferred"');
+    expect(runtime).toContain('action: "passive-queue-dom"');
+    expect(oopif).toContain('"DOM.getDocument"');
+    expect(oopif).toContain('"DOM.querySelector"');
+    expect(oopif).toContain('"DOM.getOuterHTML"');
   });
 });

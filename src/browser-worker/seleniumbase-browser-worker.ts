@@ -151,8 +151,6 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
       const runningChild = child;
       const transport = new SeleniumBaseRpcTransport(runningChild);
 
-      // Explicit startup barrier: no Page/Locator or task command exists until
-      // Python has fully created Chrome/CDP and answered with READY.
       await transport.start({
         taskId: config.taskId,
         profileDir: normalizedDir,
@@ -165,6 +163,17 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
       }, 35_000);
 
       const page = new SeleniumBaseRpcPage(transport);
+      page["passiveQueueSnapshot"] = async () => {
+        const reply = await transport.request("rpc", { action: "passive-queue-dom" }, 5_000);
+        const result = reply.result && typeof reply.result === "object" ? reply.result as Record<string, unknown> : {};
+        return {
+          hasQueuePosition: result["hasQueuePosition"] === true,
+          hasPosition: result["hasPosition"] === true,
+          positionText: String(result["positionText"] ?? ""),
+          statusText: String(result["statusText"] ?? ""),
+          url: String(result["url"] ?? reply.url ?? page.url())
+        };
+      };
       const context: BrowserContext = {
         addCookies: async cookies => {
           await transport.request("apply-cookies", { cookies }, 12_000);
@@ -181,14 +190,10 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
         }
       };
 
-      // Preserve the former proxied-session privacy layer before any shop code runs.
-      // Browser transport hardening stays in Chromium flags; this masks page-visible
-      // local/private ICE candidates without disabling RTCPeerConnection itself.
       if (config.proxy) await installWebRtcProxyPolicy(context);
 
       const snapshot = this.taskCookieSnapshots.get(config.taskId);
       if (snapshot?.length) {
-        // CDP Network.setCookies path: valid before first target-domain navigation.
         await context.addCookies(snapshot as unknown[]);
       }
 
@@ -230,9 +235,6 @@ export class SeleniumBaseBrowserWorker implements BrowserWorker {
 
     this.activeProfileDirs.delete(path.resolve(session.handle.userDataDir));
     try {
-      // Browser-visible cookie state can precede Chromium's durable profile write.
-      // Keep the owner alive briefly before the clean close so a same-profile
-      // handoff cannot reopen between the network-service update and disk commit.
       await new Promise<void>(resolve => setTimeout(resolve, PROFILE_PRE_CLOSE_SETTLE_MS));
       await session.context.close();
     } catch (error) {
