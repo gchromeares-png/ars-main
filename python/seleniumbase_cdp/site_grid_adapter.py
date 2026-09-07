@@ -9,7 +9,7 @@ from stable_marks import build_stable_marks, stable_mark_digest
 
 
 _GRID_SIZES = {9: (3, 3), 16: (4, 4)}
-_GRID_SIZES.update({4: (2, 2), 6: (2, 3), 8: (2, 4), 12: (3, 4), 20: (4, 5), 25: (5, 5)})
+_GRID_SIZES.update({4: (2, 2), 6: (2, 3), 8: (2, 4), 12: (3, 4), 20: (4, 5), 25: (5, 5), 36: (6, 6), 49: (7, 7), 64: (8, 8)})
 
 
 class GridSiteAdapter:
