@@ -47,7 +47,7 @@ def assert_slider_geometry_contract() -> None:
         "handleRect": {"x": 140.0, "y": 40.0, "width": 20.0, "height": 20.0},
     }
     custom_points = SliderActionExecutor._viewport_points(custom, 0.75)
-    assert custom_points == ((150.0, 50.0), (245.0, 50.0)), "custom slider must use handle-aware usable track span"
+    assert custom_points == ((150.0, 50.0), (250.0, 50.0)), "custom slider must command the full track; observed feedback closes the loop"
 
 
 class FakeSliderSb:
