@@ -53,6 +53,8 @@ jobs:
         run: python python/seleniumbase_cdp/auto_interaction_probe.py
 
       - name: Run real JavaScript storefront monitor E2E
+        env:
+          ARES_MONITOR_E2E_MODE: "visible"
         run: python python/seleniumbase_cdp/product_monitor_browser_e2e_probe.py
 
   node-focus:

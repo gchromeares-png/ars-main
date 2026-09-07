@@ -9,9 +9,10 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Deque, Dict
 
 PREFIX = "ARES_MONITOR_BROWSER\t"
 ROOT = Path(__file__).resolve().parents[2]
@@ -64,7 +65,27 @@ def _reader(process: subprocess.Popen[str], target: queue.Queue[Dict[str, Any]])
             target.put(value)
 
 
-def _wait(target: queue.Queue[Dict[str, Any]], request_id: str, expected_type: str, timeout: float = 30.0) -> Dict[str, Any]:
+def _stderr_reader(process: subprocess.Popen[str], target: Deque[str]) -> None:
+    """Continuously drain stderr so a verbose browser startup cannot block the worker."""
+    assert process.stderr is not None
+    for line in process.stderr:
+        target.append(line.rstrip())
+
+
+def _stderr_summary(lines: Deque[str], limit: int = 3000) -> str:
+    text = "\n".join(lines)
+    return text[-limit:] if text else ""
+
+
+def _wait(
+    target: queue.Queue[Dict[str, Any]],
+    request_id: str,
+    expected_type: str,
+    timeout: float = 30.0,
+    *,
+    process: subprocess.Popen[str] | None = None,
+    stderr_lines: Deque[str] | None = None,
+) -> Dict[str, Any]:
     deadline = time.monotonic() + timeout
     deferred: list[Dict[str, Any]] = []
     try:
@@ -82,7 +103,16 @@ def _wait(target: queue.Queue[Dict[str, Any]], request_id: str, expected_type: s
     finally:
         for message in deferred:
             target.put(message)
-    raise AssertionError(f"Timed out waiting for {expected_type} request={request_id}")
+
+    details: list[str] = []
+    if process is not None:
+        details.append(f"returncode={process.poll()}")
+    if stderr_lines is not None:
+        stderr = _stderr_summary(stderr_lines)
+        if stderr:
+            details.append(f"stderr_tail={stderr!r}")
+    suffix = f" ({'; '.join(details)})" if details else ""
+    raise AssertionError(f"Timed out waiting for {expected_type} request={request_id}{suffix}")
 
 
 def _send(process: subprocess.Popen[str], payload: Dict[str, Any]) -> None:
@@ -126,7 +156,9 @@ def _run_mode(base_url: str, *, headless: bool) -> None:
             env=env,
         )
         messages: queue.Queue[Dict[str, Any]] = queue.Queue()
+        stderr_lines: Deque[str] = deque(maxlen=200)
         threading.Thread(target=_reader, args=(process, messages), daemon=True).start()
+        threading.Thread(target=_stderr_reader, args=(process, stderr_lines), daemon=True).start()
 
         try:
             start_id = uuid.uuid4().hex
@@ -138,7 +170,14 @@ def _run_mode(base_url: str, *, headless: bool) -> None:
                 "startUrl": base_url,
                 "headless": headless,
             })
-            ready = _wait(messages, start_id, "ready", timeout=45.0)
+            ready = _wait(
+                messages,
+                start_id,
+                "ready",
+                timeout=45.0,
+                process=process,
+                stderr_lines=stderr_lines,
+            )
             assert ready.get("challengeRuntimeEnabled") is True
             assert ready.get("visualRuntimeEnabled") is True
             assert ready.get("semanticRuntimeEnabled") is True
@@ -175,8 +214,19 @@ def _run_mode(base_url: str, *, headless: bool) -> None:
             _graceful_close(process, messages)
 
         if process.returncode not in {0, None}:
-            stderr = process.stderr.read() if process.stderr else ""
-            raise AssertionError(f"Monitor worker exited with {process.returncode}: {stderr[-3000:]}")
+            stderr = _stderr_summary(stderr_lines)
+            raise AssertionError(f"Monitor worker exited with {process.returncode}: {stderr}")
+
+
+def _requested_modes() -> list[bool]:
+    requested = os.environ.get("ARES_MONITOR_E2E_MODE", "both").strip().lower()
+    if requested in {"", "both"}:
+        return [False, True]
+    if requested == "visible":
+        return [False]
+    if requested == "headless":
+        return [True]
+    raise ValueError("ARES_MONITOR_E2E_MODE must be one of: visible, headless, both")
 
 
 def main() -> int:
@@ -185,16 +235,19 @@ def main() -> int:
     thread.start()
     base_url = f"http://127.0.0.1:{server.server_port}/"
 
+    modes = _requested_modes()
     try:
-        _run_mode(base_url, headless=False)
-        _run_mode(base_url, headless=True)
+        for headless in modes:
+            _run_mode(base_url, headless=headless)
     finally:
         server.shutdown()
         server.server_close()
 
+    labels = ",".join("headless" if mode else "visible" for mode in modes)
     print(
-        "PASS: real SeleniumBase Chromium rendered the JavaScript storefront in visible and headless modes, "
-        "with the existing challenge/visual/semantic runtime enabled and no profile requirement."
+        "PASS: real SeleniumBase Chromium rendered the JavaScript storefront "
+        f"in requested mode(s)={labels}, with the existing challenge/visual/semantic runtime "
+        "enabled and no profile requirement."
     )
     return 0
 
