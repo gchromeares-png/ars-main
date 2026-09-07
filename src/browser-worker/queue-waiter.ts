@@ -28,6 +28,7 @@ interface QueueSignal {
 
 export interface QueueExternalSignal {
   active: boolean;
+  authoritativeRelease?: boolean;
   position?: number;
   timeToWaitSeconds?: number;
   statusText?: string;
@@ -197,7 +198,7 @@ export class BrowserQueueWaiter {
           const releasedAt = new Date().toISOString();
           this.publish({
             active: false, phase: "released", position: lastSignal.position,
-            timeToWaitSeconds: 0, statusText: "Warteschlange verlassen", source: signal.source || lastSignal.source,
+            timeToWaitSeconds: 0, statusText: signal.statusText || "Warteschlange verlassen", source: signal.source || lastSignal.source,
             detectedAt, updatedAt: releasedAt, releasedAt, elapsedMs, maxWaitMs
           });
           return { detected: true, released: true, elapsedMs };
@@ -224,6 +225,9 @@ export class BrowserQueueWaiter {
     if (this.page.isClosed()) return { active: false, source: "dom" };
 
     const external = this.options.externalSignal?.();
+    if (external?.authoritativeRelease) {
+      return { active: false, statusText: external.statusText, source: "session-http" };
+    }
     if (external?.active) return { ...external };
 
     const recentNetwork = this.options.allowPassiveNetwork === false
