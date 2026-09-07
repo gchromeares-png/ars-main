@@ -68,7 +68,9 @@ describeBrowser("local payment fixture", () => {
     expect(await page.locator("#cvc").inputValue()).toBe(securityCode);
     expect(result.filledFields).toEqual(expect.arrayContaining(["holderName", "cardNumber", "expiry", "securityCode"]));
     expect(result.missingFields).toEqual([]);
-    expect(result.requiresUserAction).toBe(true);
+    // Fully prepared payment fields need no additional field input. The final
+    // order submit remains a separate, globally fail-closed purchase boundary.
+    expect(result.requiresUserAction).toBe(false);
 
     expect(await page.locator('button[type="submit"], input[type="submit"]').count()).toBe(0);
   });
