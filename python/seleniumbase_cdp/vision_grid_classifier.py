@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 
 PIPELINE_PROMPT_TEMPLATE = "This is a photo of {target}."
-DEFAULT_RAW_LOGIT_THRESHOLD = -4.106234
+DEFAULT_RAW_LOGIT_THRESHOLD = -3.497153
 
 
 class VisionGridClassifier:
