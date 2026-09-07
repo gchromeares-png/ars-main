@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import task_browser_worker_oopif_impl as impl
+from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter
 
 
 def _child_frame_id(self: Any, frame_id: str, selector: str) -> str:
@@ -140,6 +141,10 @@ def _pointer_rpc(self: Any, command: dict[str, Any]) -> dict[str, Any]:
     return _original_rpc(self, command)
 
 
+# The default OOPIF task worker and the manual validation worker use the same
+# control-aware adapter contract: explicit RPC/control traffic gets a short
+# priority window before expensive idle visual inference is allowed to start.
+impl.base.SeleniumBaseCdpAdapter = ControlAwareSeleniumBaseCdpAdapter
 impl.FlatCdpTargetRegistry._child_frame_id = _child_frame_id
 impl.base.TaskRpcRuntime._mouse = _pointer_mouse
 impl.base.TaskRpcRuntime.rpc = _pointer_rpc
