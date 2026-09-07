@@ -361,13 +361,26 @@ export class TaskOrchestrator {
   }
 
   private drainQueue(): void {
-    while (this.workerPool.getAvailableWorkers() > 0 && this.pendingTaskIds.length > 0) {
+    // Inspect each task that was pending when this drain started at most once.
+    // A resumed task may still own its previous worker while that executor is
+    // unwinding; keep it queued until releaseWorker() triggers the next drain.
+    const candidates = this.pendingTaskIds.length;
+    for (
+      let inspected = 0;
+      inspected < candidates && this.workerPool.getAvailableWorkers() > 0 && this.pendingTaskIds.length > 0;
+      inspected += 1
+    ) {
       const taskId = this.pendingTaskIds.shift();
       if (!taskId) return;
 
       this.pendingTaskIdSet.delete(taskId);
       const task = this.registry.getTask(taskId);
       if (!task || task.state !== TaskState.QUEUED) continue;
+
+      if (this.workerPool.hasAssignment(taskId)) {
+        this.enqueueTask(taskId);
+        continue;
+      }
 
       void this.startTask(taskId).catch(error => {
         task.lastError = error instanceof Error ? error.message : String(error);

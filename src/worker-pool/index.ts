@@ -61,6 +61,10 @@ export class WorkerPool {
     }
   }
 
+  hasAssignment(taskId: string): boolean {
+    return this.assignments.has(taskId);
+  }
+
   getAvailableWorkers(): number {
     return this.available.length;
   }
