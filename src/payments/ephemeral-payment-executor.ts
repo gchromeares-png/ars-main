@@ -100,9 +100,24 @@ export class EphemeralPaymentExecutor implements ITaskExecutor {
     task: Task,
     session: CheckoutPaymentSession | undefined
   ): CheckoutPaymentSession | undefined {
-    if (!session || session.method !== "card") return session;
-
     const profileId = taskProfileId(task);
+
+    // A profile-backed task does not need a pre-existing ephemeral card session.
+    // If the task has a profile and the vault resolver is available, materialize
+    // the card only for the delegated worker copy.
+    if (!session) {
+      if (!profileId || !this.getProfilePaymentSession) return undefined;
+      try {
+        return this.getProfilePaymentSession(profileId, { method: "card" });
+      } catch {
+        // Fail closed. Returning a card-method shell lets payment preparation
+        // report missing fields without ever falling back to plaintext task data.
+        return { method: "card" };
+      }
+    }
+
+    if (session.method !== "card") return session;
+
     const profileOnlySession: CheckoutPaymentSession = {
       method: "card",
       label: session.label

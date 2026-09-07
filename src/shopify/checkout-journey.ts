@@ -10,6 +10,9 @@ const FINAL_SUBMIT_PATTERNS = [
   /zahlungspflichtig bestellen/i,
   /kostenpflichtig bestellen/i,
   /bestellung (?:aufgeben|abschicken)/i,
+  /verbindlich bestellen/i,
+  /bestellung bestätigen/i,
+  /kauf abschließen/i,
   /\bjetzt kaufen\b/i
 ];
 

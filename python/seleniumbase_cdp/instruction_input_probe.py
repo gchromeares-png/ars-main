@@ -27,6 +27,18 @@ class FakeSb:
         return {"acted": True, "verified": True, "reason": "", "observedValue": str(args[1])}
 
 
+def control(field_id: str, input_type: str = "number"):
+    return [{
+        "fieldId": field_id,
+        "index": 0,
+        "tagName": "input",
+        "inputType": input_type,
+        "placeholder": "",
+        "ariaLabel": "",
+        "value": "",
+    }]
+
+
 def main() -> int:
     sb = FakeSb()
     runtime = InstructionInputRuntime(sb)
@@ -44,31 +56,38 @@ def main() -> int:
 
     runtime.observe = lambda: {
         "pageText": "Tippe TEST123.",
-        "controls": [{
-            "fieldId": "ares-instruction-1",
-            "index": 0,
-            "tagName": "input",
-            "inputType": "text",
-            "placeholder": "",
-            "ariaLabel": "",
-            "value": "",
-        }],
+        "controls": control("ares-instruction-1", "text"),
     }
     text_decision = runtime.infer()
     assert text_decision["matched"] is True
     assert text_decision["value"] == "TEST123"
 
+    arithmetic_cases = (
+        ("Was ist 14 + 7?", "21"),
+        ("Berechne 8 * 5.", "40"),
+        ("Berechne -3 - 9.", "-12"),
+        ("What is 7 / 2?", "3.5"),
+    )
+    for index, (page_text, expected) in enumerate(arithmetic_cases, start=2):
+        runtime.observe = lambda page_text=page_text, index=index: {
+            "pageText": page_text,
+            "controls": control(f"ares-instruction-{index}"),
+        }
+        arithmetic = runtime.infer()
+        assert arithmetic["matched"] is True
+        assert arithmetic["value"] == expected
+
+    runtime.observe = lambda: {
+        "pageText": "Berechne 5 / 0.",
+        "controls": control("ares-instruction-zero"),
+    }
+    divide_by_zero = runtime.infer()
+    assert divide_by_zero["matched"] is False
+    assert divide_by_zero["reason"] == "no-simple-instruction"
+
     runtime.observe = lambda: {
         "pageText": "Willkommen auf der Testseite.",
-        "controls": [{
-            "fieldId": "ares-instruction-2",
-            "index": 0,
-            "tagName": "input",
-            "inputType": "text",
-            "placeholder": "",
-            "ariaLabel": "",
-            "value": "",
-        }],
+        "controls": control("ares-instruction-last", "text"),
     }
     no_match = runtime.infer()
     assert no_match["matched"] is False
