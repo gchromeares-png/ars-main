@@ -31,10 +31,14 @@ class FakeQueuePage {
     if (event === "response" && this.responseListener === listener) this.responseListener = undefined;
   }
 
-  async evaluate(): Promise<DomSignal> {
+  async passiveQueueSnapshot(): Promise<DomSignal> {
     const signal = this.signals[Math.min(this.index, this.signals.length - 1)];
     this.index += 1;
     return signal;
+  }
+
+  async evaluate(): Promise<never> {
+    throw new Error("Queue waiter must not use page.evaluate() for passive DOM polling");
   }
 
   emitJsonResponse(payload: unknown, url = "https://shop.test/Incapsula_Resource?queue=1"): void {
