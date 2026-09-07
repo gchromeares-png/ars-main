@@ -88,6 +88,11 @@ jobs:
       - name: Prepare real SigLIP2 vision runtime
         run: python python/seleniumbase_cdp/vision_runtime_bootstrap.py --prepare
 
+      - name: Reproduce known SigLIP2 crosswalk regression
+        env:
+          ARES_SIGLIP_TEST_SEED: "2611479096269956016"
+        run: python python/seleniumbase_cdp/siglip_randomized_grid_probe.py
+
       - name: Run randomized SigLIP2 ranking diagnostics
         env:
           ARES_SIGLIP_TEST_ROUNDS: "3"
