@@ -14,11 +14,21 @@ export class LiveChallengeDetector {
     const lowerHtml = safeHtml.toLowerCase();
     const lowerTitle = safeTitle.toLowerCase();
 
-    // 1. Generic Interstitial (Cloudflare "Just a moment...", etc.)
+    // 1. Generic Interstitial (Cloudflare "Just a moment...", DataDome, etc.)
     if (
       lowerTitle.includes("just a moment") ||
+      lowerTitle.includes("datadome captcha") ||
+      lowerUrl.includes("captcha-delivery.com") ||
       lowerHtml.includes("cf-browser-verification") ||
       lowerHtml.includes("challenge-running") ||
+      lowerHtml.includes("captcha-delivery.com") ||
+      lowerHtml.includes("geo.captcha-delivery.com") ||
+      lowerHtml.includes("ct.captcha-delivery.com") ||
+      lowerHtml.includes("datadome captcha") ||
+      lowerHtml.includes("initialcid=") ||
+      lowerHtml.includes("captcha/?initialcid=") ||
+      lowerHtml.includes("var dd=") ||
+      lowerHtml.includes("var dd =") ||
       (lowerHtml.includes("ray id:") && lowerHtml.includes("cloudflare"))
     ) {
       return {
@@ -148,6 +158,14 @@ export class LiveChallengeDetector {
             document.querySelector('iframe[src*="hcaptcha.com"]')
           );
           if (hasHcaptcha) return "hcaptcha";
+
+          const hasDataDome = Boolean(
+            document.querySelector('iframe[title*="DataDome" i]') ||
+            document.querySelector('iframe[src*="captcha-delivery.com"]') ||
+            document.querySelector('script[src*="captcha-delivery.com"]') ||
+            document.documentElement.innerHTML.toLowerCase().includes("captcha-delivery.com")
+          );
+          if (hasDataDome) return "generic-interstitial";
 
           if (document.title.toLowerCase().includes("just a moment") || document.querySelector("#challenge-running")) {
             return "generic-interstitial";
