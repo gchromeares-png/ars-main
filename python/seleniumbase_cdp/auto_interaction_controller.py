@@ -243,7 +243,8 @@ class AutoInteractionController:
         }
 
     def _handle_slider(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        signature = str(state.get("signature") or "")
+        signature_fn = getattr(self._slider_actions, "calibration_signature", None)
+        signature = str(signature_fn(state) if callable(signature_fn) else (state.get("signature") or ""))
         if bool(state.get("complete")):
             self._last_slider_signature = signature or self._last_slider_signature
             return {"acted": False, "verified": True, "kind": "slider", "state": state, "reason": "complete"}
@@ -261,18 +262,15 @@ class AutoInteractionController:
         target_fraction = float(target.get("targetFraction"))
         self._last_action_at = time.monotonic()
         result = self._slider_actions.apply(target_fraction, state=state)
-        verification = self._verify_slider(state, target_fraction, result.get("state") if isinstance(result, dict) else None)
-        fallback = None
+        verification = self._verify_slider(
+            state,
+            target_fraction,
+            result.get("state") if isinstance(result, dict) else None,
+        )
 
-        if bool(result.get("moved")) and not bool(verification.get("verified")):
-            latest = verification.get("state") if isinstance(verification.get("state"), dict) else self._slider_adapter.poll()
-            if latest.get("kind") == "slider" and not latest.get("complete") and not latest.get("failed"):
-                fallback = self._slider_actions.apply(target_fraction, state=latest, force_fallback=True)
-                verification = self._verify_slider(latest, target_fraction, fallback.get("state") if isinstance(fallback, dict) else None)
-
-        acted = bool(result.get("moved")) or bool((fallback or {}).get("moved"))
+        acted = bool(result.get("moved")) if isinstance(result, dict) else False
         if acted:
-            self._last_slider_signature = signature
+            self._last_slider_signature = str(result.get("calibrationSignature") or signature)
         payload = {
             "acted": acted,
             "verified": bool(verification.get("verified")),
@@ -281,8 +279,6 @@ class AutoInteractionController:
             "result": result,
             "verification": verification,
         }
-        if fallback is not None:
-            payload["fallback"] = fallback
         self._record("action", payload)
         return payload
 
@@ -315,28 +311,30 @@ class AutoInteractionController:
         }
 
     def _verify_slider(self, before: Dict[str, Any], target: float, initial: Any) -> Dict[str, Any]:
-        before_fraction = float(before.get("fraction") or 0.0)
-        before_distance = abs(before_fraction - target)
         state = initial if isinstance(initial, dict) else self._slider_adapter.poll()
         deadline = time.monotonic() + 1.25
         while time.monotonic() < deadline:
-            if state.get("kind") != "slider":
-                return {"verified": True, "reason": "slider-cleared", "state": state}
             if bool(state.get("complete")):
-                return {"verified": True, "reason": "complete-state", "state": state}
+                return {"verified": True, "reason": "explicit-complete", "state": state}
             if bool(state.get("failed")):
-                return {"verified": False, "reason": "failed-state", "state": state}
-            current = float(state.get("fraction") or 0.0)
-            current_distance = abs(current - target)
-            movement = abs(current - before_fraction)
-            tolerance = max(0.025, min(0.08, before_distance * 0.18))
-            if current_distance <= tolerance:
-                return {"verified": True, "reason": "target-reached", "distance": current_distance, "state": state}
-            if movement >= 0.02 and current_distance < before_distance * 0.45:
-                return {"verified": True, "reason": "target-approached", "distance": current_distance, "state": state}
+                return {"verified": False, "reason": "explicit-failure", "state": state}
+            if state.get("kind") == "slider":
+                current = float(state.get("fraction") or 0.0)
+                current_distance = abs(current - target)
+                if current_distance <= 0.02:
+                    return {
+                        "verified": True,
+                        "reason": "target-within-tolerance",
+                        "distance": current_distance,
+                        "state": state,
+                    }
             time.sleep(0.06)
             state = self._slider_adapter.poll()
-        return {"verified": False, "reason": "no-confirmed-target-change", "state": state}
+        return {
+            "verified": False,
+            "reason": "no-explicit-success-or-target-tolerance",
+            "state": state,
+        }
 
     def _record(self, phase: str, payload: Dict[str, Any]) -> None:
         if self._trace is None:

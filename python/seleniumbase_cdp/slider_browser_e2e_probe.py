@@ -166,13 +166,15 @@ def main() -> int:
         failed = [hit for hit in hits if hit.get("type") == "failed"]
         target = result.get("target") if isinstance(result.get("target"), dict) else {}
         action = result.get("result") if isinstance(result.get("result"), dict) else {}
-        actual_fraction = float(completed[0].get("fraction") or -1.0) if completed else -1.0
+        actual_fraction = float(completed[-1].get("fraction") or -1.0) if completed else -1.0
 
         print(
             "SLIDER_E2E_DIAGNOSTIC "
             f"source={target.get('source')!r} groundedFraction={target.get('targetFraction')!r} "
             f"actionMode={action.get('mode')!r} "
-            f"endHoldBacktrack={action.get('endHoldBacktrack')!r} serverFraction={actual_fraction:.6f} "
+            f"endHoldBacktrack={action.get('endHoldBacktrack')!r} "
+            f"correctionDrags={action.get('correctionDrags')!r} "
+            f"verified={action.get('verified')!r} serverFraction={actual_fraction:.6f} "
             f"failedHits={len(failed)}"
         )
 
@@ -182,9 +184,12 @@ def main() -> int:
         assert str(action.get("mode") or "").startswith("path:"), action
         assert str(action.get("mode") or "").endswith(":cdp"), action
         assert action.get("endHoldBacktrack") is True, action
-        assert len(completed) == 1 and not failed, hits
+        assert int(action.get("correctionDrags") or 0) <= 3, action
+        assert action.get("verified") is True or result.get("verified") is True, result
+        assert len(completed) == 1, hits
+        assert len(failed) <= 3, hits
         assert actual_fraction >= 0.94, actual_fraction
-        print("PASS: local end-slider completed through ARES CDP drag path.")
+        print("PASS: local end-slider completed through feedback-controlled ARES CDP drag path.")
         return 0
     finally:
         if adapter is not None:
