@@ -150,8 +150,8 @@ describe("SeleniumBase CDP architecture guard", () => {
       expect(source).not.toContain("field-semantic-resolver");
       expect(source).not.toContain("payment-preparer");
     }
-    expect(manualController).toContain('const SELENIUMBASE_PROFILE_DIR = ".ares-seleniumbase-cdp"');
-    expect(manualController).toContain("resolveUserDataDir(profileId)");
+    expect(manualController).not.toContain(".ares-seleniumbase-cdp");
+    expect(manualController).toContain("return resolveProfileUserDataDir(profileId, this.profileRoot);");
   });
 
   it("uses the same full SeleniumBase runtime for rendered product monitoring without bypassing control priority", () => {
