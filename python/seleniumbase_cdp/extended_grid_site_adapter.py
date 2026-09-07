@@ -217,6 +217,18 @@ class ExtendedGridSiteAdapter(GridSiteAdapter):
     MIN_VIEWPORT_RATIO = 0.55
 
     def poll(self) -> Dict[str, Any]:
+        # Explicit adapter overrides are authoritative. Re-snapshot the exact
+        # configured grid on every validation call so visual mutations are still
+        # detected, but do not also scan every generic document/frame/OOPIF
+        # producer. Large grids otherwise multiply the cost of each pre-click
+        # stale-state check and can starve the worker control loop.
+        if self._overrides.get("tiles"):
+            explicit = self._snapshot_document()
+            if bool(explicit.get("complete")) or bool(explicit.get("failed")):
+                return self._with_generation(explicit)
+            if bool(explicit.get("override")) and self._candidate_is_plausible(explicit):
+                return self._with_generation(explicit)
+
         producers = (
             self._snapshot_document,
             self._snapshot_extended_document,
