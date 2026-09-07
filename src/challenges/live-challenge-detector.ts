@@ -14,7 +14,24 @@ export class LiveChallengeDetector {
     const lowerHtml = safeHtml.toLowerCase();
     const lowerTitle = safeTitle.toLowerCase();
 
-    // 1. Generic Interstitial (Cloudflare "Just a moment...", etc.)
+    // 1. DataDome CAPTCHA / challenge page
+    if (
+      lowerTitle.includes("datadome captcha") ||
+      lowerUrl.includes("captcha-delivery.com") ||
+      lowerHtml.includes("captcha-delivery.com") ||
+      lowerHtml.includes('title="datadome captcha"') ||
+      lowerHtml.includes("geo.captcha-delivery.com") ||
+      lowerHtml.includes("ct.captcha-delivery.com")
+    ) {
+      return {
+        detected: true,
+        type: "datadome",
+        url: safeUrl,
+        title: safeTitle
+      };
+    }
+
+    // 2. Generic Interstitial (Cloudflare "Just a moment...", etc.)
     if (
       lowerTitle.includes("just a moment") ||
       lowerHtml.includes("cf-browser-verification") ||
@@ -29,7 +46,7 @@ export class LiveChallengeDetector {
       };
     }
 
-    // 2. Shopify Queue / Throttle Warteraum
+    // 3. Shopify Queue / Throttle Warteraum
     if (
       lowerUrl.includes("/throttle") ||
       lowerUrl.includes("/queue") ||
@@ -44,7 +61,7 @@ export class LiveChallengeDetector {
       };
     }
 
-    // 3. Cloudflare Turnstile
+    // 4. Cloudflare Turnstile
     if (
       lowerHtml.includes("cf-turnstile") ||
       lowerHtml.includes("challenges.cloudflare.com") ||
@@ -59,7 +76,7 @@ export class LiveChallengeDetector {
       };
     }
 
-    // 4. Google reCAPTCHA
+    // 5. Google reCAPTCHA
     if (
       lowerHtml.includes("g-recaptcha") ||
       lowerHtml.includes("recaptcha/api.js") ||
@@ -73,7 +90,7 @@ export class LiveChallengeDetector {
       };
     }
 
-    // 5. hCaptcha
+    // 6. hCaptcha
     if (
       lowerHtml.includes("h-captcha") ||
       lowerHtml.includes("hcaptcha.com") ||
@@ -87,7 +104,7 @@ export class LiveChallengeDetector {
       };
     }
 
-    // 6. Shopify Checkpoint (ohne spezifisches Widget)
+    // 7. Shopify Checkpoint (ohne spezifisches Widget)
     if (
       lowerUrl.includes("/checkpoint") ||
       lowerHtml.includes("form#checkpoint-form") ||
@@ -127,6 +144,14 @@ export class LiveChallengeDetector {
     if (typeof (page as any).evaluate === "function") {
       try {
         const evalResult = await (page as any).evaluate(() => {
+          const hasDataDome = Boolean(
+            document.title.toLowerCase().includes("datadome captcha") ||
+            document.querySelector('iframe[title*="DataDome" i]') ||
+            document.querySelector('iframe[src*="captcha-delivery.com"]') ||
+            document.querySelector('script[src*="captcha-delivery.com"]')
+          );
+          if (hasDataDome) return "datadome";
+
           const hasTurnstile = Boolean(
             document.querySelector('input[name="cf-turnstile-response"]') ||
             document.querySelector('.cf-turnstile') ||
