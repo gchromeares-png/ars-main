@@ -171,6 +171,7 @@ export class BrowserQueueWaiter {
       ? String(existing["detectedAt"])
       : new Date(startedAt).toISOString();
     let clearCount = 0;
+    let releaseSignal: QueueSignal | undefined;
     let lastSignal: QueueSignal = initial.active
       ? initial
       : {
@@ -186,6 +187,7 @@ export class BrowserQueueWaiter {
       const signal = await this.readSignal();
       if (signal.active) {
         clearCount = 0;
+        releaseSignal = undefined;
         lastSignal = signal;
         this.publish({
           active: true, phase: "waiting", position: signal.position,
@@ -193,12 +195,14 @@ export class BrowserQueueWaiter {
           source: signal.source, detectedAt, updatedAt: new Date().toISOString(), elapsedMs, maxWaitMs
         });
       } else {
+        if (clearCount === 0 || signal.source !== "url") releaseSignal = signal;
         clearCount += 1;
         if (clearCount >= releaseConfirmations) {
           const releasedAt = new Date().toISOString();
+          const confirmedRelease = releaseSignal ?? signal;
           this.publish({
             active: false, phase: "released", position: lastSignal.position,
-            timeToWaitSeconds: 0, statusText: signal.statusText || "Warteschlange verlassen", source: signal.source || lastSignal.source,
+            timeToWaitSeconds: 0, statusText: confirmedRelease.statusText || "Warteschlange verlassen", source: confirmedRelease.source,
             detectedAt, updatedAt: releasedAt, releasedAt, elapsedMs, maxWaitMs
           });
           return { detected: true, released: true, elapsedMs };
