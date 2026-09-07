@@ -89,8 +89,23 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Setup Python for session HTTP E2E
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-seleniumbase-cdp.txt
+
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Install session HTTP runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
+
+      - name: Verify real CDP to curl_cffi queue chain
+        env:
+          ARES_RUN_BROWSER_INTEGRATION: "1"
+        run: npx jest --runInBand tests/queue-monitor-session-http.integration.test.ts
 
       - name: Verify GhostCursor and Bezier providers
         run: node python/seleniumbase_cdp/cursor_path_helper_probe.cjs
