@@ -24,8 +24,12 @@ export function resolveMonitorPolicy(task: Task, shop: CommerceShop): MonitorPol
   const shopPolicy = record(shop.config?.["monitorPolicy"]);
   const legacyTaskMode = String(taskData["monitorNetworkMode"] ?? "").trim().toLowerCase();
   const legacyShopMode = String(shop.config?.["monitorNetworkMode"] ?? "").trim().toLowerCase();
-  const policyMode = taskPolicy?.["networkMode"] ?? shopPolicy?.["networkMode"];
-  const configuredMode = String(policyMode ?? (legacyTaskMode || legacyShopMode)).trim().toLowerCase();
+  const configuredMode = String(
+    taskPolicy?.["networkMode"]
+      ?? (legacyTaskMode || undefined)
+      ?? shopPolicy?.["networkMode"]
+      ?? legacyShopMode
+  ).trim().toLowerCase();
   const networkMode: MonitorNetworkMode = configuredMode === "browser-only" || configuredMode === "strict" || configuredMode === "high-security"
     ? "browser-only"
     : "session-http-preferred";
