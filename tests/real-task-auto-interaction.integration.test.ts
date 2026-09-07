@@ -17,7 +17,7 @@ const describeBrowserIntegration = process.env["ARES_RUN_BROWSER_INTEGRATION"] =
   : describe.skip;
 
 type SolveHit = {
-  type: "solved" | "failed";
+  type: "frame-loaded" | "solved" | "failed";
   trusted: string;
   fraction: string;
 };
@@ -61,6 +61,11 @@ function fixtureServer(hits: SolveHit[]): http.Server {
 
   const server = http.createServer((request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (url.pathname === "/frame-loaded") {
+      hits.push({ type: "frame-loaded", trusted: "", fraction: "" });
+      send(response, "ok", "text/plain; charset=utf-8");
+      return;
+    }
     if (url.pathname === "/solved" || url.pathname === "/failed") {
       hits.push({
         type: url.pathname === "/solved" ? "solved" : "failed",
@@ -82,6 +87,7 @@ function fixtureServer(hits: SolveHit[]): http.Server {
         #status{margin-top:9px;height:20px}
       </style></head><body><div id="mount">Rätsel wird geladen …</div><script>
       (() => {
+        fetch('/frame-loaded').catch(() => undefined);
         setTimeout(() => {
           const mount = document.getElementById('mount');
           mount.innerHTML = '<div id="slider-fixture">' +
@@ -175,7 +181,7 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
     const server = fixtureServer(hits);
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
+      server.listen(0, () => resolve());
     });
 
     const address = server.address() as AddressInfo;
@@ -232,10 +238,15 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
 
     const run = orchestrator.startTask(task.id);
     try {
+      await waitFor(
+        () => hits.find(hit => hit.type === "frame-loaded"),
+        15_000,
+        `cross-origin iframe load; hits=${JSON.stringify(hits)}`
+      );
       const solved = await waitFor(
         () => hits.find(hit => hit.type === "solved"),
         70_000,
-        `trusted automatic slider solve; hits=${JSON.stringify(hits)}`
+        `trusted automatic slider solve after frame load; hits=${JSON.stringify(hits)}`
       );
 
       expect(solved.trusted).toBe("true");
@@ -248,13 +259,6 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
         profileId: profile.id,
         isolatedPerProfile: true
       });
-
-      const tracePath = await waitFor(
-        () => undefined,
-        1,
-        "noop"
-      ).catch(() => undefined);
-      void tracePath;
     } finally {
       orchestrator.cancelTask(task.id);
       await run.catch(() => undefined);
@@ -271,8 +275,9 @@ describeBrowserIntegration("real task auto-interaction wiring", () => {
       expect(trace).toMatch(/:cdp/);
     }
 
+    expect(hits.filter(hit => hit.type === "frame-loaded")).toHaveLength(1);
     expect(hits.filter(hit => hit.type === "solved")).toHaveLength(1);
-    expect(hits.every(hit => hit.trusted === "true")).toBe(true);
+    expect(hits.filter(hit => hit.type !== "frame-loaded").every(hit => hit.trusted === "true")).toBe(true);
     await rm(profileRoot, { recursive: true, force: true });
   });
 
