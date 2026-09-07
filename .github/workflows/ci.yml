@@ -101,6 +101,12 @@ jobs:
           tests/ephemeral-payment-executor.test.ts
           tests/payment-persistence-safety.test.ts
           tests/payment-preparation.test.ts
+          tests/payment-readiness.test.ts
+          tests/final-submit-recovery.test.ts
+          tests/checkout-outcome-observer.test.ts
+          tests/shopify-purchase-ready-executor.test.ts
+          tests/retry-policy-block.test.ts
+          tests/pokemon-center-final-purchase-guard.test.ts
           tests/payment-source-guard.test.ts
           tests/browser-gate-monitor-lanes.test.ts
           tests/commerce-monitor-browser-fallback.test.ts

@@ -1,4 +1,5 @@
 import type { Locator, Page } from "../browser-worker/types";
+import { observeCheckoutOutcome } from "../browser-worker/checkout-outcome-observer";
 import { GhostCursorUiInteractionHelper } from "../browser-worker/ui-interaction-helper";
 
 const FINAL_SUBMIT_PATTERNS = [
@@ -38,6 +39,10 @@ export class ShopifyCheckoutJourney {
     return Boolean(await this.findMatchingControl(page, FINAL_SUBMIT_PATTERNS));
   }
 
+  async isOrderConfirmed(page: Page): Promise<boolean> {
+    return (await observeCheckoutOutcome(page)).confirmed;
+  }
+
   async advanceCheckout(page: Page): Promise<boolean> {
     const candidate = await this.findMatchingControl(page, SAFE_ADVANCE_PATTERNS, FINAL_SUBMIT_PATTERNS);
     if (!candidate) return false;
@@ -51,6 +56,7 @@ export class ShopifyCheckoutJourney {
     }
   }
 
+  /** Returns only whether the guarded irreversible click was dispatched. */
   async submitOrder(page: Page, canPurchase: () => boolean): Promise<boolean> {
     const candidate = await this.findMatchingControl(page, FINAL_SUBMIT_PATTERNS);
     if (!candidate) return false;

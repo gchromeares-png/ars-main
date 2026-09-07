@@ -1,4 +1,5 @@
 import type { Locator, Page } from "../../browser-worker/types";
+import { observeCheckoutOutcome } from "../../browser-worker/checkout-outcome-observer";
 import { GhostCursorUiInteractionHelper } from "../../browser-worker/ui-interaction-helper";
 import type { CommerceShop } from "../platforms";
 import { ProductMatcher } from "../../monitor/product-matcher";
@@ -152,6 +153,10 @@ export class PokemonCenterReleaseJourney implements ReleaseJourney {
     return Boolean(await this.findButton(page, FINAL_PURCHASE_TEXT));
   }
 
+  async isOrderConfirmed(page: Page, _shop: CommerceShop): Promise<boolean> {
+    return (await observeCheckoutOutcome(page)).confirmed;
+  }
+
   async advanceCheckout(page: Page, _shop: CommerceShop): Promise<boolean> {
     const candidate = await this.findButton(page, SAFE_CONTINUE_TEXT, FINAL_PURCHASE_TEXT);
     if (!candidate) return false;
@@ -161,6 +166,7 @@ export class PokemonCenterReleaseJourney implements ReleaseJourney {
     return true;
   }
 
+  /** Returns only whether the guarded irreversible click was dispatched. */
   async submitOrder(page: Page, _shop: CommerceShop, allowFinalPurchase: () => boolean): Promise<boolean> {
     const candidate = await this.findButton(page, FINAL_PURCHASE_TEXT);
     if (!candidate) return false;

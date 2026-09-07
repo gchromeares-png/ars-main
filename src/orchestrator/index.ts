@@ -60,6 +60,8 @@ export class TaskOrchestrator {
     });
 
     this.eventBus.on("taskFailed", task => {
+      const retryPolicy = task.config.data?.["retryPolicy"] as Record<string, unknown> | undefined;
+      if (retryPolicy?.["blocked"] === true) return;
       if (task.retries < task.maxRetries) {
         task.retries += 1;
         this.transition(task, TaskState.RETRYING);

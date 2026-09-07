@@ -8,6 +8,8 @@ import {
   type SemanticCheckoutPreparationResult
 } from "../browser-worker/semantic-checkout-preparer";
 import { CheckoutPaymentPreparer } from "../browser-worker/checkout-payment-preparer";
+import { evaluatePaymentReadiness, type PaymentReadinessReason } from "../browser-worker/payment-readiness";
+import { confirmFinalSubmitWithRetries } from "../browser-worker/final-submit-recovery";
 import { ShopifyCheckoutJourney } from "./checkout-journey";
 
 interface ShopifyCheckoutBaseExecutor {
@@ -32,6 +34,7 @@ interface CheckoutJourney {
   isReadyForFinalSubmit(page: Page): Promise<boolean>;
   advanceCheckout(page: Page): Promise<boolean>;
   submitOrder(page: Page, canPurchase: () => boolean): Promise<boolean>;
+  isOrderConfirmed?(page: Page): Promise<boolean>;
 }
 
 interface ActiveCheckout {
@@ -40,11 +43,6 @@ interface ActiveCheckout {
   purchaseReady: boolean;
 }
 
-/**
- * Extends the existing Shopify executor from "checkout opened + address ready"
- * to a real purchase-ready lifecycle. Final order submission remains guarded by
- * the existing backend-wide purchase permission and is blocked by default.
- */
 export class ShopifyPurchaseReadyExecutor implements ITaskExecutor {
   private readonly active = new Map<string, ActiveCheckout>();
   private allowFinalPurchase = false;
@@ -58,11 +56,7 @@ export class ShopifyPurchaseReadyExecutor implements ITaskExecutor {
     private readonly journey: CheckoutJourney = new ShopifyCheckoutJourney()
   ) {}
 
-  async execute(
-    task: Task,
-    profile?: AresProfile,
-    paymentSession?: CheckoutPaymentSession
-  ): Promise<boolean> {
+  async execute(task: Task, profile?: AresProfile, paymentSession?: CheckoutPaymentSession): Promise<boolean> {
     if (!profile) {
       task.lastError = "Shopify Purchase-Ready-Flow benötigt das zugeordnete Profil.";
       return false;
@@ -81,11 +75,7 @@ export class ShopifyPurchaseReadyExecutor implements ITaskExecutor {
       return false;
     }
 
-    const active: ActiveCheckout = {
-      task,
-      controller: new AbortController(),
-      purchaseReady: false
-    };
+    const active: ActiveCheckout = { task, controller: new AbortController(), purchaseReady: false };
     this.active.set(task.id, active);
 
     try {
@@ -110,7 +100,26 @@ export class ShopifyPurchaseReadyExecutor implements ITaskExecutor {
         if (submitted) {
           this.publishFlow(task, "submitted");
           this.publishFinalPurchaseStatus(task, "submitted");
-          return true;
+
+          const recovery = await confirmFinalSubmitWithRetries(
+            () => this.journey.isOrderConfirmed?.(page) ?? Promise.resolve(false),
+            {
+              attempts: this.orderConfirmationAttempts(task),
+              delayMs: this.orderConfirmationRetryDelayMs(task),
+              signal: active.controller.signal
+            }
+          );
+          if (recovery.confirmed) {
+            this.publishFlow(task, "confirmed");
+            this.publishFinalPurchaseStatus(task, "confirmed");
+            return true;
+          }
+
+          task.lastError = "Finaler Bestell-Submit wurde ausgelöst, aber kein bestätigter Bestellerfolg erkannt. Nach zwei Recovery-Versuchen wird aus Sicherheitsgründen nicht erneut abgesendet.";
+          this.blockRetryAfterAmbiguousSubmit(task, recovery.attempts, recovery.maxAttempts);
+          this.publishFinalPurchaseStatus(task, "confirmation-missing");
+          this.onTaskUpdate(task);
+          return false;
         }
 
         this.publishFinalPurchaseStatus(task, this.allowFinalPurchase ? "not-ready" : "blocked");
@@ -168,12 +177,11 @@ export class ShopifyPurchaseReadyExecutor implements ITaskExecutor {
     let profileReady = initialProfile?.["requiredTargetsSatisfied"] === true;
     let lastProfile: SemanticCheckoutPreparationResult | undefined;
     let lastPayment: PaymentPreparationResult | undefined;
+    let lastPaymentReason: PaymentReadinessReason = paymentSession ? "missing-preparation" : "missing-session";
 
     while (!active.controller.signal.aborted && Date.now() < deadline) {
       lastProfile = await this.checkoutPreparer.prepare(page, profile).catch(() => undefined);
-      if (lastProfile && lastProfile.requiredTargetCount > 0) {
-        profileReady = lastProfile.requiredTargetsSatisfied;
-      }
+      if (lastProfile && lastProfile.requiredTargetCount > 0) profileReady = lastProfile.requiredTargetsSatisfied;
 
       lastPayment = await this.paymentPreparer.prepare(page, paymentSession).catch(error => ({
         detectedMethods: [],
@@ -184,10 +192,15 @@ export class ShopifyPurchaseReadyExecutor implements ITaskExecutor {
         note: `Zahlungsprüfung fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`
       }));
 
-      const reviewReady = profileReady && await this.journey.isReadyForFinalSubmit(page).catch(() => false);
+      const paymentReadiness = evaluatePaymentReadiness(paymentSession, lastPayment);
+      lastPaymentReason = paymentReadiness.reason;
+      const finalControlReady = await this.journey.isReadyForFinalSubmit(page).catch(() => false);
+      const reviewReady = profileReady && paymentReadiness.ready && finalControlReady;
       this.publishCheckoutPreparation(task, {
         phase: reviewReady ? "purchase-ready" : "preparing",
         profileReady,
+        paymentReady: paymentReadiness.ready,
+        paymentReadinessReason: paymentReadiness.reason,
         reviewReady,
         profile: lastProfile,
         payment: lastPayment
@@ -201,13 +214,17 @@ export class ShopifyPurchaseReadyExecutor implements ITaskExecutor {
     if (active.controller.signal.aborted) return;
     const reason = !profileReady
       ? "Shopify Checkout-Adresse/Profil wurde nicht vollständig bestätigt."
-      : "Shopify Checkout erreichte keinen finalen kaufbereiten Review-/Submit-Zustand.";
+      : lastPaymentReason !== "ready"
+        ? `Shopify Checkout-Zahlung ist nicht kaufbereit (${lastPaymentReason}).`
+        : "Shopify Checkout erreichte keinen finalen kaufbereiten Review-/Submit-Zustand.";
     throw new Error(reason);
   }
 
   private publishCheckoutPreparation(task: Task, input: {
     phase: "preparing" | "purchase-ready";
     profileReady: boolean;
+    paymentReady: boolean;
+    paymentReadinessReason: PaymentReadinessReason;
     reviewReady: boolean;
     profile?: SemanticCheckoutPreparationResult;
     payment?: PaymentPreparationResult;
@@ -217,6 +234,8 @@ export class ShopifyPurchaseReadyExecutor implements ITaskExecutor {
       checkoutPreparation: {
         phase: input.phase,
         profileReady: input.profileReady,
+        paymentReady: input.paymentReady,
+        paymentReadinessReason: input.paymentReadinessReason,
         reviewReady: input.reviewReady,
         ...(input.profile ? {
           profile: {
@@ -236,36 +255,69 @@ export class ShopifyPurchaseReadyExecutor implements ITaskExecutor {
     this.onTaskUpdate(task);
   }
 
-  private publishFlow(task: Task, stage: "checkout" | "purchase-ready" | "submitted"): void {
+  private publishFlow(task: Task, stage: "checkout" | "purchase-ready" | "submitted" | "confirmed"): void {
     const now = new Date().toISOString();
     const shopify = task.config.data?.["shopify"] as Record<string, unknown> | undefined;
     task.config.data = {
       ...(task.config.data ?? {}),
       shopifyFlow: { stage, updatedAt: now },
-      ...(stage === "submitted" ? {
-        shopify: { ...(shopify ?? {}), finalPaymentSubmitted: true }
+      ...(stage === "submitted" || stage === "confirmed" ? {
+        shopify: {
+          ...(shopify ?? {}),
+          finalPaymentSubmitted: true,
+          ...(stage === "confirmed" ? { finalPaymentConfirmed: true } : {})
+        }
       } : {})
     };
     this.onTaskUpdate(task);
   }
 
-  private publishFinalPurchaseStatus(task: Task, status: "blocked" | "armed" | "not-ready" | "submitted"): void {
+  private publishFinalPurchaseStatus(
+    task: Task,
+    status: "blocked" | "armed" | "not-ready" | "submitted" | "confirmed" | "confirmation-missing"
+  ): void {
     const now = new Date().toISOString();
+    const previous = task.config.data?.["finalPurchaseRuntime"] as Record<string, unknown> | undefined;
     task.config.data = {
       ...(task.config.data ?? {}),
       finalPurchaseRuntime: {
+        ...(previous ?? {}),
         allowFinalPurchase: this.allowFinalPurchase,
         status,
         updatedAt: now,
-        ...(status === "submitted" ? { submittedAt: now } : {})
+        ...((status === "submitted" || status === "confirmed" || status === "confirmation-missing") && !previous?.["submittedAt"] ? { submittedAt: now } : {}),
+        ...(status === "confirmed" ? { confirmedAt: now } : {})
       }
     };
     this.onTaskUpdate(task);
   }
 
+  private blockRetryAfterAmbiguousSubmit(task: Task, attempts: number, maxAttempts: number): void {
+    task.config.data = {
+      ...(task.config.data ?? {}),
+      retryPolicy: {
+        blocked: true,
+        reason: "ambiguous-final-submit",
+        attempts,
+        maxAttempts,
+        updatedAt: new Date().toISOString()
+      }
+    };
+  }
+
   private checkoutPreparationMaxMs(task: Task): number {
     const raw = Number(task.config.data?.["checkoutPreparationMaxMs"] ?? 10 * 60_000);
     return Number.isFinite(raw) ? Math.min(30 * 60_000, Math.max(30_000, raw)) : 10 * 60_000;
+  }
+
+  private orderConfirmationAttempts(task: Task): number {
+    const raw = Number(task.config.data?.["orderConfirmationAttempts"] ?? 2);
+    return Number.isFinite(raw) ? Math.min(5, Math.max(2, Math.floor(raw))) : 2;
+  }
+
+  private orderConfirmationRetryDelayMs(task: Task): number {
+    const raw = Number(task.config.data?.["orderConfirmationRetryDelayMs"] ?? 750);
+    return Number.isFinite(raw) ? Math.min(5_000, Math.max(0, Math.floor(raw))) : 750;
   }
 
   private delay(ms: number, signal: AbortSignal): Promise<void> {

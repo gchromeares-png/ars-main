@@ -10,6 +10,8 @@ import type { BrowserWorker } from "./browser-worker";
 import type { Page } from "./types";
 import { BrowserQueueWaiter } from "./queue-waiter";
 import { CheckoutPaymentPreparer } from "./checkout-payment-preparer";
+import { evaluatePaymentReadiness, type PaymentReadinessReason } from "./payment-readiness";
+import { confirmFinalSubmitWithRetries } from "./final-submit-recovery";
 import { SemanticCheckoutPreparer, type SemanticCheckoutPreparationResult } from "./semantic-checkout-preparer";
 import { normalizeDiscoveryKeywords, setEarlyGateRuntime } from "../monitor/early-gate";
 import type { ReleaseJourney } from "../commerce/release-discovery/release-journey";
@@ -118,18 +120,13 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
         waiter.stop();
       }
 
-      this.markStage(task, "post-queue-discovery", {
-        postQueueDiscoveryAt: new Date().toISOString()
-      });
+      this.markStage(task, "post-queue-discovery", { postQueueDiscoveryAt: new Date().toISOString() });
       this.publishKeywords(session);
 
       const discoveryDeadline = Date.now() + this.discoveryMaxMs(task);
       let product;
       while (!session.controller.signal.aborted && Date.now() < discoveryDeadline) {
-        product = await journey.discover(page, shop, {
-          productName,
-          keywords: [...session.keywords]
-        });
+        product = await journey.discover(page, shop, { productName, keywords: [...session.keywords] });
         if (product) break;
         await this.delay(this.discoveryIntervalMs(task), session.controller.signal);
       }
@@ -151,17 +148,18 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
       this.markStage(task, "cart", { cartAt: new Date().toISOString() });
 
       await journey.openCheckout(page, shop);
+      const initialPaymentReadiness = evaluatePaymentReadiness(paymentSession, undefined);
       this.publishCheckoutPreparation(task, {
         phase: "checkout-opened",
         profileReady: false,
+        paymentReady: initialPaymentReadiness.ready,
+        paymentReadinessReason: initialPaymentReadiness.reason,
         reviewReady: false
       });
 
       await this.prepareCheckoutUntilReady(task, session, journey, page, shop, profile, paymentSession);
       if (session.controller.signal.aborted) return true;
 
-      // CHECKOUT means purchase-ready now: profile/address was completed and the
-      // final enabled submit control is present after safe checkout progression.
       this.markStage(task, "checkout", { checkoutAt: new Date().toISOString() });
       this.publishFinalPurchaseStatus(task, "blocked");
 
@@ -171,11 +169,27 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
           continue;
         }
 
-        // The global permission is checked again inside submitOrder immediately before click.
         const submitted = await journey.submitOrder(page, shop, () => this.allowFinalPurchase);
         if (submitted) {
           this.publishFinalPurchaseStatus(task, "submitted");
-          return true;
+          const recovery = await confirmFinalSubmitWithRetries(
+            () => journey.isOrderConfirmed?.(page, shop) ?? Promise.resolve(false),
+            {
+              attempts: this.orderConfirmationAttempts(task),
+              delayMs: this.orderConfirmationRetryDelayMs(task),
+              signal: session.controller.signal
+            }
+          );
+          if (recovery.confirmed) {
+            this.publishFinalPurchaseStatus(task, "confirmed");
+            return true;
+          }
+
+          task.lastError = "Finaler Bestell-Submit wurde ausgelöst, aber kein bestätigter Bestellerfolg erkannt. Nach zwei Recovery-Versuchen wird aus Sicherheitsgründen nicht erneut abgesendet.";
+          this.blockRetryAfterAmbiguousSubmit(task, recovery.attempts, recovery.maxAttempts);
+          this.publishFinalPurchaseStatus(task, "confirmation-missing");
+          this.emit(task);
+          return false;
         }
 
         this.publishFinalPurchaseStatus(task, this.allowFinalPurchase ? "not-ready" : "blocked");
@@ -236,6 +250,7 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
     let profileReady = false;
     let lastProfile: SemanticCheckoutPreparationResult | undefined;
     let lastPayment: PaymentPreparationResult | undefined;
+    let lastPaymentReason: PaymentReadinessReason = paymentSession ? "missing-preparation" : "missing-session";
 
     while (!session.controller.signal.aborted && Date.now() < deadline) {
       lastProfile = await this.checkoutPreparer.prepare(page, profile).catch(() => undefined);
@@ -250,10 +265,15 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
         note: `Zahlungsprüfung fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`
       }));
 
-      const reviewReady = profileReady && await journey.isReadyForFinalSubmit(page, shop);
+      const paymentReadiness = evaluatePaymentReadiness(paymentSession, lastPayment);
+      lastPaymentReason = paymentReadiness.reason;
+      const finalControlReady = await journey.isReadyForFinalSubmit(page, shop).catch(() => false);
+      const reviewReady = profileReady && paymentReadiness.ready && finalControlReady;
       this.publishCheckoutPreparation(task, {
         phase: reviewReady ? "purchase-ready" : "preparing",
         profileReady,
+        paymentReady: paymentReadiness.ready,
+        paymentReadinessReason: paymentReadiness.reason,
         reviewReady,
         profile: lastProfile,
         payment: lastPayment
@@ -267,13 +287,17 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
     if (session.controller.signal.aborted) return;
     const reason = !profileReady
       ? "Checkout-Adresse/Profil wurde nicht vollständig bestätigt."
-      : "Finaler kaufbereiter Review-/Submit-Zustand wurde nicht erreicht.";
+      : lastPaymentReason !== "ready"
+        ? `Checkout-Zahlung ist nicht kaufbereit (${lastPaymentReason}).`
+        : "Finaler kaufbereiter Review-/Submit-Zustand wurde nicht erreicht.";
     throw new Error(reason);
   }
 
   private publishCheckoutPreparation(task: Task, input: {
     phase: "checkout-opened" | "preparing" | "purchase-ready";
     profileReady: boolean;
+    paymentReady: boolean;
+    paymentReadinessReason: PaymentReadinessReason;
     reviewReady: boolean;
     profile?: SemanticCheckoutPreparationResult;
     payment?: PaymentPreparationResult;
@@ -283,6 +307,8 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
       checkoutPreparation: {
         phase: input.phase,
         profileReady: input.profileReady,
+        paymentReady: input.paymentReady,
+        paymentReadinessReason: input.paymentReadinessReason,
         reviewReady: input.reviewReady,
         ...(input.profile ? {
           profile: {
@@ -316,18 +342,37 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
     this.emit(session.task);
   }
 
-  private publishFinalPurchaseStatus(task: Task, status: "blocked" | "armed" | "not-ready" | "submitted"): void {
+  private publishFinalPurchaseStatus(
+    task: Task,
+    status: "blocked" | "armed" | "not-ready" | "submitted" | "confirmed" | "confirmation-missing"
+  ): void {
     const now = new Date().toISOString();
+    const previous = task.config.data?.["finalPurchaseRuntime"] as Record<string, unknown> | undefined;
     task.config.data = {
       ...(task.config.data ?? {}),
       finalPurchaseRuntime: {
+        ...(previous ?? {}),
         allowFinalPurchase: this.allowFinalPurchase,
         status,
         updatedAt: now,
-        ...(status === "submitted" ? { submittedAt: now } : {})
+        ...((status === "submitted" || status === "confirmed" || status === "confirmation-missing") && !previous?.["submittedAt"] ? { submittedAt: now } : {}),
+        ...(status === "confirmed" ? { confirmedAt: now } : {})
       }
     };
     this.emit(task);
+  }
+
+  private blockRetryAfterAmbiguousSubmit(task: Task, attempts: number, maxAttempts: number): void {
+    task.config.data = {
+      ...(task.config.data ?? {}),
+      retryPolicy: {
+        blocked: true,
+        reason: "ambiguous-final-submit",
+        attempts,
+        maxAttempts,
+        updatedAt: new Date().toISOString()
+      }
+    };
   }
 
   private markStage(task: Task, stage: "post-queue-discovery" | "product-found" | "cart" | "checkout", timestamps: Record<string, string>): void {
@@ -368,6 +413,16 @@ export class EarlyGateBrowserTaskExecutor implements ITaskExecutor {
   private checkoutPreparationMaxMs(task: Task): number {
     const raw = Number(task.config.data?.["checkoutPreparationMaxMs"] ?? 10 * 60_000);
     return Number.isFinite(raw) ? Math.min(30 * 60_000, Math.max(30_000, raw)) : 10 * 60_000;
+  }
+
+  private orderConfirmationAttempts(task: Task): number {
+    const raw = Number(task.config.data?.["orderConfirmationAttempts"] ?? 2);
+    return Number.isFinite(raw) ? Math.min(5, Math.max(2, Math.floor(raw))) : 2;
+  }
+
+  private orderConfirmationRetryDelayMs(task: Task): number {
+    const raw = Number(task.config.data?.["orderConfirmationRetryDelayMs"] ?? 750);
+    return Number.isFinite(raw) ? Math.min(5_000, Math.max(0, Math.floor(raw))) : 750;
   }
 
   private delay(ms: number, signal: AbortSignal): Promise<void> {

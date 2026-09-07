@@ -79,6 +79,9 @@ export class CheckoutPaymentPreparer {
       'input[data-card-field="verification_value"]'
     ], result);
 
+    // A fully prepared card needs no additional payment-field input. The final
+    // order click is still controlled separately by the global purchase guard.
+    result.requiresUserAction = result.missingFields.length > 0;
     result.note = result.missingFields.length
       ? "Kartendaten teilweise vorbereitet. Fehlende Felder müssen ergänzt werden; Bestellung wird nicht abgesendet."
       : "Kartendaten vorbereitet. Der finale Submit bleibt separat geschützt.";
