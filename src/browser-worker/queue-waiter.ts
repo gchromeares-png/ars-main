@@ -229,8 +229,14 @@ export class BrowserQueueWaiter {
     if (this.page.isClosed()) return { active: false, source: "dom" };
 
     const external = this.options.externalSignal?.();
-    if (external?.authoritativeRelease) {
-      return { active: false, statusText: external.statusText, source: "session-http" };
+    const externalRelease = Boolean(
+      external && !external.active && (
+        external.authoritativeRelease === true
+        || Boolean(external.statusText && RELEASE_STATUS_RE.test(external.statusText))
+      )
+    );
+    if (externalRelease) {
+      return { active: false, statusText: external?.statusText, source: "session-http" };
     }
     if (external?.active) return { ...external };
 
