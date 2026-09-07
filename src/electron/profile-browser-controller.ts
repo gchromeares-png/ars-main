@@ -47,8 +47,11 @@ export class ProfileBrowserController {
     const options = typeof startUrlOrOptions === "string"
       ? { startUrl: startUrlOrOptions }
       : (startUrlOrOptions ?? {});
-    // Vision is optional. Preparation is kicked off best-effort, but browser
-    // startup never waits for or fails because of the heavy vision module.
+
+    // The manual browser must inherit the shared vision service URL/token at
+    // spawn time. Waiting here is only for the lightweight loopback listener;
+    // SigLIP2 itself preloads asynchronously inside that persistent service.
+    await this.visionRuntime.ensureSharedService().catch(() => undefined);
     void this.visionRuntime.prepare().catch(() => undefined);
     return this.seleniumBase.open(profile, options.startUrl, options.cookieSnapshotId);
   }
@@ -82,6 +85,7 @@ export class ProfileBrowserController {
       this.seleniumBase.closeAll(),
       this.productMonitorBrowser.close()
     ]);
+    await this.visionRuntime.shutdown().catch(() => undefined);
   }
 
   private registerSeleniumBaseIpc(): void {
