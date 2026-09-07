@@ -41,12 +41,17 @@ def classify(url: str, body: str) -> dict[str, Any]:
             status = str(payload.get("status") or data.get("status") or "").strip()
     except Exception:
         pass
-    active = bool(
+
+    # An explicit release status is authoritative. Queue endpoints commonly keep a
+    # stable /queue/status URL after admission, so URL heuristics must not pin the
+    # signal active forever once the response itself says the queue is released.
+    released = bool(status and RELEASE_RE.search(status))
+    active = False if released else bool(
         QUEUE_RE.search(url)
         or QUEUE_RE.search(body[:256000])
         or position is not None
         or ttw is not None
-        or (status and not RELEASE_RE.search(status) and re.search(r"(?i)(queue|wait|position|hold)", status))
+        or (status and re.search(r"(?i)(queue|wait|position|hold)", status))
     )
     return {"active": active, "position": position, "timeToWaitSeconds": ttw, "statusText": status or None}
 
