@@ -19,14 +19,14 @@ class CursorPathProvider:
 
     Every runtime instance owns a private in-memory RNG. Motion is generated
     parametrically per action instead of selecting from a small set of fixed
-    profiles. Nothing is persisted or derived from proxy identity, so restarting
-    a task creates a fresh independent motion stream automatically.
+    profiles. A caller may supply its existing task/profile seed namespace so
+    parallel tasks keep independent, reproducible motion streams.
     """
 
-    def __init__(self, *, helper_path: str | Path | None = None) -> None:
+    def __init__(self, *, helper_path: str | Path | None = None, seed: str | int | None = None) -> None:
         self._helper = Path(helper_path).expanduser().resolve() if helper_path else Path(__file__).with_name("cursor_path_helper.cjs")
         self._node = os.environ.get("ARES_NODE_EXECUTABLE", "node").strip() or "node"
-        self._rng = random.Random(int.from_bytes(os.urandom(32), "big"))
+        self._rng = random.Random(seed if seed is not None else int.from_bytes(os.urandom(32), "big"))
         self._movement_index = 0
 
     def plan(self, start: Point, end: Point, *, preferred: str = "ghost-cursor") -> Dict[str, Any]:

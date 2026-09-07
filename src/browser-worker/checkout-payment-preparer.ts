@@ -116,6 +116,9 @@ export class CheckoutPaymentPreparer {
         for (const locator of candidates) {
           if (!await this.isVisible(locator)) continue;
           try {
+            // Keep iframe/payment selection on the locator-native click path.
+            // The SeleniumBase RPC locator owns frame/OOPIF offset resolution;
+            // routing this through page-level pointer geometry would drop that context.
             await locator.click({ timeout: 1_000 });
             return true;
           } catch {}

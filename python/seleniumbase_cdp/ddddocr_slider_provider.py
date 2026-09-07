@@ -75,11 +75,21 @@ class DdddOcrSliderProvider:
             self._clear_asset_marks()
 
     def status(self) -> Dict[str, Any]:
+        # Status reads must stay side-effect free. Loading ddddocr constructs a
+        # local model and can take seconds on a cold Windows runner; doing that
+        # from a status/RPC probe can starve the task worker command loop.
+        if self._matcher is not None:
+            load_state = "ready"
+        elif self._import_failed:
+            load_state = "unavailable"
+        else:
+            load_state = "not-loaded"
         return {
             "provider": "ddddocr",
             "optional": True,
             "enabledByDefault": True,
-            "available": self.available(),
+            "available": self._matcher is not None,
+            "loadState": load_state,
         }
 
     def _load_matcher(self) -> Any | None:

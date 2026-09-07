@@ -9,7 +9,7 @@ from stable_marks import build_stable_marks, stable_mark_digest
 
 
 _GRID_SIZES = {9: (3, 3), 16: (4, 4)}
-_GRID_SIZES.update({4: (2, 2), 6: (2, 3), 8: (2, 4), 12: (3, 4), 20: (4, 5), 25: (5, 5)})
+_GRID_SIZES.update({4: (2, 2), 6: (2, 3), 8: (2, 4), 12: (3, 4), 20: (4, 5), 25: (5, 5), 36: (6, 6), 49: (7, 7), 64: (8, 8)})
 
 
 class GridSiteAdapter:
@@ -32,7 +32,7 @@ class GridSiteAdapter:
 
     def poll(self) -> Dict[str, Any]:
         snapshot = self._snapshot_document()
-        if snapshot.get("kind") == "none":
+        if snapshot.get("kind") == "none" and not snapshot.get("complete") and not snapshot.get("failed"):
             snapshot = self._snapshot_nested_frames()
         return self._with_generation(snapshot)
 
@@ -53,7 +53,13 @@ class GridSiteAdapter:
           const visible = el => {{
             if (!el?.getBoundingClientRect) return false;
             const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-            return r.width >= 24 && r.height >= 24 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
+            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
+          }};
+          const visualReady = el => {{
+            if (!el) return false;
+            if (el instanceof HTMLImageElement) return Boolean(el.complete && el.naturalWidth > 0 && el.naturalHeight > 0);
+            if (el instanceof HTMLCanvasElement) return el.width > 0 && el.height > 0;
+            return true;
           }};
           const text = el => (el?.innerText || el?.textContent || el?.getAttribute?.('aria-label') || '').trim().replace(/\\s+/g, ' ');
           const rectOf = (el, offset) => {{
@@ -76,8 +82,7 @@ class GridSiteAdapter:
             const testId = el?.getAttribute?.('data-testid') || '';
             const aria = el?.getAttribute?.('aria-label') || '';
             const role = el?.getAttribute?.('role') || '';
-            const cls = typeof el?.className === 'string' ? el.className.trim().split(/\\s+/).slice(0,4).join('.') : '';
-            return ['grid-tile',el?.tagName||'',id,testId,aria,role,cls,`slot:${{index}}`].join('|');
+            return ['grid-tile',el?.tagName||'',id,testId,aria,role,`slot:${{index}}`].join('|');
           }};
           const bgUrl = el => {{
             if (!el || !visible(el)) return '';
@@ -103,7 +108,7 @@ class GridSiteAdapter:
           }};
           const tileFor = visual => visual.closest?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i]') || visual;
           const visualsIn = root => {{
-            const items = [...(root.querySelectorAll?.('img,canvas') || [])].filter(visible);
+            const items = [...(root.querySelectorAll?.('img,canvas') || [])].filter(el => visible(el) && visualReady(el));
             const bgCandidates = [...(root.querySelectorAll?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i],[class*="image" i]') || [])]
               .filter(el => visible(el) && bgUrl(el));
             return [...new Set([...items, ...bgCandidates])];
@@ -132,11 +137,20 @@ class GridSiteAdapter:
           }};
           walkRoot(document, 'document');
 
+          let explicitComplete = false;
+          let explicitFailed = false;
           const candidates = [];
           for (const [root, scope, offset] of roots) {{
+            const completeEl = overrides.complete ? root.querySelector(overrides.complete) : null;
+            const failedEl = overrides.failed ? root.querySelector(overrides.failed) : null;
+            const complete = Boolean(completeEl && visible(completeEl));
+            const failed = Boolean(failedEl && visible(failedEl));
+            explicitComplete = explicitComplete || complete;
+            explicitFailed = explicitFailed || failed;
+
             const groups = [];
             if (overrides.tiles) {{
-              const tiles = [...root.querySelectorAll(overrides.tiles)].filter(visible);
+              const tiles = [...root.querySelectorAll(overrides.tiles)].filter(el => visible(el) && (!el.matches?.('img,canvas') || visualReady(el)));
               if (GRID.has(tiles.length)) groups.push({{root: overrides.root ? root.querySelector(overrides.root) || root : root, tiles, override:true}});
             }}
 
@@ -160,6 +174,7 @@ class GridSiteAdapter:
               const rects = group.tiles.map(tile => tile.getBoundingClientRect());
               const avgW = rects.reduce((a,r) => a+r.width,0)/count;
               const avgH = rects.reduce((a,r) => a+r.height,0)/count;
+              const avgSide = Math.min(avgW, avgH);
               const regular = rects.filter(r => Math.abs(r.width-avgW)<=Math.max(12,avgW*.35) && Math.abs(r.height-avgH)<=Math.max(12,avgH*.35)).length;
               const clickableFlags = group.tiles.map(tile => Boolean(tile.matches?.('button,[role="button"],[tabindex],label') || tile.onclick));
               const clickable = clickableFlags.filter(Boolean).length;
@@ -187,16 +202,29 @@ class GridSiteAdapter:
               if (group.override) score += 20;
               if (submitEl) score += 5;
               if (text(instructionEl)) score += 5;
+              if (avgSide < 20) score -= 18;
+              else if (avgSide < 40) score -= 8;
+              else if (avgSide >= 64) score += 4;
+              if (!scope.includes('/iframe')) {{
+                const viewportHits = rects.filter(r => r.right > 0 && r.bottom > 0 && r.left < viewport.width && r.top < viewport.height).length;
+                score += Math.round(12 * viewportHits / count);
+                if (viewportHits === 0) score -= 30;
+              }}
               candidates.push({{
                 kind:'image-grid', scope, score, rows, columns, tileCount:count,
                 instruction:text(instructionEl).slice(0,600), sources,
-                submitText:text(submitEl).slice(0,120), override:group.override,
-                rawMarks, viewport,
+                submitText:text(submitEl).slice(0,120),
+                submitBounds:submitEl ? rectOf(submitEl, offset) : null,
+                complete, failed, override:group.override, rawMarks, viewport,
               }});
             }}
           }}
           candidates.sort((a,b) => b.score-a.score);
-          return candidates[0] || {{kind:'none',scope:'document',score:0,rows:0,columns:0,tileCount:0,instruction:'',sources:[],submitText:'',override:false,rawMarks:[],viewport}};
+          return candidates[0] || {{
+            kind:'none',scope:'document',score:0,rows:0,columns:0,tileCount:0,
+            instruction:'',sources:[],submitText:'',submitBounds:null,
+            complete:explicitComplete,failed:explicitFailed,override:false,rawMarks:[],viewport
+          }};
         }})()
         """
         try:
@@ -211,8 +239,17 @@ class GridSiteAdapter:
         except Exception:
             return self._empty("iframe")
 
+        viewport = self._top_level_viewport()
         best = self._empty("iframe")
         for frame_index, frame in enumerate(frames):
+            frame_position = self._element_position(frame)
+            if not isinstance(frame_position, dict):
+                continue
+            try:
+                frame_x = float(frame_position.get("x") or 0.0)
+                frame_y = float(frame_position.get("y") or 0.0)
+            except (TypeError, ValueError):
+                continue
             try:
                 images = [img for img in (frame.query_selector_all("img") or []) if self._element_visible(img)]
             except Exception:
@@ -223,12 +260,24 @@ class GridSiteAdapter:
             sources = [self._element_image_source(img) for img in images]
             scope = f"iframe:{frame_index}"
             raw_marks = []
+            valid = True
             for index, image in enumerate(images):
                 alt = self._element_attribute(image, "alt")
                 identity = self._element_attribute(image, "id") or self._element_attribute(image, "data-testid") or f"slot:{index}"
+                local = self._element_position(image)
+                if not isinstance(local, dict):
+                    valid = False
+                    break
+                bounds = dict(local)
+                try:
+                    bounds["x"] = float(bounds.get("x") or 0.0) + frame_x
+                    bounds["y"] = float(bounds.get("y") or 0.0) + frame_y
+                except (TypeError, ValueError):
+                    valid = False
+                    break
                 raw_marks.append({
                     "role": "grid-tile",
-                    "visualBounds": self._element_position(image),
+                    "visualBounds": bounds,
                     "confidence": 0.92 if sources[index] else 0.70,
                     "structuralKey": f"img|{identity}",
                     "semanticSignature": f"grid-tile|{alt}|{sources[index]}",
@@ -236,7 +285,9 @@ class GridSiteAdapter:
                     "label": alt,
                     "score": index,
                 })
-            marks = build_stable_marks(raw_marks, scope=scope, viewport={})
+            if not valid:
+                continue
+            marks = build_stable_marks(raw_marks, scope=scope, viewport=viewport)
             score = 55 + (25 if all(sources) else 10)
             candidate = {
                 "kind": "image-grid",
@@ -248,7 +299,11 @@ class GridSiteAdapter:
                 "instruction": self._frame_descriptor(frame),
                 "sources": sources,
                 "submitText": "",
+                "submitBounds": None,
+                "complete": False,
+                "failed": False,
                 "override": False,
+                "viewport": viewport,
                 "marks": marks,
             }
             if score > int(best.get("score") or 0):
@@ -261,6 +316,8 @@ class GridSiteAdapter:
             str(snapshot.get("scope") or ""),
             str(snapshot.get("tileCount") or 0),
             str(snapshot.get("instruction") or ""),
+            str(bool(snapshot.get("complete"))),
+            str(bool(snapshot.get("failed"))),
             stable_mark_digest(snapshot.get("marks") or []),
         ])
         signature = hashlib.sha256(signature_input.encode("utf-8", errors="ignore")).hexdigest()
@@ -278,6 +335,22 @@ class GridSiteAdapter:
             return executor(f"return {script};")
         raise RuntimeError("SeleniumBase CDP adapter has no script evaluation method")
 
+    def _top_level_viewport(self) -> Dict[str, Any]:
+        script = """
+        (() => ({
+          width: window.innerWidth || document.documentElement.clientWidth || 0,
+          height: window.innerHeight || document.documentElement.clientHeight || 0,
+          scrollX: window.scrollX || 0,
+          scrollY: window.scrollY || 0,
+          devicePixelRatio: window.devicePixelRatio || 1,
+        }))()
+        """
+        try:
+            value = self._evaluate(script)
+        except Exception:
+            value = {}
+        return dict(value) if isinstance(value, dict) else {}
+
     @staticmethod
     def _clean_overrides(values: Dict[str, str]) -> Dict[str, str]:
         allowed = {"root", "tiles", "instruction", "submit", "complete", "failed"}
@@ -288,11 +361,13 @@ class GridSiteAdapter:
         if not isinstance(value, dict):
             return GridSiteAdapter._empty(default_scope)
         scope = str(value.get("scope") or default_scope)
+        viewport = value.get("viewport") if isinstance(value.get("viewport"), dict) else {}
         marks = build_stable_marks(
             [dict(item) for item in value.get("rawMarks") or [] if isinstance(item, dict)],
             scope=scope,
-            viewport=value.get("viewport") if isinstance(value.get("viewport"), dict) else {},
+            viewport=viewport,
         )
+        submit_bounds = value.get("submitBounds") if isinstance(value.get("submitBounds"), dict) else None
         return {
             "kind": str(value.get("kind") or "none"),
             "scope": scope,
@@ -303,20 +378,40 @@ class GridSiteAdapter:
             "instruction": str(value.get("instruction") or ""),
             "sources": [str(item) for item in value.get("sources") or []],
             "submitText": str(value.get("submitText") or ""),
+            "submitBounds": dict(submit_bounds) if submit_bounds else None,
+            "complete": bool(value.get("complete")),
+            "failed": bool(value.get("failed")),
             "override": bool(value.get("override")),
+            "viewport": dict(viewport),
             "marks": marks,
         }
 
     @staticmethod
     def _empty(scope: str) -> Dict[str, Any]:
-        return {"kind":"none","scope":scope,"score":0,"rows":0,"columns":0,"tileCount":0,"instruction":"","sources":[],"submitText":"","override":False,"marks":[]}
+        return {
+            "kind": "none",
+            "scope": scope,
+            "score": 0,
+            "rows": 0,
+            "columns": 0,
+            "tileCount": 0,
+            "instruction": "",
+            "sources": [],
+            "submitText": "",
+            "submitBounds": None,
+            "complete": False,
+            "failed": False,
+            "override": False,
+            "viewport": {},
+            "marks": [],
+        }
 
     @staticmethod
     def _element_visible(element: Any) -> bool:
         position = GridSiteAdapter._element_position(element)
         if isinstance(position, dict):
             try:
-                return float(position.get("width") or 0) >= 24 and float(position.get("height") or 0) >= 24
+                return float(position.get("width") or 0) > 0 and float(position.get("height") or 0) > 0
             except (TypeError, ValueError):
                 return False
         return True

@@ -1,4 +1,5 @@
 import type { Locator, Page } from "../browser-worker/types";
+import { GhostCursorUiInteractionHelper } from "../browser-worker/ui-interaction-helper";
 
 const FINAL_SUBMIT_PATTERNS = [
   /\bpay now\b/i,
@@ -39,7 +40,7 @@ export class ShopifyCheckoutJourney {
     if (!candidate) return false;
 
     try {
-      await candidate.click({ timeout: 2_000 });
+      await new GhostCursorUiInteractionHelper(page).click(candidate);
       await page.waitForLoadState("domcontentloaded", { timeout: 8_000 }).catch(() => undefined);
       return true;
     } catch {
@@ -56,7 +57,7 @@ export class ShopifyCheckoutJourney {
     if (!canPurchase()) return false;
 
     try {
-      await candidate.click({ timeout: 2_000 });
+      await new GhostCursorUiInteractionHelper(page).click(candidate);
       await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
       return true;
     } catch {

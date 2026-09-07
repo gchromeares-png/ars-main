@@ -2,7 +2,7 @@ import type { ITaskExecutor } from "../interfaces";
 import type { Task } from "../models";
 import { isCommerceMonitorTask } from "../monitor/commerce-monitor-service";
 import { getMonitorStrategy, isEarlyGateChildTask, isEarlyGateMonitorTask } from "../monitor/early-gate";
-import type { CommercePlatform, CommerceShop } from "./platforms";
+import { COMMERCE_PLATFORMS, type CommercePlatform, type CommerceShop } from "./platforms";
 
 type RuntimeUpdateSource = ITaskExecutor & { onTaskUpdate?: (callback: (task: Task) => void) => () => void; };
 
@@ -46,15 +46,26 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
   private readonly runtimeUnsubscribers = new Map<ITaskExecutor, () => void>();
   private monitorExecutor?: ITaskExecutor;
   private earlyGateExecutor?: ITaskExecutor;
+  private genericBrowserExecutor?: ITaskExecutor;
 
   constructor(private readonly getShop: (shopId: string) => CommerceShop | undefined) {}
   register(platform: CommercePlatform, executor: ITaskExecutor): void { this.executors.set(platform, executor); this.attachRuntimeUpdates(executor); }
   registerMonitorExecutor(executor: ITaskExecutor): void { this.monitorExecutor = executor; this.attachRuntimeUpdates(executor); }
-  registerEarlyGateExecutor(executor: ITaskExecutor): void { this.earlyGateExecutor = executor; this.attachRuntimeUpdates(executor); }
-  hasExecutor(platform: CommercePlatform): boolean { return this.executors.has(platform); }
+  registerEarlyGateExecutor(executor: ITaskExecutor): void {
+    this.earlyGateExecutor = executor;
+    // The Early-Gate lane is already the domain-agnostic SeleniumBase browser
+    // executor. Reuse that exact executor as the fallback for normal browser
+    // checkout on unknown/custom commerce platforms instead of inventing one
+    // executor per shop technology.
+    this.genericBrowserExecutor = executor;
+    this.attachRuntimeUpdates(executor);
+  }
+  hasExecutor(platform: CommercePlatform): boolean { return this.executors.has(platform) || Boolean(this.genericBrowserExecutor); }
   hasMonitorExecutor(): boolean { return Boolean(this.monitorExecutor); }
   hasEarlyGateExecutor(): boolean { return Boolean(this.earlyGateExecutor); }
-  listExecutorPlatforms(): CommercePlatform[] { return [...this.executors.keys()]; }
+  listExecutorPlatforms(): CommercePlatform[] {
+    return this.genericBrowserExecutor ? [...COMMERCE_PLATFORMS] : [...this.executors.keys()];
+  }
 
   onTaskUpdate(callback: (task: Task) => void): () => void { this.runtimeListeners.add(callback); return () => this.runtimeListeners.delete(callback); }
 
@@ -67,9 +78,17 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
     if (earlyGateMonitor) materializeEarlyGateLane(task);
     const earlyGateBrowser = earlyGateMonitor || isEarlyGateChildTask(task);
     const monitorTask = isCommerceMonitorTask(task) && !earlyGateBrowser;
-    const executor = earlyGateBrowser ? this.earlyGateExecutor : monitorTask ? this.monitorExecutor : this.executors.get(shop.platform);
+    const executor = earlyGateBrowser
+      ? this.earlyGateExecutor
+      : monitorTask
+        ? this.monitorExecutor
+        : this.executors.get(shop.platform) ?? this.genericBrowserExecutor;
     if (!executor) {
-      task.lastError = earlyGateBrowser ? "Für Early-Gate-Browser-Lanes ist noch kein Browser-Executor registriert." : monitorTask ? "Für Monitoring ist noch kein CommerceMonitorService registriert." : `Für ${shop.platform} ist noch kein Task-Executor registriert. Die Plattform ist bereits im Commerce-/Monitor-Modell vorbereitet.`;
+      task.lastError = earlyGateBrowser
+        ? "Für Early-Gate-Browser-Lanes ist noch kein Browser-Executor registriert."
+        : monitorTask
+          ? "Für Monitoring ist noch kein CommerceMonitorService registriert."
+          : `Für ${shop.platform} ist noch kein Task-Executor registriert. Die Plattform ist bereits im Commerce-/Monitor-Modell vorbereitet.`;
       return false;
     }
     this.taskOwners.set(task.id, executor);
@@ -92,7 +111,14 @@ export class CommerceTaskExecutorRouter implements ITaskExecutor {
     this.taskOwners.clear();
   }
 
-  private uniqueExecutors(): ITaskExecutor[] { return [...new Set([...this.executors.values(), ...(this.monitorExecutor ? [this.monitorExecutor] : []), ...(this.earlyGateExecutor ? [this.earlyGateExecutor] : [])])]; }
+  private uniqueExecutors(): ITaskExecutor[] {
+    return [...new Set([
+      ...this.executors.values(),
+      ...(this.monitorExecutor ? [this.monitorExecutor] : []),
+      ...(this.earlyGateExecutor ? [this.earlyGateExecutor] : []),
+      ...(this.genericBrowserExecutor ? [this.genericBrowserExecutor] : [])
+    ])];
+  }
   private attachRuntimeUpdates(executor: ITaskExecutor): void {
     const runtimeSource = executor as RuntimeUpdateSource;
     if (!runtimeSource.onTaskUpdate || this.runtimeUnsubscribers.has(executor)) return;

@@ -11,11 +11,12 @@ from cursor_path_provider import CursorPathProvider
 from extended_grid_site_adapter import ExtendedGridSiteAdapter
 from interaction_policy import InteractionPolicy
 from interaction_trace import InteractionTrace
+from observation_capture import ObservationCapture
 from proximity_grid_action_executor import ProximityGridActionExecutor
-from robust_vision_grid_classifier import RobustVisionGridClassifier
 from screenshot_grid_tile_provider import ScreenshotGridTileProvider
 from site_slider_adapter import SliderSiteAdapter
 from slider_action_executor import SliderActionExecutor
+from vision_grid_classifier import VisionGridClassifier
 
 
 class VisualInteractionRuntime:
@@ -27,16 +28,18 @@ class VisualInteractionRuntime:
         *,
         profile_dir: str | Path,
         overrides: Dict[str, str] | None = None,
+        capture: ObservationCapture | None = None,
     ) -> None:
         self._sb = seleniumbase_cdp
         self._profile_dir = Path(profile_dir).expanduser().resolve()
         self._policy = InteractionPolicy.from_profile(self._profile_dir)
+        self._capture = capture or ObservationCapture(self._sb, profile_dir=self._profile_dir, policy=self._policy)
         self._grid = ExtendedGridSiteAdapter(self._sb, overrides=overrides or {})
         self._slider = SliderSiteAdapter(self._sb, overrides=overrides or {})
-        self._paths = CursorPathProvider()
-        self._grid_actions = ProximityGridActionExecutor(self._sb, self._grid, self._policy)
+        self._paths = CursorPathProvider(seed=str(self._profile_dir))
+        self._grid_actions = ProximityGridActionExecutor(self._sb, self._grid, self._policy, self._paths)
         self._slider_actions = SliderActionExecutor(self._sb, self._slider, self._paths)
-        self._vision = RobustVisionGridClassifier()
+        self._vision = VisionGridClassifier()
         self._screenshot_tiles = ScreenshotGridTileProvider()
         self._slider_grounder = CompositeSliderGrounder(self._sb, profile_dir=self._profile_dir)
         self._trace = InteractionTrace(self._profile_dir)
@@ -50,7 +53,6 @@ class VisualInteractionRuntime:
             self._slider_grounder,
             self._trace,
         )
-        self._debug_root = self._profile_dir / ".ares-observations"
         self._last_grid_debug_signature = ""
 
     def poll_and_act(self) -> Dict[str, Any]:
@@ -68,8 +70,11 @@ class VisualInteractionRuntime:
         if grid_state.get("kind") == "image-grid":
             signature = str(grid_state.get("signature") or "")
             if signature and signature != self._last_grid_debug_signature:
-                self._last_grid_debug_signature = signature
-                captured = self._capture_grid_debug_screenshot(signature)
+                captured = self._capture.capture(
+                    "grid-candidate",
+                    generation=int(grid_state.get("generation") or 0),
+                    force=True,
+                )
                 self._trace.append(
                     "grid-screenshot-captured",
                     {
@@ -79,8 +84,13 @@ class VisualInteractionRuntime:
                     },
                 )
                 if bool(captured.get("captured")):
-                    screenshot_result = self.poll_and_act_from_screenshot(str(captured.get("path") or ""))
+                    screenshot_result = self.poll_and_act_from_screenshot(
+                        str(captured.get("path") or ""),
+                        state=grid_state,
+                    )
                     screenshot_result = self._finalize_interaction(screenshot_result)
+                    if screenshot_result.get("verified") is True:
+                        self._last_grid_debug_signature = signature
                     self._trace.append(
                         "grid-screenshot-result",
                         {
@@ -119,42 +129,101 @@ class VisualInteractionRuntime:
             },
         }
 
-    def poll_and_act_from_screenshot(self, screenshot_path: str | Path) -> Dict[str, Any]:
-        state = self._grid.poll()
-        if state.get("kind") != "image-grid":
-            return {"acted": False, "kind": "none", "reason": "no-image-grid", "state": state}
+    def poll_and_act_from_screenshot(
+        self,
+        screenshot_path: str | Path,
+        *,
+        state: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        observed = dict(state) if isinstance(state, dict) else self._grid.poll()
+        if observed.get("kind") != "image-grid":
+            return {"acted": False, "kind": "none", "reason": "no-image-grid", "state": observed}
 
-        provided = self._screenshot_tiles.sources(screenshot_path, state)
-        sources = list(provided.get("sources") or [])
-        if not sources or not any(sources):
+        current = self._grid.poll()
+        observed_signature = str(observed.get("signature") or "")
+        current_signature = str(current.get("signature") or "")
+        if not observed_signature or current_signature != observed_signature:
             return {
                 "acted": False,
+                "verified": False,
                 "kind": "image-grid",
-                "reason": "screenshot-grid-unavailable",
-                "state": state,
-                "screenshot": provided,
+                "reason": "screenshot-state-stale",
+                "state": observed,
+                "currentState": current,
+                "invariants": {
+                    "observedSignature": observed_signature,
+                    "currentSignature": current_signature,
+                    "sameVisualState": False,
+                },
             }
 
-        result = self._controller.act_grid_from_sources(state, sources, source="screenshot-crops")
-        return {**result, "screenshot": provided}
+        tile_count = int(observed.get("tileCount") or 0)
+        marks = [
+            mark for mark in observed.get("marks") or []
+            if isinstance(mark, dict) and mark.get("role") == "grid-tile"
+        ]
+        provided = self._screenshot_tiles.sources(screenshot_path, observed)
+        sources = list(provided.get("sources") or [])
+        readable = int(provided.get("readable") or 0)
+        crop_count = int(provided.get("cropCount") or 0)
+        geometry_ready = tile_count > 0 and len(marks) == tile_count
+        crops_ready = len(sources) == tile_count and readable == tile_count and crop_count == tile_count
+        if not geometry_ready or not crops_ready:
+            return {
+                "acted": False,
+                "verified": False,
+                "kind": "image-grid",
+                "reason": "screenshot-grid-unavailable",
+                "state": observed,
+                "screenshot": provided,
+                "invariants": {
+                    "tileCount": tile_count,
+                    "markCount": len(marks),
+                    "cropCount": crop_count,
+                    "readable": readable,
+                    "geometryReady": geometry_ready,
+                    "cropsReady": crops_ready,
+                    "observedSignature": observed_signature,
+                    "currentSignature": current_signature,
+                    "sameVisualState": True,
+                },
+            }
+
+        result = self._controller.act_grid_from_sources(observed, sources, source="screenshot-crops")
+        return {
+            **result,
+            "screenshot": provided,
+            "invariants": {
+                "tileCount": tile_count,
+                "markCount": len(marks),
+                "cropCount": crop_count,
+                "readable": readable,
+                "geometryReady": True,
+                "cropsReady": True,
+                "observedSignature": observed_signature,
+                "currentSignature": current_signature,
+                "sameVisualState": True,
+            },
+        }
 
     def _finalize_interaction(self, result: Dict[str, Any]) -> Dict[str, Any]:
         kind = str(result.get("kind") or "")
         verified = bool(result.get("verified"))
 
         if kind == "image-grid" and not verified:
+            reason = str(result.get("reason") or "")
             attempt = int(result.get("attempt") or 0)
             max_attempts = int(result.get("maxAttempts") or 3)
-            if 0 < attempt < max_attempts:
-                # A retry must be a real new observation, not the same cached crop.
+            retryable = reason not in {"max-attempts-reached", "explicit-failure"} and attempt < max_attempts
+            if retryable:
                 self._last_grid_debug_signature = ""
                 self._trace.append(
                     "grid-retry-scheduled",
                     {
                         "attempt": attempt,
-                        "nextAttempt": attempt + 1,
+                        "nextAttempt": attempt + 1 if attempt else 1,
                         "maxAttempts": max_attempts,
-                        "reason": result.get("reason"),
+                        "reason": reason,
                     },
                 )
 
@@ -199,6 +268,8 @@ class VisualInteractionRuntime:
             "markIdentity": "structural+semantic-visual",
             "gridGeometry": "dynamic-2x2-through-8x8",
             "gridClickOrder": "nearest-neighbour",
+            "gridCropInvariant": "one-mark-one-readable-crop",
+            "gridStateInvariant": "capture-classify-click-same-visual-state",
             "gridTiming": {
                 "clickDelaySeconds": self._policy.grid_click_delay_seconds,
                 "submitDelaySeconds": self._policy.grid_submit_delay_seconds,
@@ -210,7 +281,7 @@ class VisualInteractionRuntime:
             "freshScreenshotPerRetry": True,
             "screenshotGridFallback": True,
             "screenshotFirstForGrid": True,
-            "debugScreenshotRoot": str(self._debug_root),
+            "debugScreenshotRoot": str(self._capture.root),
             "sliderProviders": self._slider_grounder.status(),
         }
 
@@ -228,44 +299,3 @@ class VisualInteractionRuntime:
 
     def apply_slider(self, target_fraction: float) -> Dict[str, Any]:
         return self._slider_actions.apply(target_fraction)
-
-    def _capture_grid_debug_screenshot(self, signature: str) -> Dict[str, Any]:
-        self._debug_root.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-        unique = time.time_ns() % 1_000_000_000
-        short_signature = signature[:12] if signature else "unknown"
-        filename = f"{stamp}-{unique:09d}-grid-{short_signature}.png"
-        path = self._debug_root / filename
-        try:
-            self._sb.save_screenshot(filename, folder=str(self._debug_root))
-            captured = path.exists() and path.stat().st_size > 0
-        except Exception as exc:
-            return {
-                "captured": False,
-                "reason": "capture-error",
-                "error": str(exc),
-                "path": str(path),
-            }
-
-        if captured:
-            self._rotate_debug_screenshots()
-        return {
-            "captured": captured,
-            "reason": "captured" if captured else "missing-output",
-            "path": str(path),
-        }
-
-    def _rotate_debug_screenshots(self) -> None:
-        try:
-            files = sorted(
-                (path for path in self._debug_root.glob("*.png") if path.is_file()),
-                key=lambda path: path.stat().st_mtime,
-                reverse=True,
-            )
-        except OSError:
-            return
-        for path in files[self._policy.max_saved_captures :]:
-            try:
-                path.unlink()
-            except OSError:
-                pass

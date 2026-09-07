@@ -5,6 +5,7 @@ describe("SeleniumBase CDP architecture guard", () => {
   const read = (relative: string) => fs.readFileSync(path.resolve(__dirname, "..", relative), "utf8");
   const requirements = read("requirements-seleniumbase-cdp.txt");
   const adapter = read("python/seleniumbase_cdp/seleniumbase_adapter.py");
+  const controlAwareAdapter = read("python/seleniumbase_cdp/control_aware_seleniumbase_adapter.py");
   const tracker = read("python/seleniumbase_cdp/challenge_state_tracker.py");
   const trackerProbe = read("python/seleniumbase_cdp/challenge_state_tracker_probe.py");
   const siteAdapter = read("python/seleniumbase_cdp/site_grid_adapter.py");
@@ -36,8 +37,12 @@ describe("SeleniumBase CDP architecture guard", () => {
     expect(adapter).toContain("self._sb.set_all_cookies(params)");
     expect(adapter).toContain("self._sb.get_all_cookies()");
     expect(adapter).toContain("mycdp.network.CookieParam.from_json(payload)");
-    for (const source of [worker, manualWorker, productMonitorWorker]) {
-      expect(source).toContain("from seleniumbase_adapter import SeleniumBaseCdpAdapter");
+    expect(controlAwareAdapter).toContain("from seleniumbase_adapter import SeleniumBaseCdpAdapter");
+    expect(controlAwareAdapter).toContain("class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter)");
+    expect(worker).toContain("from seleniumbase_adapter import SeleniumBaseCdpAdapter");
+    expect(productMonitorWorker).toContain("from seleniumbase_adapter import SeleniumBaseCdpAdapter");
+    expect(manualWorker).toContain("from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter");
+    for (const source of [worker, manualWorker, productMonitorWorker, controlAwareAdapter]) {
       expect(source).not.toContain("from seleniumbase import");
       expect(source).not.toContain("import mycdp");
       expect(source).not.toContain("selenium.webdriver");
