@@ -6,8 +6,9 @@ from typing import Any, Dict, Iterable
 
 
 _ACTION_TERMS = re.compile(
-    r"(?i)(select|click|choose|mark|verify|verification|drag|slide|move|hold|"
-    r"wähl|klick|markier|prüf|bestät|zieh|schieb|regler|bewegen|gedrückt)"
+    r"(?i)(select|click|choose|mark|verify|verification|drag|slide|move|hold|swipe|pull|push|"
+    r"wähl|klick|markier|prüf|bestät|zieh|schieb|verschieb|beweg|regler|gedrückt|"
+    r"nach\s+rechts|nach\s+links|bis\s+zum\s+ende)"
 )
 _MAX_GRID_ATTEMPTS = 3
 
