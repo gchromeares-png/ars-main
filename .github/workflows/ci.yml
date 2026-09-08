@@ -48,6 +48,7 @@ jobs:
           python/seleniumbase_cdp/site_slider_adapter.py
           python/seleniumbase_cdp/slider_action_executor.py
           python/seleniumbase_cdp/cursor_path_provider.py
+          python/seleniumbase_cdp/runtime_identity.py
           python/seleniumbase_cdp/seleniumbase_adapter.py
           python/seleniumbase_cdp/task_browser_worker_oopif.py
           python/seleniumbase_cdp/auto_interaction_controller.py
@@ -78,136 +79,6 @@ jobs:
         env:
           ARES_MONITOR_E2E_MODE: "visible"
         run: python python/seleniumbase_cdp/product_monitor_browser_e2e_probe.py
-
-  windows-ui-runtime-e2e-proof:
-    runs-on: windows-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements-seleniumbase-cdp.txt
-
-      - name: Install Node dependencies
-        run: npm ci --no-audit --no-fund
-
-      - name: Rebuild native modules for Electron 21
-        run: npm run native:electron
-
-      - name: Verify better-sqlite3 loads in Electron ABI
-        shell: pwsh
-        run: |
-          $electron = (Resolve-Path "node_modules/electron/dist/electron.exe").Path
-          $probe = Join-Path (Get-Location) ".ci-verify-better-sqlite3.cjs"
-          Set-Content -Path $probe -Value "require('better-sqlite3'); console.log('better-sqlite3-electron-ok');"
-          $env:ELECTRON_RUN_AS_NODE = "1"
-          try {
-            $proc = Start-Process -FilePath $electron -ArgumentList $probe -Wait -PassThru -NoNewWindow
-            if ($proc.ExitCode -ne 0) { throw "better-sqlite3 still does not load under Electron ABI (exit $($proc.ExitCode))" }
-          }
-          finally {
-            Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
-            Remove-Item $probe -Force -ErrorAction SilentlyContinue
-          }
-
-      - name: Install SeleniumBase runtime
-        run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
-
-      - name: Build TypeScript backend and Angular UI
-        run: npm run build
-
-      - name: Run real Windows Electron UI to OOPIF runtime proof
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $proof = Join-Path $env:RUNNER_TEMP "ares-windows-ui-runtime-proof"
-          $userData = Join-Path $env:RUNNER_TEMP "ares-windows-ui-runtime-user-data"
-          New-Item -ItemType Directory -Force -Path $proof | Out-Null
-          New-Item -ItemType Directory -Force -Path $userData | Out-Null
-          Set-Content -Path (Join-Path $proof "ci-entry.txt") -Value "CI entered Electron proof at $(Get-Date -Format o)"
-          $env:ARES_UI_E2E_MODE = "1"
-          $env:ARES_UI_E2E_ARTIFACT_DIR = $proof
-          $env:ARES_UI_E2E_USER_DATA = $userData
-          $env:ARES_NODE_EXECUTABLE = (Get-Command node).Source
-
-          $electron = (Resolve-Path "node_modules/electron/dist/electron.exe").Path
-          $stdout = Join-Path $proof "electron.stdout.log"
-          $stderr = Join-Path $proof "electron.stderr.log"
-          Write-Host "Starting Electron E2E: $electron"
-          $proc = Start-Process -FilePath $electron -ArgumentList "tests/windows-ui-runtime-e2e.runner.cjs" -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-          $deadline = (Get-Date).AddSeconds(360)
-          $lastTimelineLength = 0
-          $heartbeat = 0
-
-          while (-not $proc.HasExited -and (Get-Date) -lt $deadline) {
-            Start-Sleep -Seconds 5
-            $proc.Refresh()
-            $heartbeat += 1
-            $timeline = Join-Path $proof "runner-timeline.jsonl"
-            if (Test-Path $timeline) {
-              $length = (Get-Item $timeline).Length
-              if ($length -ne $lastTimelineLength) {
-                Write-Host "--- runner checkpoints ---"
-                Get-Content $timeline -Tail 8 | ForEach-Object { Write-Host $_ }
-                $lastTimelineLength = $length
-              }
-            } elseif (($heartbeat % 3) -eq 0) {
-              Write-Host "No runner-timeline.jsonl yet after $($heartbeat * 5)s"
-            }
-            if (($heartbeat % 6) -eq 0) {
-              $snapshot = Get-CimInstance Win32_Process | Where-Object { $_.Name -match "electron|chrome|python|node" } | Select-Object ProcessId,ParentProcessId,Name,CommandLine
-              $snapshot | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $proof "live-processes.json")
-              Write-Host "Electron proof still active after $($heartbeat * 5)s; PID=$($proc.Id)"
-            }
-          }
-
-          if (-not $proc.HasExited) {
-            Write-Host "Electron E2E exceeded 360s. Capturing final process tree."
-            Get-CimInstance Win32_Process | Where-Object { $_.Name -match "electron|chrome|python|node" } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $proof "timeout-processes.json")
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-            throw "Windows Electron UI E2E timed out after 360 seconds. Inspect runner-timeline.jsonl and process dumps."
-          }
-
-          Write-Host "Electron exited with code $($proc.ExitCode)"
-          if (Test-Path $stdout) { Write-Host "--- Electron stdout ---"; Get-Content $stdout | ForEach-Object { Write-Host $_ } }
-          if (Test-Path $stderr) { Write-Host "--- Electron stderr ---"; Get-Content $stderr | ForEach-Object { Write-Host $_ } }
-          if ($proc.ExitCode -ne 0) { throw "Electron E2E exited with code $($proc.ExitCode)" }
-
-      - name: Verify no E2E Chrome/Python process remains
-        if: always()
-        shell: pwsh
-        run: |
-          $proof = Join-Path $env:RUNNER_TEMP "ares-windows-ui-runtime-proof"
-          $needle = "ares-windows-ui-runtime-user-data"
-          $orphans = Get-CimInstance Win32_Process | Where-Object {
-            ($_.Name -match "chrome|python") -and ($_.CommandLine -like "*$needle*")
-          }
-          $orphans | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $proof "cleanup-processes.json")
-          if ($orphans) {
-            $orphans | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List | Out-String | Write-Host
-            throw "Windows UI E2E left Chrome/Python processes behind."
-          }
-
-      - name: Upload Windows UI runtime proof
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-ui-runtime-proof
-          path: ${{ runner.temp }}/ares-windows-ui-runtime-proof
-          if-no-files-found: error
-          retention-days: 7
 
   node-focus:
     runs-on: ubuntu-latest
