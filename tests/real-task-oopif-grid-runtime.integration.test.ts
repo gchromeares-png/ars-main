@@ -56,8 +56,19 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 }
 
 async function closeServer(server: http.Server): Promise<void> {
+  if (!server.listening) return;
   await new Promise<void>(resolve => {
-    server.close(() => resolve());
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, 2_000);
+    timer.unref();
+    server.close(finish);
+    server.closeIdleConnections?.();
     server.closeAllConnections?.();
   });
 }
@@ -73,6 +84,24 @@ async function findNamedFile(root: string, name: string): Promise<string | undef
     }
   }
   return undefined;
+}
+
+async function waitForTrace(
+  root: string,
+  predicate: (trace: string) => boolean,
+  timeoutMs: number,
+  label: string
+): Promise<{ path: string; trace: string }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const tracePath = await findNamedFile(root, ".ares-visual-trace.jsonl");
+    if (tracePath) {
+      const trace = await readFile(tracePath, "utf8").catch(() => "");
+      if (predicate(trace)) return { path: tracePath, trace };
+    }
+    await delay(80);
+  }
+  throw new Error(`Timed out waiting for ${label}.`);
 }
 
 async function logRuntimeFailureEvidence(profileRoot: string, hits: Hit[], visionCalls: number): Promise<void> {
@@ -291,19 +320,22 @@ describeBrowserIntegration("real task OOPIF grid runtime", () => {
       expect(Number(solved.clicks)).toBeGreaterThanOrEqual(4);
       expect(vision.calls()).toBeGreaterThanOrEqual(1);
 
-      const tracePath = await findNamedFile(profileRoot, ".ares-visual-trace.jsonl");
-      expect(tracePath).toBeDefined();
-      if (tracePath) {
-        const trace = await readFile(tracePath, "utf8");
-        expect(trace).toContain('"origin":"direct-children"');
-        expect(trace).toMatch(/"scope":"oopif:/);
-        expect(trace).toContain('"tileCount":9');
-        expect(trace).toContain('"selectedIndexes":[1,4,7]');
-        expect(trace).toContain('"phase":"cursor-click"');
-        expect(trace).toContain('"seeded":true');
-        expect(trace).toContain('"provider":"python-bezier:cdp"');
-        expect(trace).toContain('"verified":true');
-      }
+      const { trace } = await waitForTrace(
+        profileRoot,
+        value => value.includes('"stage":"VERIFY"') && value.includes('"verified":true'),
+        5_000,
+        "verified runtime trace"
+      );
+      expect(trace).toContain('"origin":"direct-children"');
+      expect(trace).toMatch(/"scope":"oopif:/);
+      expect(trace).toContain('"tileCount":9');
+      expect(trace).toContain('"stage":"VISION_CALLED"');
+      expect(trace).toContain('"sourceCount":9');
+      expect(trace).toContain('"selectedIndexes":[1,4,7]');
+      expect(trace).toContain('"phase":"cursor-click"');
+      expect(trace).toContain('"seeded":true');
+      expect(trace).toContain('"provider":"python-bezier:cdp"');
+      expect(trace).toContain('"verified":true');
     } catch (error) {
       await logRuntimeFailureEvidence(profileRoot, hits, vision.calls());
       throw error;
@@ -316,11 +348,13 @@ describeBrowserIntegration("real task OOPIF grid runtime", () => {
       await withTimeout(router.close(), 12_000, "router close").catch(error => {
         cleanupError ??= error instanceof Error ? error : new Error(String(error));
       });
-      await withTimeout(browserWorker.close(), 12_000, "browser worker close").catch(error => {
+      await delay(500);
+      await withTimeout(Promise.all([closeServer(fixtures.main), closeServer(fixtures.frame), closeServer(vision.server)]), 6_000, "fixture server close").catch(error => {
         cleanupError ??= error instanceof Error ? error : new Error(String(error));
       });
-      await Promise.all([closeServer(fixtures.main), closeServer(fixtures.frame), closeServer(vision.server)]);
-      await rm(profileRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      await withTimeout(rm(profileRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }), 10_000, "profile cleanup").catch(error => {
+        cleanupError ??= error instanceof Error ? error : new Error(String(error));
+      });
       if (previousVisionUrl === undefined) delete process.env["ARES_VISION_SERVICE_URL"]; else process.env["ARES_VISION_SERVICE_URL"] = previousVisionUrl;
       if (previousVisionToken === undefined) delete process.env["ARES_VISION_SERVICE_TOKEN"]; else process.env["ARES_VISION_SERVICE_TOKEN"] = previousVisionToken;
       if (previousVisionOffline === undefined) delete process.env["ARES_VISION_OFFLINE"]; else process.env["ARES_VISION_OFFLINE"] = previousVisionOffline;
