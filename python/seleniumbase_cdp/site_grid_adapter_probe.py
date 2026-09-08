@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from runtime_oopif_grid_site_adapter import RUNTIME_OOPIF_GRID_SCRIPT
 from site_grid_adapter import GridSiteAdapter
+import task_browser_worker_oopif_impl as oopif_impl
 
 
 class FakeElement:
@@ -67,6 +69,15 @@ class FakeCdp:
 
 
 def main() -> int:
+    # Regression guard for the real OOPIF runtime surface. Importing the runtime
+    # adapter must install the same direct-objectId frame resolver used by the
+    # task worker, because manual_profile_browser imports the registry directly.
+    assert "visual-ancestor" in RUNTIME_OOPIF_GRID_SCRIPT
+    assert "direct-children" in RUNTIME_OOPIF_GRID_SCRIPT
+    assert "shape-product" in RUNTIME_OOPIF_GRID_SCRIPT
+    assert "weak-evidence" in RUNTIME_OOPIF_GRID_SCRIPT
+    assert getattr(oopif_impl.FlatCdpTargetRegistry, "_ares_object_id_frame_resolution", False) is True
+
     cdp = FakeCdp()
     adapter = GridSiteAdapter(cdp)
 
@@ -112,7 +123,7 @@ def main() -> int:
         "submit": ".submit",
     }
 
-    print("SeleniumBase structural site adapter probe passed.")
+    print("SeleniumBase structural site adapter + OOPIF runtime regression probe passed.")
     return 0
 
 
