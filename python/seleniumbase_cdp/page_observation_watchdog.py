@@ -133,12 +133,29 @@ class PageObservationWatchdog:
         if not isinstance(value, dict):
             value = {}
 
+        # OOPIF children can be alive in Chromium's flattened CDP target tree
+        # even when the top-level DOM heartbeat does not expose a useful iframe
+        # count yet. The visual runtime is intentionally driven by a bounded
+        # frame heartbeat, so fold discovered child frame paths into the
+        # effective iframe count. FlatCdpTargetRegistry.discover() only returns
+        # child paths (never the root page), therefore this does not create a
+        # false heartbeat for ordinary single-frame pages.
+        oopif_frames = self._oopif_frame_count()
+        try:
+            dom_iframes = int(value.get("iframes") or 0)
+        except (TypeError, ValueError):
+            dom_iframes = 0
+        value["domIframes"] = dom_iframes
+        value["oopifFrames"] = oopif_frames
+        value["iframes"] = max(dom_iframes, oopif_frames)
+
         stable = {
             key: value.get(key)
             for key in (
                 "url", "title", "readyState", "childCount", "nodeCount", "scrollHeight",
-                "interactive", "inputs", "buttons", "iframes", "modals", "sliders", "grids", "canvas",
-                "selectorCounts", "priorityCounts", "textHints", "watched",
+                "interactive", "inputs", "buttons", "iframes", "domIframes", "oopifFrames",
+                "modals", "sliders", "grids", "canvas", "selectorCounts", "priorityCounts",
+                "textHints", "watched",
             )
         }
         raw = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -147,13 +164,32 @@ class PageObservationWatchdog:
         action_stable = {
             key: stable.get(key)
             for key in (
-                "url", "readyState", "interactive", "inputs", "buttons", "iframes", "modals", "sliders",
-                "grids", "canvas", "selectorCounts", "priorityCounts", "textHints", "watched",
+                "url", "readyState", "interactive", "inputs", "buttons", "iframes", "domIframes",
+                "oopifFrames", "modals", "sliders", "grids", "canvas", "selectorCounts",
+                "priorityCounts", "textHints", "watched",
             )
         }
         action_raw = json.dumps(action_stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         stable["actionFingerprint"] = hashlib.sha256(action_raw.encode("utf-8", errors="ignore")).hexdigest()
         return stable
+
+    def _oopif_frame_count(self) -> int:
+        discover = getattr(self._sb, "ares_oopif_discover", None)
+        if not callable(discover):
+            return 0
+        try:
+            entries = discover()
+        except Exception:
+            return 0
+        if not isinstance(entries, list):
+            return 0
+        return sum(
+            1
+            for entry in entries
+            if isinstance(entry, dict)
+            and isinstance(entry.get("path"), list)
+            and len(entry.get("path") or []) > 0
+        )
 
     def _evaluate(self, script: str) -> Any:
         evaluator = getattr(self._sb, "evaluate", None)
