@@ -1,0 +1,113 @@
+name: Windows PID Ownership Proof
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  pid-ownership-proof:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-seleniumbase-cdp.txt
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install SeleniumBase runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
+
+      - name: Build backend
+        run: npm run build:backend
+
+      - name: Run TaskOrchestrator runtime with PID ownership watcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $proof = Join-Path $env:RUNNER_TEMP "ares-pid-ownership-proof"
+          New-Item -ItemType Directory -Force -Path $proof | Out-Null
+          $watcherOut = Join-Path $proof "watcher"
+          New-Item -ItemType Directory -Force -Path $watcherOut | Out-Null
+
+          $watcher = Start-Process -FilePath "pwsh" -ArgumentList @(
+            "-NoProfile",
+            "-File", (Resolve-Path "tests/windows-pid-ownership-watch.ps1").Path,
+            "-OutputDir", $watcherOut,
+            "-IntervalSeconds", "1"
+          ) -PassThru -WindowStyle Hidden
+
+          try {
+            $env:ARES_RUN_BROWSER_INTEGRATION = "1"
+            $env:ARES_NODE_EXECUTABLE = (Get-Command node).Source
+            npx jest --runInBand tests/real-task-oopif-grid-runtime.integration.test.ts 2>&1 | Tee-Object -FilePath (Join-Path $proof "runtime-test.log")
+            if ($LASTEXITCODE -ne 0) { throw "Runtime PID proof test failed with exit code $LASTEXITCODE" }
+          }
+          finally {
+            Stop-Process -Id $watcher.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -match "electron|chrome|python|node" } |
+              Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate |
+              ConvertTo-Json -Depth 5 | Set-Content (Join-Path $proof "final-process-tree.json")
+          }
+
+      - name: Validate Node -> Python -> Chrome ownership chain
+        shell: pwsh
+        run: |
+          $proof = Join-Path $env:RUNNER_TEMP "ares-pid-ownership-proof"
+          $trace = Join-Path $proof "watcher/pid-ownership.jsonl"
+          if (-not (Test-Path $trace)) { throw "PID watcher produced no trace." }
+          $lines = Get-Content $trace | Where-Object { $_.Trim() }
+          $all = foreach ($line in $lines) { ($line | ConvertFrom-Json).records }
+          $nodeWorkers = @($all | Where-Object { $_.role -eq "node-browser-worker" })
+          $pythonWorkers = @($all | Where-Object { $_.role -eq "python-oopif-worker" })
+          $chromes = @($all | Where-Object { $_.role -eq "chrome" })
+          if (-not $nodeWorkers.Count) { throw "No node worker.js process was observed." }
+          if (-not $pythonWorkers.Count) { throw "No task_browser_worker_oopif.py process was observed." }
+          if (-not $chromes.Count) { throw "No Chrome process was observed." }
+
+          $linkedPython = @($pythonWorkers | Where-Object {
+            $ppid = $_.ppid
+            $nodeWorkers | Where-Object { $_.pid -eq $ppid }
+          })
+          if (-not $linkedPython.Count) { throw "Python OOPIF worker was not parented by the observed node worker.js process." }
+
+          $linkedChrome = @($chromes | Where-Object {
+            $ppid = $_.ppid
+            $pythonWorkers | Where-Object { $_.pid -eq $ppid }
+          })
+          if (-not $linkedChrome.Count) {
+            Write-Host "Chrome may be a descendant rather than direct child; preserving proof for inspection."
+          }
+
+          [ordered]@{
+            nodeWorkerPids = @($nodeWorkers.pid | Sort-Object -Unique)
+            pythonWorkerPids = @($pythonWorkers.pid | Sort-Object -Unique)
+            chromePids = @($chromes.pid | Sort-Object -Unique)
+            nodeToPythonDirectParentVerified = ($linkedPython.Count -gt 0)
+            pythonToChromeDirectParentObserved = ($linkedChrome.Count -gt 0)
+          } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $proof "ownership-summary.json")
+
+      - name: Upload PID ownership proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pid-ownership-proof
+          path: ${{ runner.temp }}/ares-pid-ownership-proof
+          if-no-files-found: error
+          retention-days: 7
