@@ -66,8 +66,20 @@ def main() -> int:
         sb.open(url)
         result = sb.execute_script(RUNTIME_OOPIF_GRID_SCRIPT)
 
-    if not isinstance(result, dict):
-        raise AssertionError(f"Runtime sprite probe returned non-object: {type(result).__name__}")
+        if not isinstance(result, dict):
+            raise AssertionError(f"Runtime sprite probe returned non-object: {type(result).__name__}")
+        marks = [mark for mark in result.get("rawMarks") or [] if isinstance(mark, dict)]
+        selectors = [str(mark.get("selector") or "") for mark in marks]
+        resolved = []
+        for selector in selectors:
+            selector_json = json.dumps(selector)
+            resolved.append(
+                sb.execute_script(
+                    "const el=document.querySelector(" + selector_json + ");"
+                    "return el ? {tag:el.tagName,id:el.id,role:el.getAttribute('role')} : null;"
+                )
+            )
+
     if result.get("kind") != "image-grid":
         raise AssertionError("Runtime sprite probe did not detect the 4x4 grid: " + json.dumps(result))
     if (int(result.get("rows") or 0), int(result.get("columns") or 0)) != (4, 4):
@@ -75,12 +87,17 @@ def main() -> int:
     if int(result.get("tileCount") or 0) != 16:
         raise AssertionError(f"Expected 16 tiles, got {result.get('tileCount')}")
 
-    marks = [mark for mark in result.get("rawMarks") or [] if isinstance(mark, dict)]
     if len(marks) != 16:
         raise AssertionError(f"Expected 16 raw marks, got {len(marks)}")
-    selectors = [str(mark.get("selector") or "") for mark in marks]
-    if selectors != [f"#{index}" for index in range(16)]:
-        raise AssertionError(f"Expected interactive td selectors #0..#15, got {selectors!r}")
+    expected_resolved = [
+        {"tag": "TD", "id": str(index), "role": "button"}
+        for index in range(16)
+    ]
+    if resolved != expected_resolved:
+        raise AssertionError(
+            "Expected every generated selector to resolve to its interactive td[role=button], "
+            f"got selectors={selectors!r}, resolved={resolved!r}"
+        )
     for mark in marks:
         bounds = mark.get("visualBounds") if isinstance(mark.get("visualBounds"), dict) else {}
         width = float(bounds.get("width") or 0.0)
