@@ -56,6 +56,7 @@ class VisualInteractionRuntime:
         self._last_grid_debug_signature = ""
 
     def poll_and_act(self) -> Dict[str, Any]:
+        self._trace.append("runtime-stage-enter", {"stage": "popup-dismiss"})
         started = time.monotonic()
         popup = self._popup_handler.dismiss_once()
         self._trace.append("runtime-stage", {
@@ -63,10 +64,18 @@ class VisualInteractionRuntime:
             "elapsedMs": round((time.monotonic() - started) * 1000.0, 3),
             "result": popup,
         })
-        if popup.get("dismissed"):
+        popup_dismissed = bool(popup.get("dismissed"))
+        if popup_dismissed:
             self._trace.append("popup-action", popup)
-            return {"acted": True, "kind": "popup", "result": popup}
+            # Do not spend the only available runtime opportunity on consent.
+            # Give the DOM a short settle window, then continue through checkout
+            # and visual discovery in this same serialized owner cycle.
+            time.sleep(0.12)
 
+        self._trace.append("runtime-stage-enter", {
+            "stage": "checkout-progress",
+            "afterPopupDismiss": popup_dismissed,
+        })
         started = time.monotonic()
         checkout = self._popup_handler.advance_checkout_once()
         self._trace.append("runtime-stage", {
@@ -78,6 +87,10 @@ class VisualInteractionRuntime:
             self._trace.append("checkout-action", checkout)
             return {"acted": True, "kind": "checkout", "result": checkout}
 
+        self._trace.append("runtime-stage-enter", {
+            "stage": "grid-prefetch",
+            "afterPopupDismiss": popup_dismissed,
+        })
         started = time.monotonic()
         grid_state = self._grid.poll()
         self._trace.append("runtime-stage", {
@@ -133,6 +146,10 @@ class VisualInteractionRuntime:
                     },
                 )
 
+        self._trace.append("runtime-stage-enter", {
+            "stage": "controller",
+            "afterPopupDismiss": popup_dismissed,
+        })
         started = time.monotonic()
         primary = self._finalize_interaction(self._controller.poll_and_act())
         self._trace.append("runtime-stage", {
@@ -143,6 +160,14 @@ class VisualInteractionRuntime:
             "verified": primary.get("verified"),
         })
         if primary.get("kind") != "image-grid" or bool(primary.get("acted")):
+            if popup_dismissed and not bool(primary.get("acted")) and str(primary.get("kind") or "none") == "none":
+                return {
+                    "acted": True,
+                    "kind": "popup",
+                    "result": popup,
+                    "continued": True,
+                    "nextResult": primary,
+                }
             return primary
 
         state = primary.get("state") if isinstance(primary.get("state"), dict) else grid_state
