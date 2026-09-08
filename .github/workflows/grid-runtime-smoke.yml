@@ -22,8 +22,11 @@ jobs:
       - name: Prepare real SigLIP2 vision runtime
         run: python python/seleniumbase_cdp/vision_runtime_bootstrap.py --prepare
 
-      - name: Compile smoke probe
-        run: python -m py_compile python/seleniumbase_cdp/grid_runtime_smoke_probe.py
+      - name: Compile smoke probes
+        run: python -m py_compile python/seleniumbase_cdp/grid_runtime_smoke_probe.py python/seleniumbase_cdp/runtime_sprite_grid_probe.py
+
+      - name: Prove 4x4 sprite visuals map to interactive cell geometry
+        run: python python/seleniumbase_cdp/runtime_sprite_grid_probe.py
 
       - name: Run delayed iframe grid smoke variants through real SigLIP2
         run: python python/seleniumbase_cdp/grid_runtime_smoke_probe.py
