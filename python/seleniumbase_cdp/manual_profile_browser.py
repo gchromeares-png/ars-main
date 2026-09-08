@@ -12,11 +12,11 @@ from typing import Any, Dict
 import psutil
 
 from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter
-from runtime_poll_scheduler import SingleOwnerRuntimeScheduler
 
 RESULT_PREFIX = "ARES_SB_MANUAL\t"
 LAST_URL_FILENAME = ".ares-last-url"
 SITE_ADAPTER_FILENAME = ".ares-site-adapter.json"
+MANUAL_RUNTIME_HEARTBEAT_SECONDS = 1.0
 
 
 def _emit(payload: Dict[str, Any]) -> None:
@@ -131,8 +131,22 @@ def _active_target_id(adapter: ControlAwareSeleniumBaseCdpAdapter) -> str:
     return value
 
 
+def _append_oopif_trace(adapter: ControlAwareSeleniumBaseCdpAdapter, phase: str, payload: Dict[str, Any]) -> None:
+    try:
+        trace_path = adapter.profile_dir / ".ares-visual-trace.jsonl"
+        record = {"ts": time.time(), "phase": str(phase), **payload}
+        with trace_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
 def _enable_oopif_runtime(adapter: ControlAwareSeleniumBaseCdpAdapter) -> bool:
-    from task_browser_worker_oopif_impl import FlatCdpTargetRegistry
+    # Import the patched registry entry point, not the raw implementation. This
+    # gives the manual profile browser the same Page.enable, frame lifecycle,
+    # document epoch and robust objectId-based frame-owner resolution used by
+    # the real task OOPIF worker.
+    from task_browser_worker_oopif import FlatCdpTargetRegistry
 
     driver = getattr(adapter._sb, "driver", None)
     if driver is not None and hasattr(driver, "cdp_base"):
@@ -145,20 +159,106 @@ def _enable_oopif_runtime(adapter: ControlAwareSeleniumBaseCdpAdapter) -> bool:
     setattr(adapter, "_ares_oopif_registry", registry)
 
     def discover() -> list[Dict[str, Any]]:
-        return registry.discover(_active_target_id(adapter), limit=128)
+        try:
+            frames = registry.discover(_active_target_id(adapter), limit=128)
+            _append_oopif_trace(
+                adapter,
+                "oopif-discover",
+                {
+                    "frameCount": len(frames),
+                    "paths": [
+                        [str(value) for value in entry.get("path") or [] if str(value)]
+                        for entry in frames[:16]
+                        if isinstance(entry, dict)
+                    ],
+                    "source": "manual-profile-browser",
+                },
+            )
+            return frames
+        except Exception as exc:
+            _append_oopif_trace(
+                adapter,
+                "oopif-discover-error",
+                {
+                    "errorType": type(exc).__name__,
+                    "error": str(exc)[:600],
+                    "source": "manual-profile-browser",
+                },
+            )
+            raise
 
     def evaluate(frame_path: list[str], script: str, args: list[Any] | None = None) -> Dict[str, Any]:
-        frame_id, offset_x, offset_y = registry.resolve_path(
-            _active_target_id(adapter),
-            frame_path,
-            include_offsets=True,
-        )
-        value = registry.evaluate(frame_id, script, args or [])
-        return {"value": value, "offsetX": offset_x, "offsetY": offset_y}
+        path = [str(value) for value in frame_path if str(value)]
+        try:
+            frame_id, offset_x, offset_y = registry.resolve_path(
+                _active_target_id(adapter),
+                path,
+                include_offsets=True,
+            )
+            value = registry.evaluate(frame_id, script, args or [])
+            route = registry._route(frame_id) or {}
+            epoch_reader = getattr(registry, "document_epoch", None)
+            document_epoch = int(epoch_reader(frame_id)) if callable(epoch_reader) else 0
+            result = {
+                "value": value,
+                "offsetX": offset_x,
+                "offsetY": offset_y,
+                "frameId": frame_id,
+                "documentEpoch": document_epoch,
+                "sessionGeneration": int(route.get("generation") or 0),
+            }
+            value_state = value if isinstance(value, dict) else {}
+            _append_oopif_trace(
+                adapter,
+                "oopif-evaluate",
+                {
+                    "path": path,
+                    "frameId": frame_id,
+                    "sessionId": str(route.get("sessionId") or ""),
+                    "contextId": route.get("contextId"),
+                    "sessionGeneration": int(route.get("generation") or 0),
+                    "documentEpoch": document_epoch,
+                    "kind": str(value_state.get("kind") or type(value).__name__),
+                    "scope": str(value_state.get("scope") or ""),
+                    "source": "manual-profile-browser",
+                },
+            )
+            return result
+        except Exception as exc:
+            _append_oopif_trace(
+                adapter,
+                "oopif-evaluate-error",
+                {
+                    "path": path,
+                    "errorType": type(exc).__name__,
+                    "error": str(exc)[:600],
+                    "source": "manual-profile-browser",
+                },
+            )
+            raise
 
     setattr(adapter._sb, "ares_oopif_discover", discover)
     setattr(adapter._sb, "ares_oopif_evaluate", evaluate)
     return True
+
+
+def _run_manual_runtime_heartbeat(adapter: ControlAwareSeleniumBaseCdpAdapter) -> None:
+    """Run automatic interaction directly from the manual browser owner loop.
+
+    The visible profile browser has no RPC page-state consumer that needs to gate
+    automatic interaction behind PageObservationWatchdog. Running the existing
+    orchestrator only when the command queue is idle keeps one serialized owner
+    while preventing a complex page snapshot/OOPIF discovery from starving the
+    actual visual runtime before poll_and_act() can even begin.
+    """
+    try:
+        adapter._orchestrator.run_cycle(adapter._run_visual_auto, adapter._run_instruction_auto)
+    except Exception as exc:
+        _append_oopif_trace(
+            adapter,
+            "manual-runtime-heartbeat-error",
+            {"errorType": type(exc).__name__, "error": str(exc)[:600]},
+        )
 
 
 def _close_oopif_runtime(adapter: ControlAwareSeleniumBaseCdpAdapter) -> None:
@@ -273,24 +373,26 @@ def _start(command: Dict[str, Any]) -> int:
 
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
         threading.Thread(target=_command_reader, args=(commands,), daemon=True).start()
-        scheduler = SingleOwnerRuntimeScheduler(adapter)
         next_url_capture = time.monotonic() + 2.0
+        next_runtime_heartbeat = time.monotonic() + 0.25
 
         while True:
             if not adapter.is_running():
                 _emit({"type": "browser-closed", "profileId": profile_id})
                 break
 
-            scheduler.poll_if_due()
             now = time.monotonic()
             if now >= next_url_capture:
                 last_url = _remember_last_url(profile_dir, adapter, last_url)
                 next_url_capture = now + 2.0
 
             try:
-                next_command = commands.get(timeout=scheduler.queue_timeout(0.4))
+                next_command = commands.get(timeout=0.25)
             except queue.Empty:
-                scheduler.poll_if_due()
+                now = time.monotonic()
+                if now >= next_runtime_heartbeat:
+                    _run_manual_runtime_heartbeat(adapter)
+                    next_runtime_heartbeat = time.monotonic() + MANUAL_RUNTIME_HEARTBEAT_SECONDS
                 continue
 
             adapter.note_control_activity()
@@ -388,7 +490,10 @@ def _start(command: Dict[str, Any]) -> int:
             finally:
                 if not closed and adapter.is_running():
                     adapter.note_control_activity()
-                    scheduler.poll_if_due()
+                    next_runtime_heartbeat = max(
+                        next_runtime_heartbeat,
+                        time.monotonic() + MANUAL_RUNTIME_HEARTBEAT_SECONDS,
+                    )
     finally:
         if not closed:
             try:
