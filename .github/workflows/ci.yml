@@ -42,6 +42,7 @@ jobs:
           python/seleniumbase_cdp/scope_locked_grid_site_adapter.py
           python/seleniumbase_cdp/runtime_oopif_grid_site_adapter.py
           python/seleniumbase_cdp/runtime_oopif_outcome_grid_site_adapter.py
+          python/seleniumbase_cdp/runtime_sprite_grid_probe.py
           python/seleniumbase_cdp/oopif_visual_interaction_runtime.py
           python/seleniumbase_cdp/control_aware_seleniumbase_adapter.py
           python/seleniumbase_cdp/site_grid_adapter.py
@@ -61,6 +62,9 @@ jobs:
 
       - name: Verify structural grid adapter
         run: python python/seleniumbase_cdp/site_grid_adapter_probe.py
+
+      - name: Verify 4x4 sprite visuals use interactive cell geometry
+        run: python python/seleniumbase_cdp/runtime_sprite_grid_probe.py
 
       - name: Verify nested visual-ancestor OOPIF runtime
         run: python python/seleniumbase_cdp/runtime_nested_oopif_grid_e2e_runner.py
