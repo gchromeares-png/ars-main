@@ -23,6 +23,8 @@ _BUTTON_SELECTORS = (
 _ACCEPT_TEXT = (
     'alles akzeptieren',
     'alle akzeptieren',
+    'alles zulassen',
+    'alle zulassen',
     'accept all',
     'allow all',
     'akzeptieren',
@@ -206,7 +208,10 @@ class ConsentPopupHandler:
 
     def _click_in_root(self, root: Any, *, fallback: bool = False) -> Dict[str, Any]:
         accepted = set(_ACCEPT_TEXT)
-        strong = {'alles akzeptieren', 'alle akzeptieren', 'accept all', 'allow all', 'zustimmen', 'i agree'}
+        strong = {
+            'alles akzeptieren', 'alle akzeptieren', 'alles zulassen', 'alle zulassen',
+            'accept all', 'allow all', 'zustimmen', 'i agree'
+        }
         for selector in _BUTTON_SELECTORS:
             elements = self._elements(root, selector)
             for element in elements:
