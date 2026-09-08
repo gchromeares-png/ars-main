@@ -362,6 +362,7 @@ class VisionGridClassifier:
         for pattern in patterns:
             cleaned = re.sub(pattern, "", value).strip(" .:;-")
             if cleaned and cleaned != value:
+                cleaned = re.sub(r"(?i)\s+aus$", "", cleaned).strip(" .:;-")
                 return cleaned[:240]
         return value[:240] or "the requested object"
 
