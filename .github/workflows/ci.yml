@@ -110,8 +110,11 @@ jobs:
         shell: pwsh
         run: |
           $electron = (Resolve-Path "node_modules/electron/dist/electron.exe").Path
+          $env:ELECTRON_RUN_AS_NODE = "1"
           & $electron -e "require('better-sqlite3'); console.log('better-sqlite3-electron-ok')"
-          if ($LASTEXITCODE -ne 0) { throw "better-sqlite3 still does not load under Electron ABI" }
+          $electronExit = $LASTEXITCODE
+          Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+          if ($electronExit -ne 0) { throw "better-sqlite3 still does not load under Electron ABI (exit $electronExit)" }
 
       - name: Install SeleniumBase runtime
         run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
