@@ -242,6 +242,57 @@ def _enable_oopif_runtime(adapter: ControlAwareSeleniumBaseCdpAdapter) -> bool:
     return True
 
 
+def _result_trace_payload(result: Dict[str, Any], orchestrator: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "kind": str(result.get("kind") or "none"),
+        "acted": bool(result.get("acted")),
+        "verified": result.get("verified"),
+        "error": str(result.get("error") or "")[:600],
+        "orchestratorGeneration": int(orchestrator.get("generation") or 0),
+        "orchestratorState": str(orchestrator.get("state") or ""),
+        "orchestratorOwner": str(orchestrator.get("owner") or ""),
+    }
+
+
+def _run_visual_auto_traced(adapter: ControlAwareSeleniumBaseCdpAdapter) -> Dict[str, Any]:
+    before = adapter._orchestrator.status()
+    _append_oopif_trace(
+        adapter,
+        "visual-auto-enter",
+        {
+            "orchestratorGeneration": int(before.get("generation") or 0),
+            "orchestratorState": str(before.get("state") or ""),
+            "orchestratorOwner": str(before.get("owner") or ""),
+        },
+    )
+    try:
+        result = adapter._run_visual_auto()
+    except Exception as exc:
+        after = adapter._orchestrator.status()
+        error_result: Dict[str, Any] = {
+            "acted": False,
+            "kind": "exception",
+            "verified": False,
+            "error": str(exc),
+        }
+        _append_oopif_trace(
+            adapter,
+            "visual-auto-error",
+            {
+                **_result_trace_payload(error_result, after),
+                "errorType": type(exc).__name__,
+            },
+        )
+        _append_oopif_trace(adapter, "visual-auto-exit", _result_trace_payload(error_result, after))
+        raise
+
+    after = adapter._orchestrator.status()
+    if str(result.get("kind") or "") == "error" or str(result.get("error") or ""):
+        _append_oopif_trace(adapter, "visual-auto-error", _result_trace_payload(result, after))
+    _append_oopif_trace(adapter, "visual-auto-exit", _result_trace_payload(result, after))
+    return result
+
+
 def _run_manual_runtime_heartbeat(adapter: ControlAwareSeleniumBaseCdpAdapter) -> None:
     """Run automatic interaction directly from the manual browser owner loop.
 
@@ -251,14 +302,42 @@ def _run_manual_runtime_heartbeat(adapter: ControlAwareSeleniumBaseCdpAdapter) -
     while preventing a complex page snapshot/OOPIF discovery from starving the
     actual visual runtime before poll_and_act() can even begin.
     """
+    before = adapter._orchestrator.status()
+    _append_oopif_trace(
+        adapter,
+        "manual-heartbeat-enter",
+        {
+            "orchestratorGeneration": int(before.get("generation") or 0),
+            "orchestratorState": str(before.get("state") or ""),
+            "orchestratorOwner": str(before.get("owner") or ""),
+        },
+    )
     try:
-        adapter._orchestrator.run_cycle(adapter._run_visual_auto, adapter._run_instruction_auto)
+        result = adapter._orchestrator.run_cycle(
+            lambda: _run_visual_auto_traced(adapter),
+            adapter._run_instruction_auto,
+        )
     except Exception as exc:
+        after = adapter._orchestrator.status()
+        error_result: Dict[str, Any] = {
+            "acted": False,
+            "kind": "heartbeat-exception",
+            "verified": False,
+            "error": str(exc),
+        }
         _append_oopif_trace(
             adapter,
             "manual-runtime-heartbeat-error",
-            {"errorType": type(exc).__name__, "error": str(exc)[:600]},
+            {
+                **_result_trace_payload(error_result, after),
+                "errorType": type(exc).__name__,
+            },
         )
+        _append_oopif_trace(adapter, "manual-heartbeat-exit", _result_trace_payload(error_result, after))
+        return
+
+    after = adapter._orchestrator.status()
+    _append_oopif_trace(adapter, "manual-heartbeat-exit", _result_trace_payload(result, after))
 
 
 def _close_oopif_runtime(adapter: ControlAwareSeleniumBaseCdpAdapter) -> None:
