@@ -130,8 +130,19 @@ describe("SeleniumBase runtime starvation proof", () => {
     expect(manualWorker).toContain("MANUAL_RUNTIME_HEARTBEAT_SECONDS = 1.0");
     expect(manualWorker).toContain("commands.get(timeout=0.25)");
     expect(manualWorker).toContain("_run_manual_runtime_heartbeat(adapter)");
-    expect(manualWorker).toContain("adapter._orchestrator.run_cycle(adapter._run_visual_auto, adapter._run_instruction_auto)");
+    expect(manualWorker).toContain("adapter._orchestrator.run_cycle(");
+    expect(manualWorker).toContain("result = adapter._orchestrator.run_cycle(");
     expect(manualWorker).not.toContain("scheduler = SingleOwnerRuntimeScheduler(adapter)");
+  });
+
+  it("makes the manual heartbeat and swallowed visual errors observable in the profile trace", () => {
+    expect(manualWorker).toContain('"manual-heartbeat-enter"');
+    expect(manualWorker).toContain('"visual-auto-enter"');
+    expect(manualWorker).toContain('"visual-auto-error"');
+    expect(manualWorker).toContain('"visual-auto-exit"');
+    expect(manualWorker).toContain('"manual-heartbeat-exit"');
+    expect(manualWorker).toContain('"orchestratorGeneration"');
+    expect(manualWorker).toContain('str(result.get("kind") or "") == "error"');
   });
 
   it("uses the patched OOPIF registry in the manual profile browser", () => {
