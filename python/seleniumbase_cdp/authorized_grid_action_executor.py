@@ -68,7 +68,17 @@ class AuthorizedGridActionExecutor:
             const match = bg.match(/url\\(["']?(.*?)["']?\\)/i);
             return match?.[1] || '';
           }};
-          const tileFor = visual => visual.closest?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i]') || visual;
+          const tileFor = visual => {{
+            if (!visual) return visual;
+            const interactive = visual.closest?.(
+              'button,[role="button"],[role="gridcell"],[tabindex],label,li'
+            );
+            if (interactive) return interactive;
+            return visual.closest?.(
+              '[class*="tile" i],[class*="cell" i],[class*="option" i],[class*="choice" i],'
+                + '[class*="square" i],[class*="image" i]'
+            ) || visual;
+          }};
           const visualsIn = root => {{
             const items = [...(root.querySelectorAll?.('img,canvas') || [])].filter(visible);
             const bgCandidates = [...(root.querySelectorAll?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i],[class*="image" i]') || [])]
