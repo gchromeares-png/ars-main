@@ -66,6 +66,26 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
         except Exception:
             pass
 
+    def _append_goto_trace(self, stage: str, *, status: str, started: float | None = None, error: BaseException | None = None) -> None:
+        """Trace the synchronous navigation pipeline before runtime polling can begin."""
+        try:
+            record: Dict[str, Any] = {
+                "ts": time.time(),
+                "phase": "runtime-goto",
+                "stage": str(stage),
+                "status": str(status),
+            }
+            if started is not None:
+                record["elapsedMs"] = round((time.monotonic() - started) * 1000.0, 3)
+            if error is not None:
+                record["errorType"] = type(error).__name__
+                record["error"] = str(error)[:1000]
+            trace_path = self.profile_dir / ".ares-visual-trace.jsonl"
+            with trace_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except Exception:
+            pass
+
     def note_control_activity(self) -> None:
         if self._passive_observation_depth > 0 or self._runtime_poll_in_progress:
             return
@@ -140,18 +160,47 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
     def goto(self, url: str) -> None:
         """Navigate synchronously, but defer expensive automatic visual work."""
         self.note_control_activity()
-        self._sb.goto(url)
-        self._challenge_tracker.wait_for_stable_challenge()
-        self._sb.solve_captcha()
-        self._watchdog.reset()
-        initial = self._watchdog.poll()
-        self._last_watchdog_state = initial
-        self._capture_debug(
-            "page-load",
-            generation=int(initial.get("generation") or 0),
-            force=True,
+        pipeline = (
+            ("sb-goto", lambda: self._sb.goto(url)),
+            ("challenge-stability", self._challenge_tracker.wait_for_stable_challenge),
+            ("seleniumbase-solve-captcha", self._sb.solve_captcha),
         )
+        for stage, action in pipeline:
+            started = time.monotonic()
+            self._append_goto_trace(stage, status="enter")
+            try:
+                action()
+            except BaseException as exc:
+                self._append_goto_trace(stage, status="error", started=started, error=exc)
+                raise
+            self._append_goto_trace(stage, status="exit", started=started)
+
+        started = time.monotonic()
+        self._append_goto_trace("watchdog-baseline", status="enter")
+        try:
+            self._watchdog.reset()
+            initial = self._watchdog.poll()
+            self._last_watchdog_state = initial
+        except BaseException as exc:
+            self._append_goto_trace("watchdog-baseline", status="error", started=started, error=exc)
+            raise
+        self._append_goto_trace("watchdog-baseline", status="exit", started=started)
+
+        started = time.monotonic()
+        self._append_goto_trace("page-load-capture", status="enter")
+        try:
+            self._capture_debug(
+                "page-load",
+                generation=int(initial.get("generation") or 0),
+                force=True,
+            )
+        except BaseException as exc:
+            self._append_goto_trace("page-load-capture", status="error", started=started, error=exc)
+            raise
+        self._append_goto_trace("page-load-capture", status="exit", started=started)
+
         self._deferred_navigation_auto = True
+        self._append_goto_trace("navigation-complete", status="exit")
         self.note_control_activity()
 
     def execute_script(self, script: str, *args: Any) -> Any:
