@@ -112,25 +112,70 @@ jobs:
       - name: Run real Windows Electron UI to OOPIF runtime proof
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $proof = Join-Path $env:RUNNER_TEMP "ares-windows-ui-runtime-proof"
           $userData = Join-Path $env:RUNNER_TEMP "ares-windows-ui-runtime-user-data"
           New-Item -ItemType Directory -Force -Path $proof | Out-Null
           New-Item -ItemType Directory -Force -Path $userData | Out-Null
+          Set-Content -Path (Join-Path $proof "ci-entry.txt") -Value "CI entered Electron proof at $(Get-Date -Format o)"
           $env:ARES_UI_E2E_MODE = "1"
           $env:ARES_UI_E2E_ARTIFACT_DIR = $proof
           $env:ARES_UI_E2E_USER_DATA = $userData
           $env:ARES_NODE_EXECUTABLE = (Get-Command node).Source
-          npx electron tests/windows-ui-runtime-e2e.runner.cjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $electron = (Resolve-Path "node_modules/electron/dist/electron.exe").Path
+          $stdout = Join-Path $proof "electron.stdout.log"
+          $stderr = Join-Path $proof "electron.stderr.log"
+          Write-Host "Starting Electron E2E: $electron"
+          $proc = Start-Process -FilePath $electron -ArgumentList "tests/windows-ui-runtime-e2e.runner.cjs" -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $deadline = (Get-Date).AddSeconds(360)
+          $lastTimelineLength = 0
+          $heartbeat = 0
+
+          while (-not $proc.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            $proc.Refresh()
+            $heartbeat += 1
+            $timeline = Join-Path $proof "runner-timeline.jsonl"
+            if (Test-Path $timeline) {
+              $length = (Get-Item $timeline).Length
+              if ($length -ne $lastTimelineLength) {
+                Write-Host "--- runner checkpoints ---"
+                Get-Content $timeline -Tail 8 | ForEach-Object { Write-Host $_ }
+                $lastTimelineLength = $length
+              }
+            } elseif (($heartbeat % 3) -eq 0) {
+              Write-Host "No runner-timeline.jsonl yet after $($heartbeat * 5)s"
+            }
+            if (($heartbeat % 6) -eq 0) {
+              $snapshot = Get-CimInstance Win32_Process | Where-Object { $_.Name -match "electron|chrome|python|node" } | Select-Object ProcessId,ParentProcessId,Name,CommandLine
+              $snapshot | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $proof "live-processes.json")
+              Write-Host "Electron proof still active after $($heartbeat * 5)s; PID=$($proc.Id)"
+            }
+          }
+
+          if (-not $proc.HasExited) {
+            Write-Host "Electron E2E exceeded 360s. Capturing final process tree."
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -match "electron|chrome|python|node" } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $proof "timeout-processes.json")
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            throw "Windows Electron UI E2E timed out after 360 seconds. Inspect runner-timeline.jsonl and process dumps."
+          }
+
+          Write-Host "Electron exited with code $($proc.ExitCode)"
+          if (Test-Path $stdout) { Write-Host "--- Electron stdout ---"; Get-Content $stdout | ForEach-Object { Write-Host $_ } }
+          if (Test-Path $stderr) { Write-Host "--- Electron stderr ---"; Get-Content $stderr | ForEach-Object { Write-Host $_ } }
+          if ($proc.ExitCode -ne 0) { throw "Electron E2E exited with code $($proc.ExitCode)" }
 
       - name: Verify no E2E Chrome/Python process remains
         if: always()
         shell: pwsh
         run: |
+          $proof = Join-Path $env:RUNNER_TEMP "ares-windows-ui-runtime-proof"
           $needle = "ares-windows-ui-runtime-user-data"
           $orphans = Get-CimInstance Win32_Process | Where-Object {
             ($_.Name -match "chrome|python") -and ($_.CommandLine -like "*$needle*")
           }
+          $orphans | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $proof "cleanup-processes.json")
           if ($orphans) {
             $orphans | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List | Out-String | Write-Host
             throw "Windows UI E2E left Chrome/Python processes behind."
