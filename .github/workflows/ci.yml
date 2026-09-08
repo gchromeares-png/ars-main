@@ -53,12 +53,16 @@ jobs:
           python/seleniumbase_cdp/task_browser_worker_oopif.py
           python/seleniumbase_cdp/auto_interaction_controller.py
           python/seleniumbase_cdp/auto_interaction_probe.py
+          python/seleniumbase_cdp/runtime_nested_oopif_grid_e2e_probe.py
 
       - name: Verify instruction and math runtime
         run: python python/seleniumbase_cdp/instruction_input_probe.py
 
       - name: Verify structural grid adapter
         run: python python/seleniumbase_cdp/site_grid_adapter_probe.py
+
+      - name: Verify nested visual-ancestor OOPIF runtime
+        run: python python/seleniumbase_cdp/runtime_nested_oopif_grid_e2e_probe.py
 
       - name: Verify grid scope lifecycle
         run: python python/seleniumbase_cdp/grid_scope_lifecycle_probe.py
