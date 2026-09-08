@@ -56,6 +56,8 @@ jobs:
           python/seleniumbase_cdp/auto_interaction_probe.py
           python/seleniumbase_cdp/runtime_nested_oopif_grid_e2e_probe.py
           python/seleniumbase_cdp/runtime_nested_oopif_grid_e2e_runner.py
+          python/seleniumbase_cdp/browser_identity_probe.py
+          python/seleniumbase_cdp/browser_identity_ci_probe.py
 
       - name: Verify instruction and math runtime
         run: python python/seleniumbase_cdp/instruction_input_probe.py
@@ -68,6 +70,19 @@ jobs:
 
       - name: Verify nested visual-ancestor OOPIF runtime
         run: python python/seleniumbase_cdp/runtime_nested_oopif_grid_e2e_runner.py
+
+      - name: Verify seeded browser identity stability
+        env:
+          ARES_BROWSER_IDENTITY_ARTIFACT: artifacts/browser-identity/ares-browser-identity.json
+        run: python python/seleniumbase_cdp/browser_identity_ci_probe.py
+
+      - name: Upload browser identity proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ares-browser-identity-proof
+          path: artifacts/browser-identity/ares-browser-identity.json
+          if-no-files-found: error
 
       - name: Verify grid scope lifecycle
         run: python python/seleniumbase_cdp/grid_scope_lifecycle_probe.py
