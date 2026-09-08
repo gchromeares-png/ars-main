@@ -35,11 +35,12 @@ class AuthorizedGridActionExecutor:
         return result
 
     def _apply_state(self, state: Dict[str, Any], selected: List[int], *, submit: bool) -> Dict[str, Any]:
-        selected = self._indexes(selected, int(state.get("tileCount") or 0))
+        expected_count = int(state.get("tileCount") or 0)
+        selected = self._indexes(selected, expected_count)
         if state.get("kind") != "image-grid" or not selected:
             return {"clickedIndexes": [], "submitted": False, "state": state}
 
-        result = self._apply_document(selected, submit)
+        result = self._apply_document(selected, submit, expected_count=expected_count)
         if not result["clicked"] and str(state.get("scope") or "").startswith("iframe:"):
             result = self._apply_frame(state, selected, submit)
 
@@ -49,12 +50,14 @@ class AuthorizedGridActionExecutor:
             "state": self._site_adapter.poll(),
         }
 
-    def _apply_document(self, selected: List[int], submit: bool) -> Dict[str, Any]:
+    def _apply_document(self, selected: List[int], submit: bool, *, expected_count: int = 0) -> Dict[str, Any]:
         overrides = getattr(self._site_adapter, "_overrides", {})
+        expected_count = max(0, int(expected_count))
         script = f"""
         (() => {{
           const selected = {json.dumps(selected)};
           const overrides = {json.dumps(overrides)};
+          const expectedCount = {expected_count};
           const supported = new Set({json.dumps(_SUPPORTED_COUNTS)});
           const roots = [], seen = new Set();
           const visible = el => {{
@@ -68,7 +71,17 @@ class AuthorizedGridActionExecutor:
             const match = bg.match(/url\\(["']?(.*?)["']?\\)/i);
             return match?.[1] || '';
           }};
-          const tileFor = visual => visual.closest?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i]') || visual;
+          const tileFor = visual => {{
+            if (!visual) return visual;
+            const interactive = visual.closest?.(
+              'button,[role="button"],[role="gridcell"],[tabindex],label,li'
+            );
+            if (interactive) return interactive;
+            return visual.closest?.(
+              '[class*="tile" i],[class*="cell" i],[class*="option" i],[class*="choice" i],'
+                + '[class*="square" i],[class*="image" i]'
+            ) || visual;
+          }};
           const visualsIn = root => {{
             const items = [...(root.querySelectorAll?.('img,canvas') || [])].filter(visible);
             const bgCandidates = [...(root.querySelectorAll?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i],[class*="image" i]') || [])]
@@ -104,8 +117,15 @@ class AuthorizedGridActionExecutor:
               }}
             }}
           }}
-          groups.sort((a,b) => Number(b.preferred)-Number(a.preferred));
-          const group = groups[0];
+
+          // The classifier indexes belong to the detected grid state. Never
+          // apply them to a smaller nested candidate (for example one 4-cell
+          // table row inside a detected 4x4/16-cell grid).
+          const candidates = expectedCount
+            ? groups.filter(group => group.tiles.length === expectedCount)
+            : groups;
+          candidates.sort((a,b) => Number(b.preferred)-Number(a.preferred));
+          const group = candidates[0];
           if (!group) return {{clicked:[], submitted:false}};
 
           const clicked = [];

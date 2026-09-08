@@ -106,7 +106,17 @@ class GridSiteAdapter:
             const alt = img?.getAttribute?.('alt') || tile?.getAttribute?.('aria-label') || text(tile).slice(0,180);
             return ['grid-tile',alt,source].join('|');
           }};
-          const tileFor = visual => visual.closest?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i]') || visual;
+          const tileFor = visual => {{
+            if (!visual) return visual;
+            const interactive = visual.closest?.(
+              'button,[role="button"],[role="gridcell"],[tabindex],label,li'
+            );
+            if (interactive) return interactive;
+            return visual.closest?.(
+              '[class*="tile" i],[class*="cell" i],[class*="option" i],[class*="choice" i],'
+                + '[class*="square" i],[class*="image" i]'
+            ) || visual;
+          }};
           const visualsIn = root => {{
             const items = [...(root.querySelectorAll?.('img,canvas') || [])].filter(el => visible(el) && visualReady(el));
             const bgCandidates = [...(root.querySelectorAll?.('button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i],[class*="image" i]') || [])]

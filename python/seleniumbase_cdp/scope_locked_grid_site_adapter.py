@@ -47,9 +47,17 @@ return (() => {
     const r = el.getBoundingClientRect();
     return {x:r.x,y:r.y,width:r.width,height:r.height};
   };
-  const tileFor = visual => visual.closest?.(
-    'button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i],[class*="option" i],[class*="choice" i]'
-  ) || visual;
+  const tileFor = visual => {
+    if (!visual) return visual;
+    const interactive = visual.closest?.(
+      'button,[role="button"],[role="gridcell"],[tabindex],label,li'
+    );
+    if (interactive) return interactive;
+    return visual.closest?.(
+      '[class*="tile" i],[class*="cell" i],[class*="option" i],[class*="choice" i],'
+        + '[class*="square" i],[class*="image" i]'
+    ) || visual;
+  };
   const visualsIn = root => {
     const direct = [...(root.querySelectorAll?.('img,canvas') || [])].filter(visible);
     const backgrounds = [...(root.querySelectorAll?.('*') || [])].filter(el => {
