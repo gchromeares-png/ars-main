@@ -36,30 +36,33 @@ class ObservationCapture:
         filename = f"{stamp}-{self._counter:04d}-g{int(generation)}-{safe_event}.png"
         path = self._root / filename
         errors: List[str] = []
-        provider = "seleniumbase-cdp"
+        provider = "active-tab-cdp"
 
+        # The manual profile browser can change tabs independently of
+        # SeleniumBase's synchronous wrapper. Grid/OOPIF discovery already
+        # follows get_active_tab(), so capture must use that same tab first or
+        # the CSS/OOPIF bounds can be paired with a successfully-written PNG
+        # from a stale cached page.
         try:
-            self._sb.save_screenshot(filename, folder=str(self._root))
+            tab = self._sb.get_active_tab()
+            loop = self._sb.get_event_loop()
+            if tab is None or loop is None:
+                raise RuntimeError("active CDP tab/event loop unavailable")
+            loop.run_until_complete(
+                tab.save_screenshot(filename=str(path), format="png", full_page=False)
+            )
         except Exception as exc:
-            errors.append(f"seleniumbase-cdp: {exc}")
+            errors.append(f"active-tab-cdp: {exc}")
         captured = path.exists() and path.stat().st_size > 0
 
-        # SeleniumBase's sync wrapper writes through its cached `page`. Manual
-        # browser use can make that page stale while get_active_tab() is already
-        # correct. Use SeleniumBase's documented async tab screenshot API as the
-        # exact fallback, writing to the same absolute ARES path.
+        # Keep SeleniumBase's sync screenshot as a compatibility fallback for
+        # runtimes where the active-tab async API is unavailable.
         if not captured:
             try:
-                tab = self._sb.get_active_tab()
-                loop = self._sb.get_event_loop()
-                if tab is None or loop is None:
-                    raise RuntimeError("active CDP tab/event loop unavailable")
-                loop.run_until_complete(
-                    tab.save_screenshot(filename=str(path), format="png", full_page=False)
-                )
-                provider = "active-tab-cdp"
+                self._sb.save_screenshot(filename, folder=str(self._root))
+                provider = "seleniumbase-cdp"
             except Exception as exc:
-                errors.append(f"active-tab-cdp: {exc}")
+                errors.append(f"seleniumbase-cdp: {exc}")
             captured = path.exists() and path.stat().st_size > 0
 
         if captured:
