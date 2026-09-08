@@ -90,6 +90,12 @@ class BrowserHarness:
 class ActionSite:
     _overrides: dict[str, str] = {}
 
+    def __init__(self, state: dict[str, object]) -> None:
+        self._state = state
+
+    def poll(self) -> dict[str, object]:
+        return self._state
+
 
 def main() -> int:
     url = "data:text/html;charset=utf-8," + quote(HTML)
@@ -117,8 +123,8 @@ def main() -> int:
                 )
             )
 
-        executor = AuthorizedGridActionExecutor(harness, ActionSite())
-        action_result = executor._apply_document([0, 5, 15], submit=False)
+        executor = AuthorizedGridActionExecutor(harness, ActionSite(result))
+        action_result = executor.apply([0, 5, 15], submit=False)
         clicked_dom = sb.driver.execute_script("return window.__clickedTiles.slice();")
 
     if result.get("kind") != "image-grid":
@@ -155,7 +161,7 @@ def main() -> int:
         if not (94.0 <= width <= 97.0 and 94.0 <= height <= 97.0):
             raise AssertionError(f"Expected cell-sized ~95x95 bounds, got {bounds!r}")
 
-    if action_result.get("clicked") != [0, 5, 15]:
+    if action_result.get("clickedIndexes") != [0, 5, 15]:
         raise AssertionError(f"Expected action executor indexes [0,5,15], got {action_result!r}")
     if clicked_dom != ["0", "5", "15"]:
         raise AssertionError(f"Expected clicks on interactive TD cells 0,5,15, got {clicked_dom!r}")
