@@ -219,6 +219,11 @@ if (process.env.ARES_UI_E2E_MODE === "1" && process.versions?.electron && proces
     return clickButton(win, `norm(el.innerText||el.textContent).includes(${quoted})`, text);
   }
 
+  async function clickNav(win, text) {
+    const quoted = JSON.stringify(text);
+    return clickButton(win, `Boolean(el.closest('nav.nav'))&&norm(el.innerText||el.textContent).includes(${quoted})`, `nav ${text}`);
+  }
+
   async function clickTitle(win, title) {
     const quoted = JSON.stringify(title);
     return clickButton(win, `String(el.getAttribute('title')||'')===${quoted}`, title);
@@ -327,7 +332,7 @@ if (process.env.ARES_UI_E2E_MODE === "1" && process.versions?.electron && proces
     proof("setup-via-preload-ipc", { profileId: PROFILE_ID, shopId: SHOP_ID, taskId: TASK_ID, headless: false });
     await reloadAndWait(win);
 
-    await clickContains(win, "Profiles");
+    await clickNav(win, "Profiles");
     await delay(350);
     await clickContains(win, PROFILE_NAME);
     await clickText(win, "Browser");
@@ -365,7 +370,7 @@ if (process.env.ARES_UI_E2E_MODE === "1" && process.versions?.electron && proces
     }, 25_000, "SeleniumBase CDP profile browser close");
     proof("seleniumbase-profile-browser-closed-from-ui");
 
-    await clickContains(win, "Tasks");
+    await clickNav(win, "Tasks");
     await waitFor(() => evaluate(win, `document.body.innerText.includes(${JSON.stringify("Windows UI Runtime OOPIF E2E")})`), 10_000, "task row");
     await capture(win, "05-task-ready.png");
     await clickTitle(win, "Start task");
@@ -433,13 +438,13 @@ if (process.env.ARES_UI_E2E_MODE === "1" && process.versions?.electron && proces
   async function finish(code, error) {
     if (finished) return;
     finished = true;
+    const exitCode = error ? (code || 1) : (code || 0);
     if (error) {
       proof("e2e-fail", { error: String(error?.stack || error?.message || error) });
-      process.exitCode = code || 1;
     }
     await Promise.allSettled([closeServer(mainServer), closeServer(frameServer), closeServer(visionServer)]);
-    proof("servers-closed");
-    app.quit();
+    proof("servers-closed", { exitCode });
+    app.exit(exitCode);
   }
 
   app.on("browser-window-created", (_event, win) => {
