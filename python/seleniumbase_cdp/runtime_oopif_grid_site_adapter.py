@@ -158,11 +158,21 @@ return (() => {
     const testId = el.getAttribute?.('data-testid');
     return testId ? '[data-testid="' + CSS.escape(testId) + '"]' : '';
   };
-  const tileFor = visual => visual.closest?.(
-    'button,[role="button"],[role="gridcell"],[tabindex],label,li,'
-      + '[class*="tile" i],[class*="cell" i],[class*="option" i],[class*="choice" i],'
-      + '[class*="square" i],[class*="image" i]'
-  ) || visual;
+  const tileFor = visual => {
+    if (!visual) return visual;
+    // Prefer real interaction semantics before broad class-name heuristics.
+    // Sprite/image nodes often contain "image"/"tile" in their own class name;
+    // accepting the visual node itself there would measure the shifted sprite
+    // box instead of the clickable grid cell that owns it.
+    const interactive = visual.closest?.(
+      'button,[role="button"],[role="gridcell"],[tabindex],label,li'
+    );
+    if (interactive) return interactive;
+    return visual.closest?.(
+      '[class*="tile" i],[class*="cell" i],[class*="option" i],[class*="choice" i],'
+        + '[class*="square" i],[class*="image" i]'
+    ) || visual;
+  };
   const visualsIn = root => {
     const direct = [...(root.querySelectorAll?.('img,canvas,svg,[role="img"]') || [])].filter(visible);
     const backgrounds = [...(root.querySelectorAll?.('*') || [])].filter(el => {
