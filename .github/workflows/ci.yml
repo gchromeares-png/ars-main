@@ -116,13 +116,11 @@ jobs:
           $userData = Join-Path $env:RUNNER_TEMP "ares-windows-ui-runtime-user-data"
           New-Item -ItemType Directory -Force -Path $proof | Out-Null
           New-Item -ItemType Directory -Force -Path $userData | Out-Null
-          $bootstrap = (Resolve-Path "tests/windows-ui-runtime-e2e.bootstrap.cjs").Path
           $env:ARES_UI_E2E_MODE = "1"
           $env:ARES_UI_E2E_ARTIFACT_DIR = $proof
           $env:ARES_UI_E2E_USER_DATA = $userData
           $env:ARES_NODE_EXECUTABLE = (Get-Command node).Source
-          $env:NODE_OPTIONS = "--require=$bootstrap"
-          npx electron .
+          npx electron tests/windows-ui-runtime-e2e.runner.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify no E2E Chrome/Python process remains
