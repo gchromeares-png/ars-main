@@ -75,6 +75,14 @@ async function findNamedFile(root: string, name: string): Promise<string | undef
   return undefined;
 }
 
+async function logRuntimeFailureEvidence(profileRoot: string, hits: Hit[], visionCalls: number): Promise<void> {
+  const tracePath = await findNamedFile(profileRoot, ".ares-visual-trace.jsonl");
+  const trace = tracePath ? await readFile(tracePath, "utf8").catch(() => "") : "";
+  const tail = trace.split(/\r?\n/).filter(Boolean).slice(-40).join("\n");
+  console.error(`[OOPIF-RUNTIME-EVIDENCE] visionCalls=${visionCalls} hits=${JSON.stringify(hits)} tracePath=${tracePath ?? "missing"}`);
+  if (tail) console.error(`[OOPIF-RUNTIME-TRACE-TAIL]\n${tail}`);
+}
+
 function send(response: http.ServerResponse, body: string, type = "text/html; charset=utf-8"): void {
   response.writeHead(200, {
     "content-type": type,
@@ -296,6 +304,9 @@ describeBrowserIntegration("real task OOPIF grid runtime", () => {
         expect(trace).toContain('"provider":"python-bezier:cdp"');
         expect(trace).toContain('"verified":true');
       }
+    } catch (error) {
+      await logRuntimeFailureEvidence(profileRoot, hits, vision.calls());
+      throw error;
     } finally {
       orchestrator.cancelTask(task.id);
       await withTimeout(run.catch(() => undefined), 12_000, "task cancellation").catch(error => {
@@ -305,8 +316,11 @@ describeBrowserIntegration("real task OOPIF grid runtime", () => {
       await withTimeout(router.close(), 12_000, "router close").catch(error => {
         cleanupError ??= error instanceof Error ? error : new Error(String(error));
       });
+      await withTimeout(browserWorker.close(), 12_000, "browser worker close").catch(error => {
+        cleanupError ??= error instanceof Error ? error : new Error(String(error));
+      });
       await Promise.all([closeServer(fixtures.main), closeServer(fixtures.frame), closeServer(vision.server)]);
-      await rm(profileRoot, { recursive: true, force: true });
+      await rm(profileRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
       if (previousVisionUrl === undefined) delete process.env["ARES_VISION_SERVICE_URL"]; else process.env["ARES_VISION_SERVICE_URL"] = previousVisionUrl;
       if (previousVisionToken === undefined) delete process.env["ARES_VISION_SERVICE_TOKEN"]; else process.env["ARES_VISION_SERVICE_TOKEN"] = previousVisionToken;
       if (previousVisionOffline === undefined) delete process.env["ARES_VISION_OFFLINE"]; else process.env["ARES_VISION_OFFLINE"] = previousVisionOffline;
