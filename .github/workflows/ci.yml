@@ -79,9 +79,9 @@ jobs:
           ARES_MONITOR_E2E_MODE: "visible"
         run: python python/seleniumbase_cdp/product_monitor_browser_e2e_probe.py
 
-  windows-orchestrator-grid-e2e:
+  windows-ui-runtime-e2e-proof:
     runs-on: windows-latest
-    timeout-minutes: 6
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -106,13 +106,46 @@ jobs:
       - name: Install SeleniumBase runtime
         run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
 
-      - name: Build production backend
-        run: npm run build:backend
+      - name: Build TypeScript backend and Angular UI
+        run: npm run build
 
-      - name: Run TypeScript orchestrator to Python OOPIF grid E2E
-        env:
-          ARES_RUN_BROWSER_INTEGRATION: "1"
-        run: npx jest --runInBand tests/real-task-oopif-grid-runtime.integration.test.ts
+      - name: Run real Windows Electron UI to OOPIF runtime proof
+        shell: pwsh
+        run: |
+          $proof = Join-Path $env:RUNNER_TEMP "ares-windows-ui-runtime-proof"
+          $userData = Join-Path $env:RUNNER_TEMP "ares-windows-ui-runtime-user-data"
+          New-Item -ItemType Directory -Force -Path $proof | Out-Null
+          New-Item -ItemType Directory -Force -Path $userData | Out-Null
+          $bootstrap = (Resolve-Path "tests/windows-ui-runtime-e2e.bootstrap.cjs").Path
+          $env:ARES_UI_E2E_MODE = "1"
+          $env:ARES_UI_E2E_ARTIFACT_DIR = $proof
+          $env:ARES_UI_E2E_USER_DATA = $userData
+          $env:ARES_NODE_EXECUTABLE = (Get-Command node).Source
+          $env:NODE_OPTIONS = "--require=$bootstrap"
+          npx electron .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify no E2E Chrome/Python process remains
+        if: always()
+        shell: pwsh
+        run: |
+          $needle = "ares-windows-ui-runtime-user-data"
+          $orphans = Get-CimInstance Win32_Process | Where-Object {
+            ($_.Name -match "chrome|python") -and ($_.CommandLine -like "*$needle*")
+          }
+          if ($orphans) {
+            $orphans | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List | Out-String | Write-Host
+            throw "Windows UI E2E left Chrome/Python processes behind."
+          }
+
+      - name: Upload Windows UI runtime proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ui-runtime-proof
+          path: ${{ runner.temp }}/ares-windows-ui-runtime-proof
+          if-no-files-found: error
+          retention-days: 7
 
   node-focus:
     runs-on: ubuntu-latest
