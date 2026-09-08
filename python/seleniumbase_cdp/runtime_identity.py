@@ -53,6 +53,9 @@ class BrowserRuntimeIdentity:
     def browser_pids(self) -> List[int]:
         direct_matches: List[int] = []
         inherited_matches: List[int] = []
+        profile_matches: List[int] = []
+        target_profile = os.path.normcase(str(self.profile_dir))
+
         for process in psutil.process_iter(["pid", "name", "cmdline"]):
             try:
                 name = str(process.info.get("name") or "").lower()
@@ -62,17 +65,40 @@ class BrowserRuntimeIdentity:
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
                 continue
 
+            pid = int(process.pid)
             if self.marker_arg in command_line:
-                direct_matches.append(int(process.pid))
-                continue
+                direct_matches.append(pid)
+
+            for index, argument in enumerate(command_line):
+                profile_value = ""
+                if argument.startswith("--user-data-dir="):
+                    profile_value = argument.split("=", 1)[1]
+                elif argument == "--user-data-dir" and index + 1 < len(command_line):
+                    profile_value = command_line[index + 1]
+                if not profile_value:
+                    continue
+                clean = profile_value.strip().strip('"')
+                try:
+                    candidate = os.path.normcase(str(Path(clean).expanduser().resolve()))
+                except (OSError, RuntimeError):
+                    candidate = os.path.normcase(os.path.abspath(os.path.expanduser(clean)))
+                if candidate == target_profile:
+                    profile_matches.append(pid)
+                    break
 
             try:
                 environment = process.environ()
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error, NotImplementedError):
                 environment = {}
             if str(environment.get(RUNTIME_ENV) or "") == self.session_id:
-                inherited_matches.append(int(process.pid))
-        return list(dict.fromkeys([*direct_matches, *inherited_matches]))
+                inherited_matches.append(pid)
+
+        # Chromium does not reliably preserve an inspectable environment/session
+        # marker on every Windows child process (notably crashpad/GPU/utility and
+        # renderer children). The exact ARES profile directory is therefore a
+        # second ownership proof, not a broad browser-name fallback. Profile
+        # leasing guarantees one active ARES owner for this directory.
+        return list(dict.fromkeys([*direct_matches, *inherited_matches, *profile_matches]))
 
     def capture_owned_pids(self, adapter: Any) -> List[int]:
         matches = self.browser_pids()
@@ -191,6 +217,13 @@ class BrowserRuntimeIdentity:
         self._write(payload)
 
     def clear(self) -> None:
+        # The normal SeleniumBase/CDP shutdown gets the first chance to flush and
+        # close Chromium. If Windows still has ARES-owned Chrome descendants
+        # alive here, terminate only processes proven to belong to this exact
+        # runtime session/profile. Do this before deleting the identity marker so
+        # a finished runtime never leaves its profile locked by orphaned Chrome.
+        self._terminate_owned_browser_processes()
+
         target = self.profile_dir / RUNTIME_FILENAME
         try:
             raw = json.loads(target.read_text(encoding="utf-8"))
@@ -202,6 +235,36 @@ class BrowserRuntimeIdentity:
             target.unlink(missing_ok=True)
         except OSError:
             pass
+
+    def _terminate_owned_browser_processes(self) -> None:
+        processes: List[psutil.Process] = []
+        for pid in self.browser_pids():
+            if pid == os.getpid():
+                continue
+            try:
+                process = psutil.Process(pid)
+                if process.is_running() and process.status() != psutil.STATUS_ZOMBIE:
+                    processes.append(process)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                continue
+        if not processes:
+            return
+
+        # Browser.close already had a bounded graceful-flush window in the
+        # adapter. Anything still alive now is an orphan of this exact runtime.
+        for process in processes:
+            try:
+                process.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                pass
+        _, alive = psutil.wait_procs(processes, timeout=2.0)
+        for process in alive:
+            try:
+                process.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                pass
+        if alive:
+            psutil.wait_procs(alive, timeout=2.0)
 
     def _write(self, payload: Dict[str, Any]) -> None:
         target = self.profile_dir / RUNTIME_FILENAME

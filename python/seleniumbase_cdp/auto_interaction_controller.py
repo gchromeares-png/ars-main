@@ -122,7 +122,28 @@ class AutoInteractionController:
             }
 
         sources = source_override if source_override is not None else list(state.get("sources") or [])
-        decision = self._vision.classify(str(state.get("instruction") or ""), sources)
+        instruction = str(state.get("instruction") or "")
+        self._record("grid-diagnostic", {
+            "stage": "VISION_CALLED",
+            "signature": signature,
+            "decisionSource": decision_source,
+            "instruction": instruction,
+            "sourceCount": len(sources),
+            "tileCount": int(state.get("tileCount") or 0),
+            "attemptBefore": previous_attempts,
+        })
+        decision = self._vision.classify(instruction, sources)
+        self._record("grid-diagnostic", {
+            "stage": "VISION_RESULT",
+            "signature": signature,
+            "error": str(decision.get("error") or ""),
+            "target": decision.get("target"),
+            "selectedIndexesRaw": list(decision.get("selectedIndexes") or []),
+            "scores": list(decision.get("scores") or []),
+            "model": decision.get("model"),
+            "threshold": decision.get("threshold"),
+            "selectionPolicy": decision.get("selectionPolicy"),
+        })
         if str(decision.get("error") or "").strip():
             decision = {
                 **decision,
@@ -133,6 +154,12 @@ class AutoInteractionController:
                 "maxAttempts": _MAX_GRID_ATTEMPTS,
             }
             self._record("decision", {"kind": "image-grid", "decision": decision})
+            self._record("grid-diagnostic", {
+                "stage": "VERIFY",
+                "verified": False,
+                "reason": "vision-error-retry",
+                "attempt": previous_attempts,
+            })
             return {
                 "acted": False,
                 "verified": False,
@@ -166,8 +193,23 @@ class AutoInteractionController:
             "maxAttempts": _MAX_GRID_ATTEMPTS,
         }
         self._record("decision", {"kind": "image-grid", "decision": decision})
+        self._record("grid-diagnostic", {
+            "stage": "MARK_IDS",
+            "signature": signature,
+            "selectedIndexes": selected,
+            "selectedMarkIds": selected_mark_ids,
+            "tileMarkCount": len(tile_marks),
+            "completeMapping": bool(selected) and len(selected_mark_ids) == len(selected),
+            "attempt": attempt,
+        })
         if not selected or len(selected_mark_ids) != len(selected):
             reason = "max-attempts-reached" if attempt >= _MAX_GRID_ATTEMPTS else "no-selection-retry"
+            self._record("grid-diagnostic", {
+                "stage": "VERIFY",
+                "verified": False,
+                "reason": reason,
+                "attempt": attempt,
+            })
             return {
                 "acted": False,
                 "verified": False,
@@ -182,10 +224,28 @@ class AutoInteractionController:
 
         self._last_action_at = time.monotonic()
         apply_marks = getattr(self._grid_actions, "apply_marks", None)
+        self._record("grid-diagnostic", {
+            "stage": "APPLY_MARKS_ENTER",
+            "signature": signature,
+            "selectedIndexes": selected,
+            "selectedMarkIds": selected_mark_ids,
+            "submit": True,
+            "executor": "apply_marks" if selected_mark_ids and callable(apply_marks) else "apply_indexes",
+            "attempt": attempt,
+        })
         if selected_mark_ids and callable(apply_marks):
             result = apply_marks(selected_mark_ids, submit=True, expected_state=state)
         else:
             result = self._grid_actions.apply(selected, submit=True)
+        self._record("grid-diagnostic", {
+            "stage": "APPLY_MARKS_RESULT",
+            "signature": signature,
+            "clickedIndexes": list((result or {}).get("clickedIndexes") or []) if isinstance(result, dict) else [],
+            "clickedMarkIds": list((result or {}).get("clickedMarkIds") or []) if isinstance(result, dict) else [],
+            "submitted": bool((result or {}).get("submitted")) if isinstance(result, dict) else False,
+            "reason": str((result or {}).get("reason") or "") if isinstance(result, dict) else "invalid-result",
+            "attempt": attempt,
+        })
 
         clicked = [int(value) for value in (result.get("clickedIndexes") or [])] if isinstance(result, dict) else []
         clicked_mark_ids = [str(value) for value in (result.get("clickedMarkIds") or [])] if isinstance(result, dict) else []
@@ -203,6 +263,14 @@ class AutoInteractionController:
             reason = verification["reason"]
             if attempt >= _MAX_GRID_ATTEMPTS and reason not in {"stale-grid-during-selection", "stale-grid-before-selection"}:
                 reason = "max-attempts-reached"
+            self._record("grid-diagnostic", {
+                "stage": "VERIFY",
+                "verified": False,
+                "reason": reason,
+                "allClicked": all_clicked,
+                "submitted": submitted,
+                "attempt": attempt,
+            })
             return {
                 "acted": bool(clicked),
                 "verified": False,
@@ -229,6 +297,13 @@ class AutoInteractionController:
             )
         )
         self._record("action", {"kind": "image-grid", "decision": decision, "result": result, "verification": verification})
+        self._record("grid-diagnostic", {
+            "stage": "VERIFY",
+            "verified": verified,
+            "reason": str(verification.get("reason") or reason),
+            "finalReason": reason,
+            "attempt": attempt,
+        })
         return {
             "acted": True,
             "verified": verified,

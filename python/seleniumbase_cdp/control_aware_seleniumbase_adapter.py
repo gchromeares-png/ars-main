@@ -3,17 +3,12 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, Iterable, List
 
+from oopif_visual_interaction_runtime import OopifVisualInteractionRuntime
 from seleniumbase_adapter import SeleniumBaseCdpAdapter
 
 
 class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
-    """Keep expensive automatic page work behind explicit control-plane traffic.
-
-    Browser/CDP stays single-owner. Navigation performs only the synchronous work
-    required to make the page safe and observable; the expensive automatic visual
-    cycle is deferred to the existing idle poll. Passive telemetry can observe the
-    page without extending the explicit-control quiet window.
-    """
+    """Keep expensive automatic page work behind explicit control-plane traffic."""
 
     CONTROL_QUIET_SECONDS = 0.9
 
@@ -22,8 +17,13 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
         self._deferred_navigation_auto = False
         self._passive_observation_depth = 0
         super().__init__(*args, **kwargs)
-        # Give the owner a short window to receive the first command after READY
-        # before any expensive idle visual work is allowed to start.
+        overrides = kwargs.get("site_adapter_overrides")
+        self._visual_interactions = OopifVisualInteractionRuntime(
+            self._sb,
+            profile_dir=self.profile_dir,
+            overrides=overrides if isinstance(overrides, dict) else {},
+            capture=self._capture,
+        )
         self.note_control_activity()
 
     def note_control_activity(self) -> None:
@@ -52,13 +52,7 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
         super().poll_runtime()
 
     def goto(self, url: str) -> None:
-        """Navigate synchronously, but defer expensive automatic visual work.
-
-        This is the base adapter's navigation contract minus the final forced
-        automatic visual cycle. Challenge stabilization/handling, watchdog state,
-        and debug capture remain unchanged. The deferred cycle is executed by
-        poll_runtime() after the control quiet window.
-        """
+        """Navigate synchronously, but defer expensive automatic visual work."""
         self.note_control_activity()
         self._sb.goto(url)
         self._challenge_tracker.wait_for_stable_challenge()

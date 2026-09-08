@@ -13,11 +13,16 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 
 PIPELINE_PROMPT_TEMPLATE = "This is a photo of {target}."
+PROMPT_TEMPLATES: Tuple[str, ...] = (
+    PIPELINE_PROMPT_TEMPLATE,
+    "This image contains {target}.",
+    "A photo containing {target}.",
+)
 DEFAULT_RAW_LOGIT_THRESHOLD = -3.497153
 
 
 class VisionGridClassifier:
-    """Lazy SigLIP2 classifier following the Hugging Face joint forward path."""
+    """Lazy SigLIP2 classifier using the Hugging Face joint forward path."""
 
     def __init__(self, *, allow_remote: bool = True) -> None:
         self.model_name = os.environ.get(
@@ -71,6 +76,7 @@ class VisionGridClassifier:
             "rawLogitThreshold": self.raw_logit_threshold,
             "selectionPolicy": "hf-joint-forward-sigmoid",
             "promptTemplate": PIPELINE_PROMPT_TEMPLATE,
+            "promptTemplates": list(PROMPT_TEMPLATES),
             "sharedService": bool(self.remote_url),
             "offline": self.offline,
             "device": "shared-service" if self.remote_url else self._device,
@@ -94,7 +100,7 @@ class VisionGridClassifier:
             }
 
         target = self._target_text(instruction).casefold().strip()
-        prompt = PIPELINE_PROMPT_TEMPLATE.format(target=target)
+        prompts = [template.format(target=target) for template in PROMPT_TEMPLATES]
 
         loaded: List[Tuple[int, Any]] = []
         scores: List[float | None] = [None] * len(source_list)
@@ -118,7 +124,7 @@ class VisionGridClassifier:
         try:
             with self._lock:
                 inputs = self._processor(
-                    text=[prompt],
+                    text=prompts,
                     images=[image for _, image in loaded],
                     padding="max_length",
                     max_length=64,
@@ -133,10 +139,16 @@ class VisionGridClassifier:
                 logits_per_image = getattr(outputs, "logits_per_image", None)
                 if logits_per_image is None:
                     raise TypeError("SigLIP2 forward returned no logits_per_image")
+                if logits_per_image.ndim != 2 or logits_per_image.shape[1] != len(prompts):
+                    raise ValueError(
+                        "Unexpected SigLIP2 logits_per_image shape "
+                        f"{tuple(logits_per_image.shape)} for {len(prompts)} prompts"
+                    )
 
-                probabilities = self._torch.sigmoid(logits_per_image)
-                logit_values = logits_per_image[:, 0].detach().float().cpu().tolist()
-                probability_values = probabilities[:, 0].detach().float().cpu().tolist()
+                ensemble_logits = logits_per_image.mean(dim=1)
+                probabilities = self._torch.sigmoid(ensemble_logits)
+                logit_values = ensemble_logits.detach().float().cpu().tolist()
+                probability_values = probabilities.detach().float().cpu().tolist()
 
             for (source_index, _), raw, probability in zip(
                 loaded,
@@ -200,6 +212,7 @@ class VisionGridClassifier:
                 "rawLogitThreshold": self.raw_logit_threshold,
                 "selectionPolicy": "hf-joint-forward-sigmoid",
                 "promptTemplate": PIPELINE_PROMPT_TEMPLATE,
+                "promptTemplates": list(PROMPT_TEMPLATES),
                 "sharedService": True,
                 "error": self._error,
             }
@@ -251,6 +264,7 @@ class VisionGridClassifier:
             "rawLogitThreshold": self.raw_logit_threshold,
             "selectionPolicy": "hf-joint-forward-sigmoid",
             "promptTemplate": PIPELINE_PROMPT_TEMPLATE,
+            "promptTemplates": list(PROMPT_TEMPLATES),
             "device": self._device,
         }
         if error:
@@ -348,6 +362,7 @@ class VisionGridClassifier:
         for pattern in patterns:
             cleaned = re.sub(pattern, "", value).strip(" .:;-")
             if cleaned and cleaned != value:
+                cleaned = re.sub(r"(?i)\s+aus$", "", cleaned).strip(" .:;-")
                 return cleaned[:240]
         return value[:240] or "the requested object"
 

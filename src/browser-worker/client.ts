@@ -166,11 +166,34 @@ export class BrowserWorkerProcessClient {
 
   async close(): Promise<void> {
     const child = this.child;
-    if (!child || child.killed) return;
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
     this.closing = true;
     this.stopHeartbeat();
-    try { await this.request({ type: "shutdown", requestId: randomUUID() }, 4_000); }
-    catch { if (!child.killed) child.kill("SIGKILL"); }
+    try {
+      const response = await this.request({ type: "shutdown", requestId: randomUUID() }, 20_000);
+      if (response.type !== "ack") throw new Error(`Unerwartete Shutdown-Antwort: ${response.type}`);
+      await this.waitForWorkerExit(child, 5_000);
+    } catch {
+      if (child.exitCode === null && child.signalCode === null && !child.killed) child.kill("SIGKILL");
+      await this.waitForWorkerExit(child, 5_000).catch(() => undefined);
+    }
+  }
+
+  private waitForWorkerExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<void> {
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      let timer: NodeJS.Timeout | undefined;
+      const finish = (error?: Error) => {
+        if (timer) clearTimeout(timer);
+        child.off("exit", onExit);
+        if (error) reject(error); else resolve();
+      };
+      const onExit = () => finish();
+      child.once("exit", onExit);
+      timer = setTimeout(() => finish(new Error("Browser Worker wurde nach Shutdown nicht beendet.")), timeoutMs);
+      timer.unref();
+      if (child.exitCode !== null || child.signalCode !== null) finish();
+    });
   }
 
   private executeTimeoutFor(task: Task): number {

@@ -13,16 +13,21 @@ describe("SeleniumBase vision runtime E2E wiring", () => {
   const preload = read("src/electron/preload.ts");
   const pkg = JSON.parse(read("package.json"));
 
-  it("uses the Hugging Face SigLIP2 joint forward path with batched images", () => {
+  it("uses the Hugging Face SigLIP2 joint forward path with batched images and prompt ensembling", () => {
     expect(classifier).toContain('self._device = "cuda" if torch.cuda.is_available() else "cpu"');
     expect(classifier).toContain('PIPELINE_PROMPT_TEMPLATE = "This is a photo of {target}."');
+    expect(classifier).toContain("PROMPT_TEMPLATES");
+    expect(classifier).toContain('"This image contains {target}."');
+    expect(classifier).toContain('"A photo containing {target}."');
     expect(classifier).toContain("images=[image for _, image in loaded]");
+    expect(classifier).toContain("text=prompts");
     expect(classifier).toContain('padding="max_length"');
     expect(classifier).toContain("max_length=64");
     expect(classifier).toContain("truncation=True");
     expect(classifier).toContain("outputs = self._model(**inputs)");
     expect(classifier).toContain('getattr(outputs, "logits_per_image", None)');
-    expect(classifier).toContain("self._torch.sigmoid(logits_per_image)");
+    expect(classifier).toContain("ensemble_logits = logits_per_image.mean(dim=1)");
+    expect(classifier).toContain("self._torch.sigmoid(ensemble_logits)");
     expect(classifier).not.toContain("get_image_features");
     expect(classifier).not.toContain("get_text_features");
     expect(classifier).not.toContain("self._model.logit_scale");

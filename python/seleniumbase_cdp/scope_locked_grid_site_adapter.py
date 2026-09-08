@@ -7,15 +7,149 @@ from extended_grid_site_adapter import ExtendedGridSiteAdapter, _OOPIF_GRID_SCRI
 from stable_marks import build_stable_marks, stable_mark_digest
 
 
-class ScopeLockedGridSiteAdapter(ExtendedGridSiteAdapter):
-    """Global grid discovery followed by cheap scope-local revalidation.
+_GENERIC_FRAME_GRID_SCRIPT = r"""
+return (() => {
+  const viewport = {
+    width: window.innerWidth || document.documentElement.clientWidth || 0,
+    height: window.innerHeight || document.documentElement.clientHeight || 0,
+    scrollX: window.scrollX || 0,
+    scrollY: window.scrollY || 0,
+    devicePixelRatio: window.devicePixelRatio || 1,
+  };
+  const visible = el => {
+    if (!el?.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width >= 20 && r.height >= 20
+      && r.right > 0 && r.bottom > 0
+      && r.left < viewport.width && r.top < viewport.height
+      && s.display !== 'none' && s.visibility !== 'hidden'
+      && Number(s.opacity || 1) > 0;
+  };
+  const text = el => (el?.innerText || el?.textContent || el?.getAttribute?.('aria-label') || '')
+    .trim().replace(/\s+/g, ' ');
+  const bgUrl = el => {
+    if (!visible(el)) return '';
+    const bg = getComputedStyle(el).backgroundImage || '';
+    const m = bg.match(/url\(["']?(.*?)["']?\)/i);
+    return m?.[1] || '';
+  };
+  const sourceOf = el => {
+    const img = el?.matches?.('img') ? el : el?.querySelector?.('img');
+    if (img) return img.currentSrc || img.src || img.getAttribute('src') || img.getAttribute('data-src') || '';
+    const canvas = el?.matches?.('canvas') ? el : el?.querySelector?.('canvas');
+    if (canvas) {
+      try { return canvas.toDataURL?.('image/png') || ''; } catch (_) { return ''; }
+    }
+    return bgUrl(el);
+  };
+  const rectOf = el => {
+    const r = el.getBoundingClientRect();
+    return {x:r.x,y:r.y,width:r.width,height:r.height};
+  };
+  const tileFor = visual => visual.closest?.(
+    'button,[role="button"],[tabindex],label,li,[class*="tile" i],[class*="cell" i],[class*="option" i],[class*="choice" i]'
+  ) || visual;
+  const visualsIn = root => {
+    const direct = [...(root.querySelectorAll?.('img,canvas') || [])].filter(visible);
+    const backgrounds = [...(root.querySelectorAll?.('*') || [])].filter(el => {
+      if (!visible(el) || !bgUrl(el)) return false;
+      const r = el.getBoundingClientRect();
+      return r.width <= Math.max(900, viewport.width * 0.8)
+        && r.height <= Math.max(900, viewport.height * 0.8);
+    });
+    return [...new Set([...direct, ...backgrounds])];
+  };
+  const clusterCount = (values, tolerance) => {
+    const sorted = [...values].sort((a,b) => a-b);
+    const groups = [];
+    for (const value of sorted) {
+      const last = groups[groups.length - 1];
+      if (!last || Math.abs(value - last.mean) > tolerance) groups.push({mean:value,count:1});
+      else {
+        last.mean = (last.mean * last.count + value) / (last.count + 1);
+        last.count += 1;
+      }
+    }
+    return groups.length;
+  };
+  const shapeOf = tiles => {
+    const rects = tiles.map(el => el.getBoundingClientRect());
+    if (rects.length < 4 || rects.length > 64) return null;
+    const avgW = rects.reduce((a,r) => a+r.width,0) / rects.length;
+    const avgH = rects.reduce((a,r) => a+r.height,0) / rects.length;
+    const rows = clusterCount(rects.map(r => r.top+r.height/2), Math.max(6, Math.min(36, avgH*.45)));
+    const cols = clusterCount(rects.map(r => r.left+r.width/2), Math.max(6, Math.min(36, avgW*.45)));
+    if (rows < 2 || cols < 2 || rows > 8 || cols > 8 || rows*cols !== tiles.length) return null;
+    const regular = rects.filter(r =>
+      Math.abs(r.width-avgW) <= Math.max(12,avgW*.3)
+      && Math.abs(r.height-avgH) <= Math.max(12,avgH*.3)
+    ).length;
+    if (regular / rects.length < .82) return null;
+    return {rows,cols,regular,avgW,avgH};
+  };
+  const actionRx = /(select|click|choose|mark|verify|continue|confirm|wähl|waehl|klick|markier|prüf|pruef|bestät|bestaet|weiter)/i;
+  const instructionFor = parent => {
+    const nearby = [
+      parent?.previousElementSibling,
+      parent?.parentElement?.previousElementSibling,
+      ...[...(parent?.parentElement?.querySelectorAll?.('h1,h2,h3,h4,p,[class*="instruction" i],[class*="prompt" i],[class*="question" i]') || [])],
+      ...[...(document.querySelectorAll?.('h1,h2,h3,h4,p,[class*="instruction" i],[class*="prompt" i],[class*="question" i]') || [])],
+    ].filter(el => el && visible(el));
+    return nearby.find(el => actionRx.test(text(el))) || nearby[0] || null;
+  };
+  const parents = new Set();
+  for (const visual of visualsIn(document)) {
+    let node = tileFor(visual);
+    for (let depth=0; node && depth<5; depth++, node=node.parentElement) {
+      if (node.parentElement) parents.add(node.parentElement);
+    }
+  }
+  const candidates = [];
+  for (const parent of parents) {
+    const visuals = visualsIn(parent);
+    const tiles = [...new Set(visuals.map(tileFor))].filter(visible);
+    const shape = shapeOf(tiles);
+    if (!shape) continue;
+    const sources = tiles.map(sourceOf);
+    const sourceCount = sources.filter(Boolean).length;
+    if (sourceCount < Math.ceil(tiles.length * .5)) continue;
+    const instructionEl = instructionFor(parent);
+    const instruction = text(instructionEl).slice(0,600);
+    const submitEl = [...(parent.parentElement?.querySelectorAll?.('button[type="submit"],input[type="submit"],button,[role="button"]') || [])]
+      .find(el => visible(el) && !tiles.includes(el)) || null;
+    const submitText = text(submitEl).slice(0,120);
+    const marks = tiles.map((tile,index) => ({
+      role:'grid-tile',
+      visualBounds:rectOf(tile),
+      confidence:sources[index] ? .92 : .72,
+      selector: tile.id ? '#' + CSS.escape(tile.id) : '',
+      structuralKey:['grid-tile',tile.tagName||'',tile.id||'',tile.getAttribute?.('data-testid')||'',`slot:${index}`].join('|'),
+      semanticSignature:['grid-tile',text(tile).slice(0,160),sources[index]].join('|'),
+      source:sources[index],
+      label:text(tile).slice(0,160),
+      score:index,
+    }));
+    let score = 74 + Math.round(14*sourceCount/tiles.length) + Math.round(8*shape.regular/tiles.length);
+    if (actionRx.test(instruction + ' ' + submitText)) score += 8;
+    if (submitEl) score += 3;
+    candidates.push({
+      kind:'image-grid',scope:'oopif',score,rows:shape.rows,columns:shape.cols,tileCount:tiles.length,
+      instruction,sources,submitText,submitBounds:submitEl ? rectOf(submitEl) : null,
+      complete:false,failed:false,override:false,rawMarks:marks,viewport,
+    });
+  }
+  candidates.sort((a,b)=>b.score-a.score);
+  return candidates[0] || {
+    kind:'none',scope:'oopif',score:0,rows:0,columns:0,tileCount:0,instruction:'',sources:[],
+    submitText:'',submitBounds:null,complete:false,failed:false,override:false,rawMarks:[],viewport
+  };
+})();
+"""
 
-    The existing ExtendedGridSiteAdapter remains the only discovery engine. This
-    class only owns lifecycle: once a grid is resolved, subsequent validation is
-    restricted to that document/frame/OOPIF. A disappearing frame, changed grid
-    identity, or changed CDP document epoch invalidates the lock and falls back to
-    the existing global discovery on the same poll.
-    """
+
+class ScopeLockedGridSiteAdapter(ExtendedGridSiteAdapter):
+    """Global grid discovery followed by cheap scope-local revalidation."""
 
     def __init__(self, seleniumbase_cdp: Any, *, overrides: Dict[str, str] | None = None) -> None:
         super().__init__(seleniumbase_cdp, overrides=overrides)
@@ -46,7 +180,96 @@ class ScopeLockedGridSiteAdapter(ExtendedGridSiteAdapter):
         return candidate
 
     def _discover_global(self) -> Dict[str, Any]:
-        return super().poll()
+        producers = (
+            self._snapshot_document,
+            self._snapshot_extended_document,
+            self._snapshot_nested_frames,
+            self._snapshot_extended_frames,
+            self._snapshot_oopif_frames,
+        )
+        debug: List[Dict[str, Any]] = []
+        outcome: Dict[str, Any] | None = None
+        rejected: Dict[str, Any] | None = None
+        best: Dict[str, Any] | None = None
+        best_rank = float("-inf")
+
+        try:
+            frames = list(self._sb.find_elements("iframe") or [])
+            debug.append({"producer": "iframe-enumeration", "count": len(frames)})
+        except Exception as exc:
+            debug.append({"producer": "iframe-enumeration", "error": str(exc)[:500]})
+
+        for producer in producers:
+            name = getattr(producer, "__name__", producer.__class__.__name__)
+            try:
+                snapshot = producer()
+            except Exception as exc:
+                debug.append({"producer": name, "error": str(exc)[:500]})
+                continue
+            debug.append({
+                "producer": name,
+                "kind": str(snapshot.get("kind") or "none"),
+                "scope": str(snapshot.get("scope") or ""),
+                "score": int(snapshot.get("score") or 0),
+                "tileCount": int(snapshot.get("tileCount") or 0),
+                "instruction": str(snapshot.get("instruction") or "")[:240],
+                "framePath": [str(value) for value in snapshot.get("framePath") or [] if str(value)],
+            })
+            if snapshot.get("kind") == "none":
+                if self._terminal(snapshot):
+                    outcome = snapshot
+                continue
+            if not self._candidate_is_plausible(snapshot):
+                rejected = snapshot
+                continue
+            rank = self._candidate_rank(snapshot)
+            if best is None or rank > best_rank:
+                best = snapshot
+                best_rank = rank
+
+        discover = getattr(self._sb, "ares_oopif_discover", None)
+        if callable(discover):
+            try:
+                entries = [entry for entry in (discover() or []) if isinstance(entry, dict)]
+                debug.append({
+                    "producer": "ares_oopif_discover",
+                    "count": len(entries),
+                    "paths": [[str(value) for value in entry.get("path") or [] if str(value)] for entry in entries[:16]],
+                })
+            except Exception as exc:
+                debug.append({"producer": "ares_oopif_discover", "error": str(exc)[:500]})
+        else:
+            debug.append({"producer": "ares_oopif_discover", "available": False})
+
+        if outcome is not None:
+            return self._with_generation({**outcome, "discoveryDebug": debug})
+        if best is not None:
+            return self._with_generation({**best, "discoveryDebug": debug})
+        scope = str((rejected or {}).get("scope") or "document")
+        return self._with_generation({**self._empty(scope), "discoveryDebug": debug})
+
+    def _snapshot_oopif_frames(self) -> Dict[str, Any]:
+        discover = getattr(self._sb, "ares_oopif_discover", None)
+        if not callable(discover):
+            return self._empty("oopif")
+        try:
+            entries = [entry for entry in (discover() or []) if isinstance(entry, dict)]
+        except Exception:
+            return self._empty("oopif")
+        best = self._empty("oopif")
+        best_rank = float("-inf")
+        for entry in entries:
+            path = [str(value) for value in entry.get("path") or [] if str(value)]
+            if not path:
+                continue
+            candidate = self._snapshot_oopif_path(path)
+            if candidate.get("kind") != "image-grid" or not self._candidate_is_plausible(candidate):
+                continue
+            rank = self._candidate_rank(candidate)
+            if rank > best_rank:
+                best = candidate
+                best_rank = rank
+        return best
 
     @staticmethod
     def _terminal(state: Dict[str, Any]) -> bool:
@@ -217,6 +440,14 @@ class ScopeLockedGridSiteAdapter(ExtendedGridSiteAdapter):
         value = evaluated.get("value")
         if not isinstance(value, dict):
             return self._empty(scope)
+        if value.get("kind") != "image-grid":
+            try:
+                fallback = evaluate(clean_path, _GENERIC_FRAME_GRID_SCRIPT, [])
+            except Exception:
+                fallback = None
+            if isinstance(fallback, dict) and isinstance(fallback.get("value"), dict):
+                value = fallback["value"]
+                evaluated = fallback
 
         metadata = {
             "framePath": clean_path,
@@ -288,15 +519,9 @@ class ScopeLockedGridSiteAdapter(ExtendedGridSiteAdapter):
 
     @classmethod
     def _grid_identity(cls, state: Dict[str, Any]) -> Tuple[Any, ...]:
-        marks = [
-            mark for mark in state.get("marks") or []
-            if isinstance(mark, dict) and mark.get("role") == "grid-tile"
-        ]
+        marks = [mark for mark in state.get("marks") or [] if isinstance(mark, dict) and mark.get("role") == "grid-tile"]
         mark_identity = tuple(
-            (
-                str(mark.get("markId") or ""),
-                str(mark.get("source") or mark.get("semanticVisualSignature") or ""),
-            )
+            (str(mark.get("markId") or ""), str(mark.get("source") or mark.get("semanticVisualSignature") or ""))
             for mark in marks
         )
         return (
@@ -315,10 +540,7 @@ class ScopeLockedGridSiteAdapter(ExtendedGridSiteAdapter):
         if state.get("kind") != "image-grid":
             return None
         scope = str(state.get("scope") or "")
-        lock: Dict[str, Any] = {
-            "scope": scope,
-            "identity": self._grid_identity(state),
-        }
+        lock: Dict[str, Any] = {"scope": scope, "identity": self._grid_identity(state)}
         if scope.startswith("iframe:"):
             try:
                 lock["frameIndex"] = int(scope.split(":", 1)[1].split("/", 1)[0])

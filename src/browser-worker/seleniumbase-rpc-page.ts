@@ -210,7 +210,7 @@ export class SeleniumBaseRpcPage implements Page {
     this.responseListeners.clear();
     this.loadListeners.clear();
     this.frameNavigationListeners.clear();
-    if(!this.transport.closed)await this.transport.request("close",{},5_000).catch(()=>undefined);
+    if(!this.transport.closed)await this.transport.request("close",{},15_000).catch(()=>undefined);
   }
   private hasLifecycleListeners():boolean{return this.loadListeners.size>0||this.frameNavigationListeners.size>0;}
   private ensureEventPoll():void{
