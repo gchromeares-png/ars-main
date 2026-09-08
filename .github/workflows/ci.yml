@@ -40,6 +40,10 @@ jobs:
           python/seleniumbase_cdp/instruction_input_runtime.py
           python/seleniumbase_cdp/extended_grid_site_adapter.py
           python/seleniumbase_cdp/scope_locked_grid_site_adapter.py
+          python/seleniumbase_cdp/runtime_oopif_grid_site_adapter.py
+          python/seleniumbase_cdp/runtime_oopif_outcome_grid_site_adapter.py
+          python/seleniumbase_cdp/oopif_visual_interaction_runtime.py
+          python/seleniumbase_cdp/control_aware_seleniumbase_adapter.py
           python/seleniumbase_cdp/site_grid_adapter.py
           python/seleniumbase_cdp/site_slider_adapter.py
           python/seleniumbase_cdp/slider_action_executor.py
@@ -74,6 +78,41 @@ jobs:
         env:
           ARES_MONITOR_E2E_MODE: "visible"
         run: python python/seleniumbase_cdp/product_monitor_browser_e2e_probe.py
+
+  windows-orchestrator-grid-e2e:
+    runs-on: windows-latest
+    timeout-minutes: 6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-seleniumbase-cdp.txt
+
+      - name: Install Node dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install SeleniumBase runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-seleniumbase-cdp.txt
+
+      - name: Build production backend
+        run: npm run build:backend
+
+      - name: Run TypeScript orchestrator to Python OOPIF grid E2E
+        env:
+          ARES_RUN_BROWSER_INTEGRATION: "1"
+        run: npx jest --runInBand tests/real-task-oopif-grid-runtime.integration.test.ts
 
   node-focus:
     runs-on: ubuntu-latest
