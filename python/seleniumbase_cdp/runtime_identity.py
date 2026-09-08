@@ -191,6 +191,13 @@ class BrowserRuntimeIdentity:
         self._write(payload)
 
     def clear(self) -> None:
+        # The normal SeleniumBase/CDP shutdown gets the first chance to flush and
+        # close Chromium. If Windows still has ARES-owned Chrome descendants
+        # alive here, terminate only the processes that carry this runtime's
+        # unique session identity. Do this before deleting the identity marker so
+        # a finished runtime never leaves its profile locked by orphaned Chrome.
+        self._terminate_owned_browser_processes()
+
         target = self.profile_dir / RUNTIME_FILENAME
         try:
             raw = json.loads(target.read_text(encoding="utf-8"))
@@ -202,6 +209,36 @@ class BrowserRuntimeIdentity:
             target.unlink(missing_ok=True)
         except OSError:
             pass
+
+    def _terminate_owned_browser_processes(self) -> None:
+        processes: List[psutil.Process] = []
+        for pid in self.browser_pids():
+            if pid == os.getpid():
+                continue
+            try:
+                process = psutil.Process(pid)
+                if process.is_running() and process.status() != psutil.STATUS_ZOMBIE:
+                    processes.append(process)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                continue
+        if not processes:
+            return
+
+        # Browser.close already had a bounded graceful-flush window in the
+        # adapter. Anything still alive now is an orphan of this exact runtime.
+        for process in processes:
+            try:
+                process.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                pass
+        _, alive = psutil.wait_procs(processes, timeout=2.0)
+        for process in alive:
+            try:
+                process.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                pass
+        if alive:
+            psutil.wait_procs(alive, timeout=2.0)
 
     def _write(self, payload: Dict[str, Any]) -> None:
         target = self.profile_dir / RUNTIME_FILENAME
