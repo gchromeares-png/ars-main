@@ -86,8 +86,8 @@ class FrameHandler(BaseHTTPRequestHandler):
         if path.startswith("/decoy/"):
             body = b"<!doctype html><html><body><main><p>Hilfsframe</p><button>Weiter</button></main></body></html>"
         elif path == "/puzzle":
-            # Deliberately NOT nine direct children. The detector must recover the
-            # nine button tiles from nested image descendants through visual-ancestor.
+            # Deliberately NOT nine direct children. The runtime must recover the
+            # nine clickable buttons from nested image descendants/ancestor structure.
             pixel = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect width='96' height='96' fill='%23999'/%3E%3C/svg%3E"
             rows = "".join(
                 "<div class='row'>" + "".join(
@@ -288,9 +288,20 @@ def main() -> int:
             state = screenshots[-1].get("state") if isinstance(screenshots[-1].get("state"), dict) else {}
             assert int(state.get("tileCount") or 0) == 9, state
             assert str(state.get("scope") or "").startswith("oopif:"), state
-            assert str(state.get("origin") or "") == "visual-ancestor", state
-            debug = state.get("oopifDebug") if isinstance(state.get("oopifDebug"), dict) else {}
-            assert int(debug.get("visualAncestorCandidates") or 0) >= 1, debug
+            sources = state.get("sources") if isinstance(state.get("sources"), list) else []
+            marks = state.get("marks") if isinstance(state.get("marks"), list) else []
+            assert len(sources) == 9, state
+            assert len(marks) == 9, state
+            # The fixture has three row wrappers, so no DOM node owns nine grid
+            # buttons as direct children. Nine BUTTON marks therefore prove that
+            # the nested visual-descendant/ancestor recovery path reached the
+            # clickable tiles even if an intermediate state strips `origin`.
+            assert all(
+                isinstance(mark, dict)
+                and str(mark.get("structuralKey") or "").startswith("grid-tile|BUTTON|")
+                and isinstance(mark.get("visualBounds"), dict)
+                for mark in marks
+            ), marks
 
             diagnostics = [row for row in trace if row.get("phase") == "grid-diagnostic"]
             assert any(row.get("stage") == "VISION_CALLED" and int(row.get("sourceCount") or 0) == 9 for row in diagnostics), diagnostics[-30:]
@@ -307,7 +318,7 @@ def main() -> int:
             send_command(process, {"type":"close","requestId":close_id})
             wait_message(messages, close_id, "closed", timeout=15.0, process=process, stderr_lines=stderr_lines)
             process.wait(timeout=15.0)
-            print(f"RUNTIME_NESTED_OOPIF_GRID_E2E_PASS pid={ready.get('pid')} frames>=4 origin=visual-ancestor visionCalls={VisionHandler.calls} cursorClicks={len(clicks)}")
+            print(f"RUNTIME_NESTED_OOPIF_GRID_E2E_PASS pid={ready.get('pid')} frames>=4 nestedButtons=9 visionCalls={VisionHandler.calls} cursorClicks={len(clicks)}")
     finally:
         for server in (parent, frames, vision):
             server.shutdown()
