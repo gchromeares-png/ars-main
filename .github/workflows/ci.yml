@@ -56,6 +56,11 @@ jobs:
           python/seleniumbase_cdp/auto_interaction_probe.py
           python/seleniumbase_cdp/runtime_nested_oopif_grid_e2e_probe.py
           python/seleniumbase_cdp/runtime_nested_oopif_grid_e2e_runner.py
+          python/seleniumbase_cdp/observation_capture.py
+          python/seleniumbase_cdp/observation_capture_active_tab_probe.py
+
+      - name: Verify active manual tab owns screenshots
+        run: python python/seleniumbase_cdp/observation_capture_active_tab_probe.py
 
       - name: Verify instruction and math runtime
         run: python python/seleniumbase_cdp/instruction_input_probe.py
