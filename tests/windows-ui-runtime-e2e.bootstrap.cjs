@@ -71,9 +71,19 @@ if (process.env.ARES_UI_E2E_MODE === "1" && process.versions?.electron && proces
   }
 
   async function closeServer(server) {
-    if (!server) return;
+    if (!server || !server.listening) return;
     await new Promise(resolve => {
-      server.close(() => resolve());
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(finish, 2_000);
+      timer.unref();
+      server.close(finish);
+      server.closeIdleConnections?.();
       server.closeAllConnections?.();
     });
   }
@@ -376,19 +386,35 @@ if (process.env.ARES_UI_E2E_MODE === "1" && process.versions?.electron && proces
     await persistVisionCrops();
     await capture(win, "06-task-solved-ui.png");
 
-    const status = await rendererApi(win, `window.ares.getTaskStatus(${JSON.stringify(TASK_ID)})`);
+    const status = await waitFor(async () => {
+      const value = await rendererApi(win, `window.ares.getTaskStatus(${JSON.stringify(TASK_ID)})`);
+      const session = value?.task?.config?.data?.browserSession;
+      const worker = value?.task?.config?.data?.browserWorker;
+      return session?.engine === "seleniumbase-cdp" && worker?.externalProcess === true && worker?.pid ? value : undefined;
+    }, 10_000, "task runtime ownership metadata");
     proof("task-status-after-solve", { state: status?.status, browserSession: status?.task?.config?.data?.browserSession, browserWorker: status?.task?.config?.data?.browserWorker });
 
-    const tracePath = await findNamedFile(path.join(userData, "browser-profiles"), ".ares-visual-trace.jsonl");
-    if (!tracePath) throw new Error(".ares-visual-trace.jsonl not found under real Electron userData/browser-profiles.");
-    const trace = await fsp.readFile(tracePath, "utf8");
+    const { tracePath, trace } = await waitFor(async () => {
+      const candidate = await findNamedFile(path.join(userData, "browser-profiles"), ".ares-visual-trace.jsonl");
+      if (!candidate) return undefined;
+      const value = await fsp.readFile(candidate, "utf8").catch(() => "");
+      if (!value.includes('"stage":"VERIFY"') || !value.includes('"verified":true')) return undefined;
+      return { tracePath: candidate, trace: value };
+    }, 10_000, "verified visual trace");
     const required = [
       '"origin":"direct-children"',
       '"tileCount":9',
+      '"stage":"VISION_CALLED"',
+      '"sourceCount":9',
       '"selectedIndexes":[1,4,7]',
+      '"stage":"MARK_IDS"',
+      '"stage":"APPLY_MARKS_ENTER"',
       '"phase":"cursor-click"',
       '"seeded":true',
       '"provider":"python-bezier:cdp"',
+      '"stage":"APPLY_MARKS_RESULT"',
+      '"submitted":true',
+      '"stage":"VERIFY"',
       '"verified":true'
     ];
     for (const token of required) if (!trace.includes(token)) throw new Error(`Visual trace missing ${token}`);
