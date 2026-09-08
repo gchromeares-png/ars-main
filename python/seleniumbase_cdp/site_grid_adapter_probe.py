@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
+from urllib.parse import quote
+
+from seleniumbase import SB
 
 from runtime_oopif_grid_site_adapter import RUNTIME_OOPIF_GRID_SCRIPT
 from site_grid_adapter import GridSiteAdapter
@@ -68,6 +71,43 @@ class FakeCdp:
         return [FakeElement(attrs={"title": "authorized test grid"}, images=images)]
 
 
+def _prove_nested_visual_ancestor_grid() -> None:
+    pixel = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect width='96' height='96' fill='%23999'/%3E%3C/svg%3E"
+    rows = "".join(
+        "<div class='row'>" + "".join(
+            f"<button class='choice' type='button'><img alt='tile-{row}-{column}' src=\"{pixel}\"></button>"
+            for column in range(3)
+        ) + "</div>"
+        for row in range(3)
+    )
+    html = f"""<!doctype html>
+<html><head><meta charset='utf-8'><style>
+body{{margin:20px;font-family:sans-serif}}
+#grid{{display:flex;flex-direction:column;gap:8px;width:max-content}}
+.row{{display:flex;gap:8px}}
+.choice{{width:96px;height:96px;padding:0;border:1px solid #777}}
+.choice img{{width:94px;height:94px;display:block}}
+</style></head><body>
+<main>
+<p>Wähle alle passenden Bilder aus</p>
+<div id='grid'>{rows}</div>
+<button type='submit'>Bestätigen</button>
+</main>
+</body></html>"""
+    url = "data:text/html;charset=utf-8," + quote(html)
+    with SB(browser="chrome", headless=True) as sb:
+        sb.open(url)
+        result = sb.execute_script(RUNTIME_OOPIF_GRID_SCRIPT)
+
+    assert isinstance(result, dict), result
+    assert result.get("kind") == "image-grid", result
+    assert int(result.get("tileCount") or 0) == 9, result
+    assert (int(result.get("rows") or 0), int(result.get("columns") or 0)) == (3, 3), result
+    assert str(result.get("origin") or "") == "visual-ancestor", result
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+    assert int(debug.get("visualAncestorCandidates") or 0) > 0, debug
+
+
 def main() -> int:
     # Regression guard for the real OOPIF runtime surface. Importing the runtime
     # adapter must install the same direct-objectId frame resolver used by the
@@ -77,6 +117,8 @@ def main() -> int:
     assert "shape-product" in RUNTIME_OOPIF_GRID_SCRIPT
     assert "weak-evidence" in RUNTIME_OOPIF_GRID_SCRIPT
     assert getattr(oopif_impl.FlatCdpTargetRegistry, "_ares_object_id_frame_resolution", False) is True
+
+    _prove_nested_visual_ancestor_grid()
 
     cdp = FakeCdp()
     adapter = GridSiteAdapter(cdp)
@@ -123,7 +165,7 @@ def main() -> int:
         "submit": ".submit",
     }
 
-    print("SeleniumBase structural site adapter + OOPIF runtime regression probe passed.")
+    print("SeleniumBase structural site adapter + nested OOPIF runtime regression probe passed.")
     return 0
 
 
