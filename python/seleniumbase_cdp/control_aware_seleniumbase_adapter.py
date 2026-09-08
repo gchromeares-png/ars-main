@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, Callable, Dict, Iterable, List
 
@@ -11,11 +12,17 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
     """Keep expensive automatic page work behind explicit control-plane traffic."""
 
     CONTROL_QUIET_SECONDS = 0.9
+    MAX_CONTROL_DEFERRAL_SECONDS = 2.0
+    POLL_SKIP_TRACE_INTERVAL_SECONDS = 1.0
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._control_quiet_until = 0.0
+        self._control_deferral_started_at = 0.0
         self._deferred_navigation_auto = False
         self._passive_observation_depth = 0
+        self._runtime_poll_attempts = 0
+        self._runtime_poll_runs = 0
+        self._last_poll_skip_trace_at = 0.0
         super().__init__(*args, **kwargs)
         overrides = kwargs.get("site_adapter_overrides")
         self._visual_interactions = OopifVisualInteractionRuntime(
@@ -26,12 +33,47 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
         )
         self.note_control_activity()
 
+    def _append_runtime_poll_trace(self, decision: str, *, now: float, forced: bool = False) -> None:
+        """Write compact passive scheduling diagnostics into the existing visual trace."""
+        if decision == "poll-skipped":
+            if now - self._last_poll_skip_trace_at < self.POLL_SKIP_TRACE_INTERVAL_SECONDS:
+                return
+            self._last_poll_skip_trace_at = now
+        try:
+            quiet_remaining = max(0.0, self._control_quiet_until - now)
+            deferral_age = (
+                max(0.0, now - self._control_deferral_started_at)
+                if self._control_deferral_started_at > 0.0
+                else 0.0
+            )
+            record = {
+                "ts": time.time(),
+                "phase": "runtime-poll",
+                "decision": str(decision),
+                "forced": bool(forced),
+                "quietRemainingMs": round(quiet_remaining * 1000.0, 3),
+                "controlDeferralMs": round(deferral_age * 1000.0, 3),
+                "maxControlDeferralMs": round(self.MAX_CONTROL_DEFERRAL_SECONDS * 1000.0, 3),
+                "deferredNavigation": bool(self._deferred_navigation_auto),
+                "passiveObservationDepth": int(self._passive_observation_depth),
+                "attempt": int(self._runtime_poll_attempts),
+                "runCount": int(self._runtime_poll_runs),
+            }
+            trace_path = self.profile_dir / ".ares-visual-trace.jsonl"
+            with trace_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except Exception:
+            pass
+
     def note_control_activity(self) -> None:
         if self._passive_observation_depth > 0:
             return
+        now = time.monotonic()
+        if self._control_deferral_started_at <= 0.0 or now >= self._control_quiet_until:
+            self._control_deferral_started_at = now
         self._control_quiet_until = max(
             self._control_quiet_until,
-            time.monotonic() + self.CONTROL_QUIET_SECONDS,
+            now + self.CONTROL_QUIET_SECONDS,
         )
 
     def passive_observation(self, action: Callable[[], Any]) -> Any:
@@ -43,8 +85,31 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
             self._passive_observation_depth = max(0, self._passive_observation_depth - 1)
 
     def poll_runtime(self) -> None:
-        if time.monotonic() < self._control_quiet_until:
+        now = time.monotonic()
+        self._runtime_poll_attempts += 1
+        quiet_active = now < self._control_quiet_until
+        deferral_age = (
+            max(0.0, now - self._control_deferral_started_at)
+            if self._control_deferral_started_at > 0.0
+            else 0.0
+        )
+        forced_after_starvation = (
+            quiet_active
+            and self._control_deferral_started_at > 0.0
+            and deferral_age >= self.MAX_CONTROL_DEFERRAL_SECONDS
+        )
+        if quiet_active and not forced_after_starvation:
+            self._append_runtime_poll_trace("poll-skipped", now=now)
             return
+
+        self._runtime_poll_runs += 1
+        self._append_runtime_poll_trace(
+            "forced-after-control-starvation" if forced_after_starvation else "poll-run",
+            now=now,
+            forced=forced_after_starvation,
+        )
+        self._control_deferral_started_at = 0.0
+
         if self._deferred_navigation_auto:
             self._deferred_navigation_auto = False
             self._poll_observation_watchdog(force=True)
