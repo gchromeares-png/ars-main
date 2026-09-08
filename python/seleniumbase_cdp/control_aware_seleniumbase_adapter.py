@@ -23,6 +23,7 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
         self._runtime_poll_attempts = 0
         self._runtime_poll_runs = 0
         self._last_poll_skip_trace_at = 0.0
+        self._runtime_poll_in_progress = False
         super().__init__(*args, **kwargs)
         overrides = kwargs.get("site_adapter_overrides")
         self._visual_interactions = OopifVisualInteractionRuntime(
@@ -66,9 +67,23 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
             pass
 
     def note_control_activity(self) -> None:
-        if self._passive_observation_depth > 0:
+        if self._passive_observation_depth > 0 or self._runtime_poll_in_progress:
             return
         now = time.monotonic()
+
+        # The worker normally polls from idle/page-state/network opportunities.
+        # Under a continuously saturated RPC queue none of those opportunities
+        # is guaranteed to occur. Once the existing starvation ceiling is hit,
+        # create that opportunity here on the same owner thread before extending
+        # the control quiet window again.
+        if (
+            self._control_deferral_started_at > 0.0
+            and now < self._control_quiet_until
+            and now - self._control_deferral_started_at >= self.MAX_CONTROL_DEFERRAL_SECONDS
+        ):
+            self.poll_runtime()
+            now = time.monotonic()
+
         if self._control_deferral_started_at <= 0.0 or now >= self._control_quiet_until:
             self._control_deferral_started_at = now
         self._control_quiet_until = max(
@@ -85,36 +100,42 @@ class ControlAwareSeleniumBaseCdpAdapter(SeleniumBaseCdpAdapter):
             self._passive_observation_depth = max(0, self._passive_observation_depth - 1)
 
     def poll_runtime(self) -> None:
-        now = time.monotonic()
-        self._runtime_poll_attempts += 1
-        quiet_active = now < self._control_quiet_until
-        deferral_age = (
-            max(0.0, now - self._control_deferral_started_at)
-            if self._control_deferral_started_at > 0.0
-            else 0.0
-        )
-        forced_after_starvation = (
-            quiet_active
-            and self._control_deferral_started_at > 0.0
-            and deferral_age >= self.MAX_CONTROL_DEFERRAL_SECONDS
-        )
-        if quiet_active and not forced_after_starvation:
-            self._append_runtime_poll_trace("poll-skipped", now=now)
+        if self._runtime_poll_in_progress:
             return
+        self._runtime_poll_in_progress = True
+        try:
+            now = time.monotonic()
+            self._runtime_poll_attempts += 1
+            quiet_active = now < self._control_quiet_until
+            deferral_age = (
+                max(0.0, now - self._control_deferral_started_at)
+                if self._control_deferral_started_at > 0.0
+                else 0.0
+            )
+            forced_after_starvation = (
+                quiet_active
+                and self._control_deferral_started_at > 0.0
+                and deferral_age >= self.MAX_CONTROL_DEFERRAL_SECONDS
+            )
+            if quiet_active and not forced_after_starvation:
+                self._append_runtime_poll_trace("poll-skipped", now=now)
+                return
 
-        self._runtime_poll_runs += 1
-        self._append_runtime_poll_trace(
-            "forced-after-control-starvation" if forced_after_starvation else "poll-run",
-            now=now,
-            forced=forced_after_starvation,
-        )
-        self._control_deferral_started_at = 0.0
+            self._runtime_poll_runs += 1
+            self._append_runtime_poll_trace(
+                "forced-after-control-starvation" if forced_after_starvation else "poll-run",
+                now=now,
+                forced=forced_after_starvation,
+            )
+            self._control_deferral_started_at = 0.0
 
-        if self._deferred_navigation_auto:
-            self._deferred_navigation_auto = False
-            self._poll_observation_watchdog(force=True)
-            return
-        super().poll_runtime()
+            if self._deferred_navigation_auto:
+                self._deferred_navigation_auto = False
+                self._poll_observation_watchdog(force=True)
+                return
+            super().poll_runtime()
+        finally:
+            self._runtime_poll_in_progress = False
 
     def goto(self, url: str) -> None:
         """Navigate synchronously, but defer expensive automatic visual work."""
