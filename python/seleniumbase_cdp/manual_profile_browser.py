@@ -12,11 +12,11 @@ from typing import Any, Dict
 import psutil
 
 from control_aware_seleniumbase_adapter import ControlAwareSeleniumBaseCdpAdapter
-from runtime_poll_scheduler import SingleOwnerRuntimeScheduler
 
 RESULT_PREFIX = "ARES_SB_MANUAL\t"
 LAST_URL_FILENAME = ".ares-last-url"
 SITE_ADAPTER_FILENAME = ".ares-site-adapter.json"
+MANUAL_RUNTIME_HEARTBEAT_SECONDS = 1.0
 
 
 def _emit(payload: Dict[str, Any]) -> None:
@@ -242,6 +242,25 @@ def _enable_oopif_runtime(adapter: ControlAwareSeleniumBaseCdpAdapter) -> bool:
     return True
 
 
+def _run_manual_runtime_heartbeat(adapter: ControlAwareSeleniumBaseCdpAdapter) -> None:
+    """Run automatic interaction directly from the manual browser owner loop.
+
+    The visible profile browser has no RPC page-state consumer that needs to gate
+    automatic interaction behind PageObservationWatchdog. Running the existing
+    orchestrator only when the command queue is idle keeps one serialized owner
+    while preventing a complex page snapshot/OOPIF discovery from starving the
+    actual visual runtime before poll_and_act() can even begin.
+    """
+    try:
+        adapter._orchestrator.run_cycle(adapter._run_visual_auto, adapter._run_instruction_auto)
+    except Exception as exc:
+        _append_oopif_trace(
+            adapter,
+            "manual-runtime-heartbeat-error",
+            {"errorType": type(exc).__name__, "error": str(exc)[:600]},
+        )
+
+
 def _close_oopif_runtime(adapter: ControlAwareSeleniumBaseCdpAdapter) -> None:
     registry = getattr(adapter, "_ares_oopif_registry", None)
     if registry is None:
@@ -354,24 +373,26 @@ def _start(command: Dict[str, Any]) -> int:
 
         commands: queue.Queue[Dict[str, Any]] = queue.Queue()
         threading.Thread(target=_command_reader, args=(commands,), daemon=True).start()
-        scheduler = SingleOwnerRuntimeScheduler(adapter)
         next_url_capture = time.monotonic() + 2.0
+        next_runtime_heartbeat = time.monotonic() + 0.25
 
         while True:
             if not adapter.is_running():
                 _emit({"type": "browser-closed", "profileId": profile_id})
                 break
 
-            scheduler.poll_if_due()
             now = time.monotonic()
             if now >= next_url_capture:
                 last_url = _remember_last_url(profile_dir, adapter, last_url)
                 next_url_capture = now + 2.0
 
             try:
-                next_command = commands.get(timeout=scheduler.queue_timeout(0.4))
+                next_command = commands.get(timeout=0.25)
             except queue.Empty:
-                scheduler.poll_if_due()
+                now = time.monotonic()
+                if now >= next_runtime_heartbeat:
+                    _run_manual_runtime_heartbeat(adapter)
+                    next_runtime_heartbeat = time.monotonic() + MANUAL_RUNTIME_HEARTBEAT_SECONDS
                 continue
 
             adapter.note_control_activity()
@@ -469,7 +490,10 @@ def _start(command: Dict[str, Any]) -> int:
             finally:
                 if not closed and adapter.is_running():
                     adapter.note_control_activity()
-                    scheduler.poll_if_due()
+                    next_runtime_heartbeat = max(
+                        next_runtime_heartbeat,
+                        time.monotonic() + MANUAL_RUNTIME_HEARTBEAT_SECONDS,
+                    )
     finally:
         if not closed:
             try:
