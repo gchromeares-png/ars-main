@@ -238,7 +238,7 @@ export class BrowserWorkerProcessClient {
     child.on("error", error => this.handleWorkerExit(new Error(`Browser Worker konnte nicht mit Node-Executable "${nodeExecutable}" gestartet werden: ${error.message}`), child));
     child.on("exit", (code, signal) => {
       const details = this.stderrBuffer.trim();
-      this.handleWorkerExit(new Error(`Browser Worker beendet (code=${String(code)}, signal=${String(signal)}).${details ? ` ${details}` : ""}`), child));
+      this.handleWorkerExit(new Error(`Browser Worker beendet (code=${String(code)}, signal=${String(signal)}).${details ? ` ${details}` : ""}`), child);
     });
   }
 
