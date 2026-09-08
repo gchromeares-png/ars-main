@@ -110,7 +110,7 @@ jobs:
         shell: pwsh
         run: |
           $electron = (Resolve-Path "node_modules/electron/dist/electron.exe").Path
-          $probe = Join-Path $env:RUNNER_TEMP "verify-better-sqlite3.cjs"
+          $probe = Join-Path (Get-Location) ".ci-verify-better-sqlite3.cjs"
           Set-Content -Path $probe -Value "require('better-sqlite3'); console.log('better-sqlite3-electron-ok');"
           $env:ELECTRON_RUN_AS_NODE = "1"
           try {
@@ -119,6 +119,7 @@ jobs:
           }
           finally {
             Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+            Remove-Item $probe -Force -ErrorAction SilentlyContinue
           }
 
       - name: Install SeleniumBase runtime
