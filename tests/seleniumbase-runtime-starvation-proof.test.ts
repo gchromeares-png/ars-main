@@ -121,12 +121,23 @@ describe("SeleniumBase runtime starvation proof", () => {
     expect(quietUntil).toBe(900);
   });
 
-  it("uses the same fair scheduler in task, manual-profile, and product-monitor browser entry points", () => {
+  it("keeps task/product monitoring on the fair scheduler while the manual profile browser uses an idle owner heartbeat", () => {
     expect(oopifWorker).toContain("SingleOwnerRuntimeScheduler");
-    expect(manualWorker).toContain("scheduler = SingleOwnerRuntimeScheduler(adapter)");
-    expect(manualWorker).toContain("commands.get(timeout=scheduler.queue_timeout(0.4))");
     expect(productMonitorWorker).toContain("scheduler = SingleOwnerRuntimeScheduler(adapter)");
     expect(productMonitorWorker).toContain("commands.get(timeout=scheduler.queue_timeout(0.35))");
     expect(productMonitorWorker).toContain("adapter.poll_runtime()");
+
+    expect(manualWorker).toContain("MANUAL_RUNTIME_HEARTBEAT_SECONDS = 1.0");
+    expect(manualWorker).toContain("commands.get(timeout=0.25)");
+    expect(manualWorker).toContain("_run_manual_runtime_heartbeat(adapter)");
+    expect(manualWorker).toContain("adapter._orchestrator.run_cycle(adapter._run_visual_auto, adapter._run_instruction_auto)");
+    expect(manualWorker).not.toContain("scheduler = SingleOwnerRuntimeScheduler(adapter)");
+  });
+
+  it("uses the patched OOPIF registry in the manual profile browser", () => {
+    expect(manualWorker).toContain("from task_browser_worker_oopif import FlatCdpTargetRegistry");
+    expect(manualWorker).not.toContain("from task_browser_worker_oopif_impl import FlatCdpTargetRegistry");
+    expect(manualWorker).toContain('"oopif-discover"');
+    expect(manualWorker).toContain('"oopif-evaluate"');
   });
 });
